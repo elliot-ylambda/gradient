@@ -15,6 +15,10 @@ describe("sanitizeName", () => {
     expect(sanitizeName("Ship It!! Now")).toBe("ship-it-now");
     expect(sanitizeName("merge/main")).toBe("merge-main");
   });
+  it("falls back to 'untitled' for empty/all-punctuation input", () => {
+    expect(sanitizeName("!!!")).toBe("untitled");
+    expect(sanitizeName("")).toBe("untitled");
+  });
 });
 
 describe("redact", () => {
@@ -24,5 +28,9 @@ describe("redact", () => {
   });
   it("leaves ordinary text untouched", () => {
     expect(redact("push and create a PR")).toBe("push and create a PR");
+  });
+  it("masks github tokens and lowercase env assignments", () => {
+    expect(redact("ghp_" + "a".repeat(36))).toContain("[REDACTED]");
+    expect(redact("api_key=hunter2value")).toContain("[REDACTED]");
   });
 });

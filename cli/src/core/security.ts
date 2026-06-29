@@ -10,18 +10,19 @@ export function assertInside(base: string, target: string): void {
 }
 
 export function sanitizeName(raw: string): string {
-  return raw
+  const name = raw
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40)
     .replace(/-+$/g, "");
+  return name || "untitled";
 }
 
 const SECRET_PATTERNS: RegExp[] = [
-  /\b[A-Z_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)\s*=\s*\S+/g,
+  /\b[A-Za-z_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)\s*=\s*\S+/gi,
   /\bsk-ant-[A-Za-z0-9_-]{6,}/g,
-  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
+  /\bgh[a-z]_[A-Za-z0-9]{20,}/g,
 ];
 
 export function redact(text: string): string {
