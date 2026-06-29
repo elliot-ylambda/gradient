@@ -4,6 +4,9 @@ import { sanitizeName } from "../security.js";
 export function emitCommand(s: Suggestion): { path: string; content: string } {
   if (s.payload.type !== "command") throw new Error("emitCommand needs a command payload");
   const name = sanitizeName(s.payload.commandName);
-  const content = `---\ndescription: ${s.title}\n---\n${s.payload.body}\n`;
+  // Collapse to one line and emit the description as a JSON string scalar (valid YAML),
+  // so a title containing newlines or quotes cannot inject extra frontmatter keys.
+  const description = JSON.stringify(s.title.replace(/[\r\n]+/g, " ").trim());
+  const content = `---\ndescription: ${description}\n---\n${s.payload.body}\n`;
   return { path: `.claude/commands/${name}.md`, content };
 }
