@@ -3,3 +3,5 @@ dist/
 .gradient/
 *.log
 .DS_Store
+.worktrees/
+.claude/worktrees/
