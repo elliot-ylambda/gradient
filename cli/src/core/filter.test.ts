@@ -18,6 +18,11 @@ describe("isInjected", () => {
   it("keeps genuine prompts", () => {
     expect(isInjected("push and create a pull request")).toBe(false);
   });
+  it("keeps genuine prompts that start with a non-injected tag (JSX/HTML/XML)", () => {
+    expect(isInjected("<div>why is this broken?</div>")).toBe(false);
+    expect(isInjected("<Button> not rendering correctly")).toBe(false);
+    expect(isInjected("<config> tag in my xml isn't parsing")).toBe(false);
+  });
 });
 
 describe("filterPrompts", () => {
