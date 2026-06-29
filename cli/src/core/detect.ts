@@ -77,7 +77,7 @@ export async function detect(
   // Match each suggestion back to its source cluster by signature (robust to reordering).
   const bySignature = new Map(top.map(c => [redact(c.signature), c]));
   return (parsed.suggestions ?? []).map(s => {
-    const ev = (s.sourceSignature && bySignature.get(s.sourceSignature)) || top[0];
+    const ev = s.sourceSignature ? bySignature.get(s.sourceSignature) : undefined;
     return {
       id: idFor(s.payload.type === "command" ? s.payload.commandName : s.name),
       name: s.name,

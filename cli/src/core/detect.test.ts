@@ -58,4 +58,19 @@ describe("detect", () => {
     await detect(many, llm, { limit: 5, onCap: d => (dropped = d) });
     expect(dropped).toBe(15);
   });
+
+  it("reports zero evidence (not the top candidate's) when sourceSignature doesn't match", async () => {
+    const llm = {
+      name: "fake", available: async () => true,
+      complete: async () => JSON.stringify({ suggestions: [{
+        sourceSignature: "does-not-exist",
+        name: "ghost", title: "Ghost", rationale: "r", confidence: "high",
+        payload: { type: "command", commandName: "ghost", body: "x" },
+      }] }),
+    };
+    const out = await detect([cand("real signature here", 13)], llm);
+    expect(out[0].name).toBe("ghost");
+    expect(out[0].evidence.count).toBe(0);
+    expect(out[0].evidence.sessions).toBe(0);
+  });
 });
