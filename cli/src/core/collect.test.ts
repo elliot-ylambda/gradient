@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { encodeProjectDir, matchesSince } from "./collect.js";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { encodeProjectDir, matchesSince, collect } from "./collect.js";
 
 describe("collect helpers", () => {
   it("encodes a cwd to a projects dir name", () => {
@@ -13,11 +16,6 @@ describe("collect helpers", () => {
     expect(matchesSince(now - 999 * day, undefined, now)).toBe(true); // no filter
   });
 });
-
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { collect, encodeProjectDir } from "./collect.js";
 
 describe("collect", () => {
   it("finds project jsonl files and skips subagents", async () => {
