@@ -1,0 +1,135 @@
+#!/usr/bin/env node
+import { parseArgs } from "node:util";
+import { scan } from "./commands/scan.js";
+import { review, readlinePrompter } from "./commands/review.js";
+import { applyByIds } from "./commands/apply.js";
+import { list } from "./commands/list.js";
+import { remove } from "./commands/remove.js";
+import { init } from "./commands/init.js";
+import { checkpoint } from "./commands/checkpoint.js";
+
+const HELP = `gradient — turn repeated Claude Code workflows into artifacts
+
+Usage:
+  gradient init                 configure + install the /gradient skill
+  gradient scan [--all] [--since 7d] [--limit N]
+  gradient review               approve cached suggestions
+  gradient apply <id|name>...   generate specific suggestions
+  gradient list                 show generated artifacts
+  gradient remove <name>        delete a generated artifact
+`;
+
+export function parseCliArgs(argv: string[]): {
+  command: string;
+  positionals: string[];
+  flags: Record<string, string | boolean>;
+} {
+  const command = argv[0] ?? "";
+  const { values, positionals } = parseArgs({
+    args: argv.slice(1),
+    allowPositionals: true,
+    options: {
+      all: { type: "boolean" },
+      since: { type: "string" },
+      limit: { type: "string" },
+      "no-skill": { type: "boolean" },
+    },
+  });
+  return { command, positionals, flags: values as Record<string, string | boolean> };
+}
+
+function sinceDays(flag: string | boolean | undefined): number | undefined {
+  if (typeof flag !== "string") return undefined;
+  const m = /^(\d+)d?$/.exec(flag.trim());
+  return m ? Number(m[1]) : undefined;
+}
+
+export async function main(
+  argv: string[],
+  io: { log?: (s: string) => void } = {},
+): Promise<number> {
+  const log = io.log ?? ((s: string) => process.stdout.write(s + "\n"));
+
+  if (argv.length === 0) {
+    log(HELP);
+    return 0;
+  }
+
+  const { command, positionals, flags } = parseCliArgs(argv);
+  const projectDir = process.cwd();
+
+  switch (command) {
+    case "init": {
+      const r = await init({ installSkill: !flags["no-skill"] });
+      log(`backend: ${r.backend}\nconfig: ${r.configPath}\nskill installed: ${r.skillInstalled}`);
+      return 0;
+    }
+    case "scan": {
+      const out = await scan(
+        {
+          scope: flags.all ? "all" : "project",
+          projectPath: projectDir,
+          sinceDays: sinceDays(flags.since),
+          limit: flags.limit ? Number(flags.limit) : undefined,
+        },
+        { log },
+      );
+      for (const s of out) {
+        log(`  ${s.confidence === "high" ? "●" : "○"} ${s.name}  ${s.title}  (seen ${s.evidence.count}×)`);
+      }
+      log(`\nNext: gradient review`);
+      return 0;
+    }
+    case "review": {
+      const applied = await review(projectDir, readlinePrompter());
+      log(`\napplied ${applied.length} suggestion(s).`);
+      for (const a of applied) {
+        if (a.printed) log(`  run: ${a.printed}`);
+      }
+      return 0;
+    }
+    case "apply": {
+      const applied = await applyByIds(positionals, projectDir);
+      for (const a of applied) {
+        log(a.written ? `wrote ${a.written}` : `run: ${a.printed}`);
+      }
+      return 0;
+    }
+    case "list": {
+      for (const e of await list(projectDir)) {
+        log(`  ${e.name}\t${e.type}\t${e.path || "(printed)"}\t${e.createdAt}`);
+      }
+      return 0;
+    }
+    case "remove": {
+      const ok = await remove(projectDir, positionals[0]);
+      log(ok ? `removed ${positionals[0]}` : `no such artifact: ${positionals[0]}`);
+      return ok ? 0 : 1;
+    }
+    case "checkpoint": {
+      const input = await readStdinJson();
+      const path = await checkpoint(input, projectDir);
+      log(`checkpoint written: ${path}`);
+      return 0;
+    }
+    default:
+      log(`unknown command: ${command}\n\n${HELP}`);
+      return 2;
+  }
+}
+
+async function readStdinJson(): Promise<{ transcript_path?: string }> {
+  if (process.stdin.isTTY) return {};
+  let data = "";
+  for await (const chunk of process.stdin) data += chunk;
+  try {
+    return JSON.parse(data) as { transcript_path?: string };
+  } catch {
+    return {};
+  }
+}
+
+// Entry point when run as a binary.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main(process.argv.slice(2)).then((code) => process.exit(code));
+}
