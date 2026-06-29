@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.gradient/
+*.log
+.DS_Store
