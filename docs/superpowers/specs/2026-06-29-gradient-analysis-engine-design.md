@@ -62,6 +62,7 @@ A manual dogfooding run over the author's real history (2,800 transcripts,
 | 6 | LLM backend | `claude` CLI headless (`claude -p --output-format json`, reuses existing auth) by default; Anthropic SDK + `ANTHROPIC_API_KEY` fallback; behind one `LLMBackend` interface |
 | 7 | Detection strategy | **A** — cheap local extract + cluster (no LLM), LLM only confirms/names/emits the top-N candidates |
 | 8 | Driver model | LLM-as-judge/driver for the formalize step |
+| 9 | Generated hooks | Emitted hooks invoke a `gradient` subcommand, **never** bespoke inline shell; v1 ships the minimal helper subcommands its emitted hooks need (`checkpoint`) |
 
 ### Reference architecture
 
@@ -84,6 +85,31 @@ with the same integration surface):
 Graphify's language (Python) was **not** adopted; TS/npx wins on clone-and-go and
 matches where the phase-2 autopilot work lands.
 
+### Generated hooks call `gradient`, not bespoke shell
+
+Auto-authoring arbitrary inline shell into a user's `settings.json` hook is
+fragile (quoting/escaping, cross-platform) and unsafe to generate from an LLM.
+So every hook `gradient` emits points at a **small, tested `gradient` subcommand**
+instead:
+
+```jsonc
+// emitted by emit/hook.ts — note the command is a gradient subcommand
+{ "hooks": { "PreCompact": [ { "hooks": [
+  { "type": "command", "command": "gradient checkpoint" } ] } ] } }
+```
+
+Consequences for v1:
+
+- v1 ships exactly the **hook-helper subcommands** required to back the hooks it
+  can emit. The only evidence-backed hook in v1 is `precompact-checkpoint`
+  (143 `/compact`s), so v1 ships `gradient checkpoint` — a tiny command that writes
+  a progress snapshot (e.g. `progress.md`) before compaction.
+- `emit/hook.ts` may **only** emit a hook whose backing subcommand exists; the
+  schema gate (`validate.ts`) rejects any hook referencing an unknown subcommand,
+  so `gradient` never writes a broken hook.
+- New hook types in future versions arrive as new helper subcommands, not as new
+  inline-shell templates.
+
 ---
 
 ## 3. Architecture
@@ -97,6 +123,7 @@ src/
   config.ts              # load/save config (~/.config/gradient + project .gradient/)
   commands/              # one file per verb
     scan.ts review.ts apply.ts list.ts remove.ts init.ts
+    checkpoint.ts        # hook-helper verb: writes a progress snapshot (backs the PreCompact hook)
   core/
     collect.ts           # scope → transcript file paths
     parse.ts             # JSONL → Turn[]   (prompts, tool-uses, ts, project, branch)
@@ -106,7 +133,7 @@ src/
     emit/
       command.ts         # Suggestion → .claude/commands/<name>.md content
       loop.ts            # Suggestion → ready-to-run /loop or /schedule line
-      hook.ts            # Suggestion → settings.json hook snippet
+      hook.ts            # Suggestion → settings.json snippet that calls a gradient subcommand
     manifest.ts          # .gradient/manifest.json  (track generated artifacts → reversible)
     validate.ts          # schema-gate Suggestions + artifacts
     security.ts          # path containment, name sanitize, secret redaction
@@ -131,7 +158,8 @@ tests/                   # one spec per core module + fixture transcripts
 | `detect.ts` | `detect(candidates, llm)` | top-N `Candidate[]` → `Suggestion[]` |
 | `emit/command.ts` | `emitCommand(s)` | `Suggestion` → `{path, content}` for `.claude/commands/*.md` |
 | `emit/loop.ts` | `emitLoop(s)` | `Suggestion` → ready-to-run `/loop`/`/schedule` line |
-| `emit/hook.ts` | `emitHook(s)` | `Suggestion` → `settings.json` hook snippet |
+| `emit/hook.ts` | `emitHook(s)` | `Suggestion` → `settings.json` snippet calling a `gradient` subcommand |
+| `checkpoint.ts` | `checkpoint()` | session context → writes a progress snapshot (backs PreCompact hook) |
 | `manifest.ts` | `add/list/remove` | manifest CRUD |
 | `validate.ts` | `validateSuggestion(x)` | object → validated or throws |
 | `security.ts` | `assertInside`, `sanitizeName`, `redact` | input → safe or throws |
@@ -172,7 +200,8 @@ type Suggestion = {
   artifact:
     | { kind: "command"; path: string; content: string }
     | { kind: "loop"; command: string }              // a line the user runs
-    | { kind: "hook"; settingsPatch: string };       // JSON snippet for settings.json
+    | { kind: "hook"; event: string; subcommand: string; settingsPatch: string };
+    //   hook always invokes a gradient subcommand; `subcommand` must exist (validate.ts)
 };
 ```
 
@@ -194,6 +223,9 @@ type Suggestion = {
 - **`remove <name>`** → delete artifact + manifest entry (clean uninstall).
 - **`init`** → write config; self-install the `/gradient` skill into
   `~/.claude/skills/gradient/SKILL.md`.
+- **`checkpoint`** → *not a primary user verb;* invoked by a generated PreCompact
+  hook to write a progress snapshot before compaction. Ships in v1 only to back the
+  `precompact-checkpoint` hook the engine can emit.
 
 Two distinct write targets, kept separate by design:
 - Tool's own install: `~/.claude/skills/gradient/` (via `init`).
@@ -220,6 +252,9 @@ Two distinct write targets, kept separate by design:
 - **Suppress already-covered patterns:** before suggesting, scan existing
   `.claude/commands/` and skills; do not re-propose a command the user already has
   (e.g. their existing `/build`).
+- **No broken hooks:** `emit/hook.ts` may only reference a `gradient` subcommand
+  that exists; `validate.ts` rejects any hook naming an unknown subcommand, so a
+  generated hook is always runnable.
 
 ---
 
