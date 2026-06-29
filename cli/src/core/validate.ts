@@ -2,12 +2,16 @@ import type { Suggestion } from "./types.js";
 
 export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint"]);
 const TYPES = new Set(["command", "loop", "hook"]);
+const CONFIDENCES = new Set(["high", "inferred", "flagged"]);
 
 export function validateSuggestion(x: unknown): asserts x is Suggestion {
   const s = x as Record<string, unknown>;
   if (!s || typeof s !== "object") throw new Error("suggestion is not an object");
   for (const k of ["id", "name", "title", "rationale", "confidence"]) {
     if (typeof s[k] !== "string") throw new Error(`suggestion.${k} must be a string`);
+  }
+  if (!CONFIDENCES.has(s.confidence as string)) {
+    throw new Error(`invalid confidence: ${String(s.confidence)}`);
   }
   const payload = s.payload as Record<string, unknown> | undefined;
   if (!payload || typeof payload !== "object") throw new Error("suggestion.payload missing");

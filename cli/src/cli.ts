@@ -58,63 +58,68 @@ export async function main(
   const { command, positionals, flags } = parseCliArgs(argv);
   const projectDir = process.cwd();
 
-  switch (command) {
-    case "init": {
-      const r = await init({ installSkill: !flags["no-skill"] });
-      log(`backend: ${r.backend}\nconfig: ${r.configPath}\nskill installed: ${r.skillInstalled}`);
-      return 0;
-    }
-    case "scan": {
-      const out = await scan(
-        {
-          scope: flags.all ? "all" : "project",
-          projectPath: projectDir,
-          sinceDays: sinceDays(flags.since),
-          limit: flags.limit ? Number(flags.limit) : undefined,
-        },
-        { log },
-      );
-      for (const s of out) {
-        log(`  ${s.confidence === "high" ? "●" : "○"} ${s.name}  ${s.title}  (seen ${s.evidence.count}×)`);
+  try {
+    switch (command) {
+      case "init": {
+        const r = await init({ installSkill: !flags["no-skill"] });
+        log(`backend: ${r.backend}\nconfig: ${r.configPath}\nskill installed: ${r.skillInstalled}`);
+        return 0;
       }
-      log(`\nNext: gradient review`);
-      return 0;
-    }
-    case "review": {
-      const applied = await review(projectDir, readlinePrompter());
-      log(`\napplied ${applied.length} suggestion(s).`);
-      for (const a of applied) {
-        if (a.printed) log(`  run: ${a.printed}`);
+      case "scan": {
+        const out = await scan(
+          {
+            scope: flags.all ? "all" : "project",
+            projectPath: projectDir,
+            sinceDays: sinceDays(flags.since),
+            limit: flags.limit ? Number(flags.limit) : undefined,
+          },
+          { log },
+        );
+        for (const s of out) {
+          log(`  ${s.confidence === "high" ? "●" : "○"} ${s.name}  ${s.title}  (seen ${s.evidence.count}×)`);
+        }
+        log(`\nNext: gradient review`);
+        return 0;
       }
-      return 0;
-    }
-    case "apply": {
-      const applied = await applyByIds(positionals, projectDir);
-      for (const a of applied) {
-        log(a.written ? `wrote ${a.written}` : `run: ${a.printed}`);
+      case "review": {
+        const applied = await review(projectDir, readlinePrompter());
+        log(`\napplied ${applied.length} suggestion(s).`);
+        for (const a of applied) {
+          if (a.printed) log(`  run: ${a.printed}`);
+        }
+        return 0;
       }
-      return 0;
-    }
-    case "list": {
-      for (const e of await list(projectDir)) {
-        log(`  ${e.name}\t${e.type}\t${e.path || "(printed)"}\t${e.createdAt}`);
+      case "apply": {
+        const applied = await applyByIds(positionals, projectDir);
+        for (const a of applied) {
+          log(a.written ? `wrote ${a.written}` : `run: ${a.printed}`);
+        }
+        return 0;
       }
-      return 0;
+      case "list": {
+        for (const e of await list(projectDir)) {
+          log(`  ${e.name}\t${e.type}\t${e.path || "(printed)"}\t${e.createdAt}`);
+        }
+        return 0;
+      }
+      case "remove": {
+        const ok = await remove(projectDir, positionals[0]);
+        log(ok ? `removed ${positionals[0]}` : `no such artifact: ${positionals[0]}`);
+        return ok ? 0 : 1;
+      }
+      case "checkpoint": {
+        const input = await readStdinJson();
+        const path = await checkpoint(input, projectDir);
+        log(`checkpoint written: ${path}`);
+        return 0;
+      }
+      default:
+        log(`unknown command: ${command}\n\n${HELP}`);
+        return 2;
     }
-    case "remove": {
-      const ok = await remove(projectDir, positionals[0]);
-      log(ok ? `removed ${positionals[0]}` : `no such artifact: ${positionals[0]}`);
-      return ok ? 0 : 1;
-    }
-    case "checkpoint": {
-      const input = await readStdinJson();
-      const path = await checkpoint(input, projectDir);
-      log(`checkpoint written: ${path}`);
-      return 0;
-    }
-    default:
-      log(`unknown command: ${command}\n\n${HELP}`);
-      return 2;
+  } catch (e) {
+    log(`gradient: ${(e as Error).message}`);
+    return 1;
   }
 }
 

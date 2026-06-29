@@ -9,7 +9,7 @@ function idFor(signature: string): string {
 
 export function candidateToCommand(c: Candidate): Suggestion {
   const words = c.signature.split(" ").slice(0, 3).join(" ");
-  const commandName = sanitizeName(words) || "command";
+  const commandName = sanitizeName(words);
   return {
     id: idFor(c.signature),
     name: commandName,
@@ -19,6 +19,10 @@ export function candidateToCommand(c: Candidate): Suggestion {
     confidence: c.confidence,
     payload: { type: "command", commandName, body: c.examples[0] ?? c.signature },
   };
+}
+
+function degradeToCommands(cands: Candidate[]): Suggestion[] {
+  return cands.filter(c => c.confidence === "high").map(candidateToCommand);
 }
 
 export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt: string } {
@@ -61,31 +65,31 @@ export async function detect(
   if (ranked.length > limit) opts.onCap?.(ranked.length - limit);
 
   if (!llm) {
-    // Degradation: only exact-repeat (high) candidates become command suggestions.
-    return top.filter(c => c.confidence === "high").map(candidateToCommand);
+    return degradeToCommands(top);
   }
 
   const { system, prompt } = buildDetectPrompt(top);
-  const raw = await llm.complete({ system, prompt });
-  let parsed: { suggestions?: LlmSuggestion[] };
   try {
-    parsed = JSON.parse(raw) as { suggestions?: LlmSuggestion[] };
+    const raw = await llm.complete({ system, prompt });
+    const parsed = JSON.parse(raw) as { suggestions?: LlmSuggestion[] };
+    const bySignature = new Map(top.map(c => [redact(c.signature), c]));
+    return (parsed.suggestions ?? [])
+      .filter(s => !!s && !!s.payload && typeof s.payload.type === "string")
+      .map(s => {
+        const ev = s.sourceSignature ? bySignature.get(s.sourceSignature) : undefined;
+        return {
+          id: idFor(s.payload.type === "command" ? (s.payload.commandName ?? s.name) : s.name),
+          name: s.name,
+          title: s.title,
+          rationale: s.rationale,
+          evidence: { count: ev?.count ?? 0, sessions: ev?.sessions ?? 0 },
+          confidence: s.confidence,
+          payload: s.payload,
+        };
+      });
   } catch {
-    // LLM returned unparseable output — degrade rather than crash.
-    return top.filter(c => c.confidence === "high").map(candidateToCommand);
+    // Backend call failed (non-zero exit / network / rate limit) or returned
+    // unparseable output — degrade to high-confidence commands rather than crash.
+    return degradeToCommands(top);
   }
-  // Match each suggestion back to its source cluster by signature (robust to reordering).
-  const bySignature = new Map(top.map(c => [redact(c.signature), c]));
-  return (parsed.suggestions ?? []).map(s => {
-    const ev = s.sourceSignature ? bySignature.get(s.sourceSignature) : undefined;
-    return {
-      id: idFor(s.payload.type === "command" ? s.payload.commandName : s.name),
-      name: s.name,
-      title: s.title,
-      rationale: s.rationale,
-      evidence: { count: ev?.count ?? 0, sessions: ev?.sessions ?? 0 },
-      confidence: s.confidence,
-      payload: s.payload,
-    };
-  });
 }

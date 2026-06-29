@@ -11,11 +11,13 @@ function manifestPath(projectDir: string): string {
 }
 
 export async function loadManifest(projectDir: string): Promise<ManifestEntry[]> {
+  let raw: string;
   try {
-    return JSON.parse(await readFile(manifestPath(projectDir), "utf8")) as ManifestEntry[];
+    raw = await readFile(manifestPath(projectDir), "utf8");
   } catch {
-    return [];
+    return []; // absent manifest → empty
   }
+  return JSON.parse(raw) as ManifestEntry[]; // corrupt JSON throws loudly (no silent data loss)
 }
 
 async function save(projectDir: string, entries: ManifestEntry[]): Promise<void> {

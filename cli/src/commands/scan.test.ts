@@ -4,11 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scan } from "./scan.js";
 
-const userLine = (text: string, session: string) => JSON.stringify({
-  type: "user", isSidechain: false, sessionId: session, cwd: "/p/x",
-  timestamp: "2026-06-01T00:00:00Z", message: { role: "user", content: text },
-});
-
 describe("scan", () => {
   it("runs the pipeline with a mock backend and caches suggestions", async () => {
     const projectDir = await mkdtemp(join(tmpdir(), "grad-"));

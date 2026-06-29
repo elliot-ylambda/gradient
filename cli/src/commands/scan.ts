@@ -51,11 +51,20 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     limit: opts.limit ?? 12,
     onCap: dropped => log(`capped to top ${opts.limit ?? 12}; ${dropped} lower-frequency candidates dropped`),
   });
-  for (const s of suggestions) validateSuggestion(s);
+  const valid: Suggestion[] = [];
+  for (const s of suggestions) {
+    try {
+      validateSuggestion(s);
+      valid.push(s);
+    } catch (e) {
+      log(`skipping invalid suggestion: ${(e as Error).message}`);
+    }
+  }
 
   const projectDir = opts.projectPath ?? process.cwd();
-  await mkdir(gradientDir(projectDir), { recursive: true });
-  await writeFile(join(gradientDir(projectDir), "suggestions.json"), JSON.stringify(suggestions, null, 2));
-  log(`found ${suggestions.length} suggestions → cached`);
-  return suggestions;
+  const gdir = gradientDir(projectDir);
+  await mkdir(gdir, { recursive: true });
+  await writeFile(join(gdir, "suggestions.json"), JSON.stringify(valid, null, 2));
+  log(`found ${valid.length} suggestions → cached`);
+  return valid;
 }

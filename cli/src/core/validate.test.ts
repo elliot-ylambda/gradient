@@ -18,6 +18,9 @@ describe("validateSuggestion", () => {
   it("rejects an unknown payload type", () => {
     expect(() => validateSuggestion({ ...good, payload: { type: "nope" } })).toThrow();
   });
+  it("rejects a confidence outside the allowed set", () => {
+    expect(() => validateSuggestion({ ...good, confidence: "medium" })).toThrow();
+  });
 });
 
 describe("assertHookRunnable", () => {

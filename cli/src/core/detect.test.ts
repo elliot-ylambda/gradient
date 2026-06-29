@@ -73,4 +73,19 @@ describe("detect", () => {
     expect(out[0].evidence.count).toBe(0);
     expect(out[0].evidence.sessions).toBe(0);
   });
+
+  it("degrades to high-confidence commands when the backend throws", async () => {
+    const llm = { name: "boom", available: async () => true,
+      complete: async () => { throw new Error("claude exited 1"); } };
+    const out = await detect([cand("merge main into this pr", 9)], llm);
+    expect(out.length).toBe(1);
+    expect(out[0].payload.type).toBe("command");
+  });
+
+  it("filters out a JSON suggestion that has no payload", async () => {
+    const llm = { name: "f", available: async () => true,
+      complete: async () => JSON.stringify({ suggestions: [{ name: "x", title: "t", rationale: "r", confidence: "high" }] }) };
+    const out = await detect([cand("something", 5)], llm);
+    expect(out.length).toBe(0); // no crash, malformed suggestion dropped
+  });
 });
