@@ -30,4 +30,16 @@ describe("manage commands", () => {
     await expect(access(join(dir, ".claude/commands/ship.md"))).rejects.toThrow();
     expect(await list(dir)).toEqual([]);
   });
+
+  it("refuses to unlink a manifest path outside .claude (tampered manifest)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    const victim = join(dir, "victim.txt"); // inside projectDir but OUTSIDE .claude
+    await writeFile(victim, "keep me");
+    await writeFile(join(dir, ".gradient", "manifest.json"), JSON.stringify([
+      { name: "evil", type: "command", path: victim, createdAt: "2026-06-29", suggestionId: "x" },
+    ]));
+    await expect(remove(dir, "evil")).rejects.toThrow();
+    await expect(access(victim)).resolves.toBeUndefined(); // victim must survive
+  });
 });
