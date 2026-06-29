@@ -1,0 +1,37 @@
+{
+  "name": "gradient",
+  "version": "0.1.0",
+  "description": "Reads your Claude Code history, finds what you repeat, and generates the automations to stop — slash commands, hooks, and loops.",
+  "type": "module",
+  "bin": {
+    "gradient": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "skill"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "node --experimental-strip-types src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "start": "node dist/cli.js"
+  },
+  "keywords": [
+    "claude-code",
+    "cli",
+    "automation",
+    "slash-commands",
+    "developer-tools"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22",
+    "tsup": "^8",
+    "typescript": "^5.6",
+    "vitest": "^2"
+  }
+}
