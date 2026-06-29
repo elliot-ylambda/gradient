@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { parseLines } from "./parse.js";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parseLines, parseFile } from "./parse.js";
 
 const userString = JSON.stringify({
   type: "user", isSidechain: false, sessionId: "s1", cwd: "/p/x",
@@ -39,5 +42,20 @@ describe("parseLines", () => {
   it("skips malformed lines without throwing", () => {
     const turns = parseLines(["not json", "", userString]);
     expect(turns.length).toBe(1);
+  });
+});
+
+describe("parseFile", () => {
+  it("reads a jsonl file from disk and returns user turns", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-parse-"));
+    const file = join(dir, "t.jsonl");
+    const line = JSON.stringify({
+      type: "user", sessionId: "s", cwd: "/p/x",
+      timestamp: "2026-06-01T00:00:00Z",
+      message: { role: "user", content: "hello world" },
+    });
+    await writeFile(file, line + "\r\n"); // CRLF on purpose — exercises the split fix
+    const turns = await parseFile(file);
+    expect(turns.map(t => t.text)).toEqual(["hello world"]);
   });
 });

@@ -56,5 +56,5 @@ export function parseLines(lines: string[]): Turn[] {
 
 export async function parseFile(path: string): Promise<Turn[]> {
   const content = await readFile(path, "utf8");
-  return parseLines(content.split("\n"));
+  return parseLines(content.split(/\r?\n/));
 }
