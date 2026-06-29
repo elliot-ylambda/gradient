@@ -88,4 +88,15 @@ describe("detect", () => {
     const out = await detect([cand("something", 5)], llm);
     expect(out.length).toBe(0); // no crash, malformed suggestion dropped
   });
+
+  it("normalizes an out-of-set confidence to 'inferred' instead of dropping the suggestion", async () => {
+    const llm = { name: "f", available: async () => true,
+      complete: async () => JSON.stringify({ suggestions: [{
+        sourceSignature: "x", name: "keep-me", title: "t", rationale: "r", confidence: "medium",
+        payload: { type: "command", commandName: "keep-me", body: "do it" },
+      }] }) };
+    const out = await detect([cand("x", 5)], llm);
+    expect(out.length).toBe(1);
+    expect(out[0].confidence).toBe("inferred");
+  });
 });

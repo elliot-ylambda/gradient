@@ -3,6 +3,8 @@ import type { Candidate, Suggestion, Confidence } from "./types.js";
 import { sanitizeName, redact } from "./security.js";
 import type { LLMBackend } from "../llm/backend.js";
 
+const ALLOWED_CONFIDENCE = new Set(["high", "inferred", "flagged"]);
+
 function idFor(signature: string): string {
   return createHash("sha1").update(signature).digest("hex").slice(0, 10);
 }
@@ -33,7 +35,8 @@ export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt:
     "the only supported hook event is PreCompact backed by the gradient subcommand 'checkpoint'). " +
     "Echo back the cluster's exact 'signature' as 'sourceSignature' on each suggestion so it can be traced. " +
     "Respond ONLY with JSON: {\"suggestions\":[{sourceSignature,name,title,rationale,confidence,payload}]} where payload is one of " +
-    "{type:'command',commandName,body} | {type:'loop',instruction,cadence?} | {type:'hook',event:'PreCompact',subcommand:'checkpoint',description}.";
+    "{type:'command',commandName,body} | {type:'loop',instruction,cadence?} | {type:'hook',event:'PreCompact',subcommand:'checkpoint',description}. " +
+    "confidence must be exactly one of \"high\", \"inferred\", or \"flagged\".";
   // Redact secrets from examples/signatures before they ever leave the machine (spec §7).
   const prompt = JSON.stringify(
     cands.map(c => ({
@@ -83,7 +86,7 @@ export async function detect(
           title: s.title,
           rationale: s.rationale,
           evidence: { count: ev?.count ?? 0, sessions: ev?.sessions ?? 0 },
-          confidence: s.confidence,
+          confidence: ALLOWED_CONFIDENCE.has(s.confidence) ? s.confidence : "inferred",
           payload: s.payload,
         };
       });
