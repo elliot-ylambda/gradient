@@ -17,4 +17,11 @@ describe("selectBackend", () => {
     const b = await selectBackend({ candidates: [avail("claude-cli", false), avail("anthropic", false)] });
     expect(b).toBeNull();
   });
+  it("honors an explicit config.backend when that backend is available", async () => {
+    const b = await selectBackend({
+      candidates: [avail("claude-cli", true), avail("anthropic", true)],
+      config: { backend: "anthropic" },
+    });
+    expect(b?.name).toBe("anthropic");
+  });
 });

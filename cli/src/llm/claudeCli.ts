@@ -11,7 +11,9 @@ const defaultRun: RunFn = (cmd, args, input) =>
     let stdout = "", stderr = "";
     child.stdout.on("data", d => (stdout += d));
     child.stderr.on("data", d => (stderr += d));
+    child.on("error", err => resolveP({ code: 1, stdout: "", stderr: err.message }));
     child.on("close", code => resolveP({ code: code ?? 1, stdout, stderr }));
+    child.stdin.on("error", () => {}); // ignore EPIPE if the process failed to start
     child.stdin.write(input);
     child.stdin.end();
   });

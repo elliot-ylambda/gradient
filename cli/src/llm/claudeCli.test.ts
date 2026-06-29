@@ -18,4 +18,11 @@ describe("ClaudeCliBackend", () => {
     });
     expect(await b.complete({ system: "sys", prompt: "p" })).toBe('{"suggestions":[]}');
   });
+  it("throws when the claude CLI exits nonzero", async () => {
+    const b = new ClaudeCliBackend({
+      whichFn: async () => "/usr/bin/claude",
+      runFn: async () => ({ code: 1, stdout: "", stderr: "boom" }),
+    });
+    await expect(b.complete({ system: "s", prompt: "p" })).rejects.toThrow("boom");
+  });
 });
