@@ -7,6 +7,8 @@ import { list } from "./commands/list.js";
 import { remove } from "./commands/remove.js";
 import { init } from "./commands/init.js";
 import { checkpoint } from "./commands/checkpoint.js";
+import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
+import { VERSION } from "./version.js";
 
 const HELP = `gradient — turn repeated Claude Code workflows into artifacts
 
@@ -51,7 +53,7 @@ export async function main(
   const log = io.log ?? ((s: string) => process.stdout.write(s + "\n"));
 
   if (argv.length === 0) {
-    log(HELP);
+    log(`${banner(VERSION)}\n\n${HELP}`);
     return 0;
   }
 
@@ -62,10 +64,14 @@ export async function main(
     switch (command) {
       case "init": {
         const r = await init({ installSkill: !flags["no-skill"] });
-        log(`backend: ${r.backend}\nconfig: ${r.configPath}\nskill installed: ${r.skillInstalled}`);
+        log(banner(VERSION));
+        log(
+          `${c.muted("backend:")} ${r.backend}\n${c.muted("config:")} ${r.configPath}\n${c.muted("skill installed:")} ${r.skillInstalled}`,
+        );
         return 0;
       }
       case "scan": {
+        log(banner(VERSION));
         const out = await scan(
           {
             scope: flags.all ? "all" : "project",
@@ -76,35 +82,37 @@ export async function main(
           { log },
         );
         for (const s of out) {
-          log(`  ${s.confidence === "high" ? "●" : "○"} ${s.name}  ${s.title}  (seen ${s.evidence.count}×)`);
+          log(
+            `  ${confidenceChip(s.confidence)} ${c.bold(s.name)}  ${c.muted(s.title)}  ${c.dim(`(seen ${s.evidence.count}×)`)}`,
+          );
         }
-        log(`\nNext: gradient review`);
+        log(`\n${c.dim("Next:")} ${c.violet("gradient review")}`);
         return 0;
       }
       case "review": {
         const applied = await review(projectDir, readlinePrompter());
-        log(`\napplied ${applied.length} suggestion(s).`);
+        log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
         for (const a of applied) {
-          if (a.printed) log(`  run: ${a.printed}`);
+          if (a.printed) log(`  ${c.dim("run:")} ${a.printed}`);
         }
         return 0;
       }
       case "apply": {
         const applied = await applyByIds(positionals, projectDir);
         for (const a of applied) {
-          log(a.written ? `wrote ${a.written}` : `run: ${a.printed}`);
+          log(a.written ? `${c.ok("wrote")} ${c.muted(a.written)}` : `${c.dim("run:")} ${a.printed}`);
         }
         return 0;
       }
       case "list": {
         for (const e of await list(projectDir)) {
-          log(`  ${e.name}\t${e.type}\t${e.path || "(printed)"}\t${e.createdAt}`);
+          log(`  ${c.bold(e.name)}\t${kindLabel(e.type)}\t${c.muted(e.path || "(printed)")}\t${c.dim(e.createdAt)}`);
         }
         return 0;
       }
       case "remove": {
         const ok = await remove(projectDir, positionals[0]);
-        log(ok ? `removed ${positionals[0]}` : `no such artifact: ${positionals[0]}`);
+        log(ok ? `${c.ok("removed")} ${positionals[0]}` : c.coral(`no such artifact: ${positionals[0]}`));
         return ok ? 0 : 1;
       }
       case "checkpoint": {
@@ -114,7 +122,7 @@ export async function main(
         return 0;
       }
       default:
-        log(`unknown command: ${command}\n\n${HELP}`);
+        log(`${c.coral(`unknown command: ${command}`)}\n\n${banner(VERSION)}\n\n${HELP}`);
         return 2;
     }
   } catch (e) {
