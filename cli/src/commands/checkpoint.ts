@@ -1,44 +1,21 @@
-import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
-import type { Args } from "../cli";
-import { c } from "../ui";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { Turn } from "../core/types.js";
+import { parseFile } from "../core/parse.js";
+import { filterPrompts } from "../core/filter.js";
 
-function gitBranch(): string | undefined {
-  try {
-    const r = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-      encoding: "utf8",
-    });
-    if (r.status === 0) return r.stdout.trim() || undefined;
-  } catch {
-    /* not a git repo — fine */
-  }
-  return undefined;
-}
+export interface CheckpointInput { transcript_path?: string }
 
-/**
- * Hook-helper verb (spec §5): a generated PreCompact hook runs `gradient
- * checkpoint` to snapshot progress before Claude Code compacts the context.
- * Not a primary user command — kept tiny and dependency-free.
- */
-export async function runCheckpoint(_args: Args): Promise<number> {
-  const cwd = process.cwd();
-  const file = join(cwd, "progress.md");
-  const branch = gitBranch();
-  const stamp = new Date().toISOString();
-
-  const block =
-    `\n## Checkpoint — ${stamp}\n\n` +
-    `- project: \`${basename(cwd)}\`\n` +
-    (branch ? `- branch: \`${branch}\`\n` : "") +
-    `- written by \`gradient checkpoint\` before a context compaction\n`;
-
-  if (existsSync(file)) {
-    appendFileSync(file, block);
-  } else {
-    writeFileSync(file, `# Progress\n${block}`);
-  }
-
-  process.stdout.write(`  ${c.ok("✓")} checkpoint → ${c.bold("progress.md")}\n`);
-  return 0;
+export async function checkpoint(
+  input: CheckpointInput,
+  projectDir: string,
+  parseFn: (path: string) => Promise<Turn[]> = parseFile,
+): Promise<string> {
+  const turns = input.transcript_path ? await parseFn(input.transcript_path) : [];
+  const prompts = filterPrompts(turns).slice(-10);
+  const lines = prompts.map(p => `- ${p.text}`).join("\n");
+  const md = `# Progress checkpoint\n\nRecent intents before compaction:\n\n${lines}\n`;
+  const path = join(projectDir, "progress.md");
+  await writeFile(path, md);
+  return path;
 }

@@ -1,38 +1,23 @@
-import type { HookArtifact, SuggestionDraft } from "../../types";
-import { KNOWN_SUBCOMMANDS } from "../validate";
+import type { Suggestion } from "../types.js";
+import { assertHookRunnable } from "../validate.js";
 
-// Hooks gradient emits always invoke a tested `gradient` subcommand — never
-// bespoke inline shell (spec §2). v1's only evidence-backed hook is the
-// PreCompact checkpoint, motivated by /compact being run 143×.
-const HOOK_MAP: Record<string, { event: string; subcommand: string }> = {
-  compact: { event: "PreCompact", subcommand: "checkpoint" },
-  checkpoint: { event: "PreCompact", subcommand: "checkpoint" },
-};
+const KNOWN_HOOK_EVENTS = new Set([
+  "PreToolUse", "PostToolUse", "UserPromptSubmit", "Notification",
+  "Stop", "SubagentStop", "PreCompact", "SessionStart", "SessionEnd",
+]);
 
-export function emitHook(s: SuggestionDraft): HookArtifact {
-  const key = Object.keys(HOOK_MAP).find((k) => s.title.toLowerCase().includes(k));
-  const mapping = key ? HOOK_MAP[key]! : { event: "PreCompact", subcommand: "checkpoint" };
-
-  if (!KNOWN_SUBCOMMANDS.has(mapping.subcommand)) {
-    throw new Error(`cannot emit hook for unknown subcommand: ${mapping.subcommand}`);
+export function emitHook(s: Suggestion): { settingsPatch: string } {
+  if (s.payload.type !== "hook") throw new Error("emitHook needs a hook payload");
+  assertHookRunnable(s);
+  if (!KNOWN_HOOK_EVENTS.has(s.payload.event)) {
+    throw new Error(`unknown hook event: ${s.payload.event}`);
   }
-
-  const settingsPatch = JSON.stringify(
-    {
-      hooks: {
-        [mapping.event]: [
-          { hooks: [{ type: "command", command: `gradient ${mapping.subcommand}` }] },
-        ],
-      },
+  const patch = {
+    hooks: {
+      [s.payload.event]: [
+        { hooks: [{ type: "command", command: `gradient ${s.payload.subcommand}` }] },
+      ],
     },
-    null,
-    2,
-  );
-
-  return {
-    kind: "hook",
-    event: mapping.event,
-    subcommand: mapping.subcommand,
-    settingsPatch,
   };
+  return { settingsPatch: JSON.stringify(patch, null, 2) };
 }

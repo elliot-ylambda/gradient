@@ -1,5 +1,10 @@
 // Zero-dependency terminal styling. Truecolor where supported, plain otherwise.
+// Ported from the marketing-site-era CLI scaffold; adapted to gradient's
+// real Confidence / ArtifactType label sets.
+import type { Confidence, ArtifactType } from "./types.js";
 
+// Resolved once at load: color only when attached to a real terminal and the
+// user hasn't opted out (NO_COLOR convention) or asked for a dumb terminal.
 const COLOR =
   !!process.stdout.isTTY &&
   process.env.NO_COLOR === undefined &&
@@ -12,7 +17,7 @@ function rgb(r: number, g: number, b: number, s: string): string {
   return COLOR ? `\x1b[38;2;${r};${g};${b}m${s}\x1b[0m` : s;
 }
 
-// Brand stops: violet (high confidence) -> orchid -> coral (flagged).
+// Brand stops: violet (high confidence) -> coral (flagged).
 const G1 = [124, 108, 255] as const;
 const G3 = [255, 126, 107] as const;
 
@@ -44,19 +49,30 @@ export const c = {
   muted: (s: string) => rgb(139, 145, 164, s),
 };
 
-/** Confidence/kind chip mirroring the website's colored [labels]. Fixed width. */
-export function chip(label: "high" | "inferred" | "hook" | "loop"): string {
-  // 4-char codes so every chip renders as a uniform 6-char "[code]".
-  const text = `[${label === "inferred" ? "infr" : label}]`;
-  switch (label) {
+/**
+ * Confidence chip mirroring the website's colored [labels]. The inner codes are
+ * a fixed 4 chars so every chip renders as a uniform 6-column "[code]".
+ */
+export function confidenceChip(conf: Confidence): string {
+  switch (conf) {
     case "high":
-      return c.violet(text);
+      return c.violet("[high]");
     case "inferred":
-      return c.orchid(text);
-    case "hook":
-      return c.blue(text);
+      return c.orchid("[infr]");
+    case "flagged":
+      return c.coral("[flag]");
+  }
+}
+
+/** Colored artifact-kind label (matches the website palette). */
+export function kindLabel(type: ArtifactType): string {
+  switch (type) {
+    case "command":
+      return c.violet(type);
     case "loop":
-      return c.coral(text);
+      return c.coral(type);
+    case "hook":
+      return c.blue(type);
   }
 }
 

@@ -1,85 +1,60 @@
-import { readFileSync } from "node:fs";
-import { basename } from "node:path";
-import type { Turn } from "../types";
+import { readFile } from "node:fs/promises";
+import type { Turn } from "./types.js";
 
-export type ParseResult = { turns: Turn[]; skipped: number };
-
-function extractText(content: unknown): string | undefined {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    const parts: string[] = [];
-    for (const block of content) {
-      if (block && typeof block === "object") {
-        const b = block as Record<string, unknown>;
-        // tool_result / tool_use blocks are intentionally ignored — only typed text.
-        if (b.type === "text" && typeof b.text === "string") parts.push(b.text);
-      }
-    }
-    return parts.length ? parts.join("\n") : undefined;
-  }
-  return undefined;
+interface RawBlock { type?: string; text?: string }
+interface Raw {
+  type?: string;
+  isSidechain?: boolean;
+  sessionId?: string;
+  cwd?: string;
+  gitBranch?: string;
+  timestamp?: string;
+  message?: { role?: string; content?: string | RawBlock[] };
 }
 
-function toolNames(content: unknown): string[] {
-  if (!Array.isArray(content)) return [];
-  const names: string[] = [];
-  for (const block of content) {
-    if (block && typeof block === "object") {
-      const b = block as Record<string, unknown>;
-      if (b.type === "tool_use" && typeof b.name === "string") names.push(b.name);
-    }
-  }
-  return names;
+function project(cwd: string | undefined): string {
+  if (!cwd) return "?";
+  return cwd.split("/").filter(Boolean).pop() ?? "?";
 }
 
-/** JSONL transcript → Turn[]. Malformed lines are skipped and counted (never throws). */
-export function parse(file: string): ParseResult {
-  let raw: string;
+// v1 parses only genuine user prompts; assistant turns are skipped on purpose.
+function parseOne(line: string): Turn | null {
+  let raw: Raw;
   try {
-    raw = readFileSync(file, "utf8");
+    raw = JSON.parse(line) as Raw;
   } catch {
-    return { turns: [], skipped: 0 };
+    return null;
   }
+  if (raw.isSidechain || raw.type !== "user") return null;
+  const content = raw.message?.content;
+  let text: string | undefined;
+  if (typeof content === "string") text = content;
+  else if (Array.isArray(content)) {
+    const parts = content.filter(b => b.type === "text").map(b => b.text ?? "");
+    text = parts.length ? parts.join(" ") : undefined;
+  }
+  if (!text) return null;
+  return {
+    ts: raw.timestamp ?? "",
+    project: project(raw.cwd),
+    branch: raw.gitBranch,
+    sessionId: raw.sessionId ?? "?",
+    role: "user",
+    text,
+  };
+}
 
-  const turns: Turn[] = [];
-  let skipped = 0;
-
-  for (const line of raw.split("\n")) {
+export function parseLines(lines: string[]): Turn[] {
+  const out: Turn[] = [];
+  for (const line of lines) {
     if (!line.trim()) continue;
-    let o: Record<string, unknown>;
-    try {
-      o = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      skipped++;
-      continue;
-    }
-
-    const message = o.message as Record<string, unknown> | undefined;
-    if (!message) continue;
-
-    const project = basename(typeof o.cwd === "string" ? o.cwd : "");
-    const branch =
-      typeof o.gitBranch === "string" && o.gitBranch ? o.gitBranch : undefined;
-    const ts = typeof o.timestamp === "string" ? o.timestamp : "";
-
-    if (o.type === "user") {
-      // subagent/sidechain turns and meta-injected turns are not genuine prompts.
-      if (o.isSidechain === true || o.isMeta === true) continue;
-      const text = extractText(message.content);
-      if (text === undefined) continue;
-      turns.push({ ts, project, branch, role: "user", source: file, text });
-    } else if (o.type === "assistant") {
-      const uses = toolNames(message.content);
-      turns.push({
-        ts,
-        project,
-        branch,
-        role: "assistant",
-        source: file,
-        toolUses: uses.length ? uses : undefined,
-      });
-    }
+    const t = parseOne(line);
+    if (t) out.push(t);
   }
+  return out;
+}
 
-  return { turns, skipped };
+export async function parseFile(path: string): Promise<Turn[]> {
+  const content = await readFile(path, "utf8");
+  return parseLines(content.split(/\r?\n/));
 }

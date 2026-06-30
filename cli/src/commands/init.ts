@@ -1,44 +1,45 @@
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import type { Args } from "../cli";
-import { VERSION } from "../version";
-import { c } from "../ui";
+import { fileURLToPath } from "node:url";
+import { saveConfig } from "../config.js";
+import { selectBackend } from "../llm/index.js";
+import type { LLMBackend } from "../llm/backend.js";
+import type { Config } from "../core/types.js";
 
-const SKILL = `---
-name: gradient
-description: Surface and apply gradient's automation suggestions for this project. Use when the user wants to find repeated Claude Code workflows or generate slash-commands, hooks, or loops from their history.
----
+export interface InitResult {
+  backend: string;
+  configPath: string;
+  skillInstalled: boolean;
+}
 
-# gradient
+async function defaultSkillSource(): Promise<string> {
+  const here = dirname(fileURLToPath(import.meta.url));
+  // tsc does not copy .md into dist/. The published package ships both `dist` and
+  // `src/skill` (package.json "files"), so resolve to the source markdown:
+  // <pkg>/dist/commands/init.js → <pkg>/src/skill/SKILL.md
+  return readFile(join(here, "..", "..", "src", "skill", "SKILL.md"), "utf8");
+}
 
-Run \`npx gradient scan\` to read history and propose automations, then
-\`npx gradient review\` to inspect them and \`npx gradient apply <id>\` to generate
-the approved artifact. gradient only ever suggests — the user enables each one.
-`;
+export async function init(
+  opts: { installSkill: boolean; home?: string },
+  deps: { backend?: LLMBackend | null; skillSource?: string } = {},
+): Promise<InitResult> {
+  const home = opts.home ?? homedir();
+  const backend = deps.backend !== undefined ? deps.backend : await selectBackend();
+  const backendName = backend?.name ?? "none";
 
-export async function runInit(_args: Args): Promise<number> {
-  // 1. The tool's own install target (separate from artifacts it generates).
-  const skillDir = join(homedir(), ".claude", "skills", "gradient");
-  mkdirSync(skillDir, { recursive: true });
-  writeFileSync(join(skillDir, "SKILL.md"), SKILL);
+  const config: Config = backend ? { backend: backend.name as Config["backend"] } : {};
+  await saveConfig(config, home);
 
-  // 2. Project-local config.
-  const cfgDir = join(process.cwd(), ".gradient");
-  mkdirSync(cfgDir, { recursive: true });
-  writeFileSync(
-    join(cfgDir, "config.json"),
-    `${JSON.stringify({ version: VERSION, createdAt: new Date().toISOString() }, null, 2)}\n`,
-  );
+  let skillInstalled = false;
+  if (opts.installSkill) {
+    const source = deps.skillSource ?? (await defaultSkillSource());
+    const dest = join(home, ".claude", "skills", "gradient", "SKILL.md");
+    await mkdir(dirname(dest), { recursive: true });
+    await writeFile(dest, source);
+    skillInstalled = true;
+  }
 
-  process.stdout.write(
-    [
-      `  ${c.ok("✓")} installed the ${c.violet("/gradient")} skill → ${join("~", ".claude", "skills", "gradient", "SKILL.md")}`,
-      `  ${c.ok("✓")} wrote project config → ${join(".gradient", "config.json")}`,
-      "",
-      `  next: ${c.violet("gradient scan")}`,
-      "",
-    ].join("\n"),
-  );
-  return 0;
+  return { backend: backendName, configPath: join(home, ".config/gradient/config.json"), skillInstalled };
 }

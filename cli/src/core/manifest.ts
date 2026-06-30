@@ -1,48 +1,40 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import type { ManifestEntry } from "../types";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import type { ManifestEntry } from "./types.js";
 
-// .gradient/manifest.json tracks every generated artifact so apply is reversible.
-export function manifestPath(cwd: string = process.cwd()): string {
-  return join(cwd, ".gradient", "manifest.json");
+export function gradientDir(projectDir: string): string {
+  return join(projectDir, ".gradient");
 }
 
-export function readManifest(cwd: string = process.cwd()): ManifestEntry[] {
-  const p = manifestPath(cwd);
-  if (!existsSync(p)) return [];
+function manifestPath(projectDir: string): string {
+  return join(gradientDir(projectDir), "manifest.json");
+}
+
+export async function loadManifest(projectDir: string): Promise<ManifestEntry[]> {
+  let raw: string;
   try {
-    const data = JSON.parse(readFileSync(p, "utf8")) as unknown;
-    return Array.isArray(data) ? (data as ManifestEntry[]) : [];
+    raw = await readFile(manifestPath(projectDir), "utf8");
   } catch {
-    return [];
+    return []; // absent manifest → empty
   }
+  return JSON.parse(raw) as ManifestEntry[]; // corrupt JSON throws loudly (no silent data loss)
 }
 
-export function writeManifest(
-  entries: ManifestEntry[],
-  cwd: string = process.cwd(),
-): void {
-  const p = manifestPath(cwd);
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, `${JSON.stringify(entries, null, 2)}\n`);
+async function save(projectDir: string, entries: ManifestEntry[]): Promise<void> {
+  await mkdir(gradientDir(projectDir), { recursive: true });
+  await writeFile(manifestPath(projectDir), JSON.stringify(entries, null, 2));
 }
 
-/** Idempotent: re-adding the same name updates rather than duplicates. */
-export function addEntry(entry: ManifestEntry, cwd: string = process.cwd()): void {
-  const entries = readManifest(cwd).filter((e) => e.name !== entry.name);
-  entries.push(entry);
-  writeManifest(entries, cwd);
+export async function addEntry(projectDir: string, e: ManifestEntry): Promise<void> {
+  const entries = (await loadManifest(projectDir)).filter(x => x.name !== e.name);
+  entries.push(e);
+  await save(projectDir, entries);
 }
 
-export function removeEntry(
-  name: string,
-  cwd: string = process.cwd(),
-): ManifestEntry | undefined {
-  const entries = readManifest(cwd);
-  const found = entries.find((e) => e.name === name);
-  writeManifest(
-    entries.filter((e) => e.name !== name),
-    cwd,
-  );
+export async function removeEntry(projectDir: string, name: string): Promise<ManifestEntry | undefined> {
+  const entries = await loadManifest(projectDir);
+  const found = entries.find(x => x.name === name);
+  if (!found) return undefined;
+  await save(projectDir, entries.filter(x => x.name !== name));
   return found;
 }

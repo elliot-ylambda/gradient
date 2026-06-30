@@ -1,44 +1,32 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import type { Args } from "../cli";
-import type { Suggestion } from "../types";
-import { c } from "../ui";
+import { createInterface } from "node:readline/promises";
+import type { Suggestion } from "../core/types.js";
+import { applySuggestion, type ApplyResult } from "../core/apply.js";
+import { loadSuggestions } from "./apply.js";
 
-export function loadSuggestions(): Suggestion[] | null {
-  const p = join(process.cwd(), ".gradient", "suggestions.json");
-  if (!existsSync(p)) return null;
-  try {
-    return JSON.parse(readFileSync(p, "utf8")) as Suggestion[];
-  } catch {
-    return null;
+export type Prompter = (s: Suggestion, index: number, total: number) => Promise<"approve" | "skip" | "quit">;
+
+export async function review(projectDir: string, prompt: Prompter): Promise<ApplyResult[]> {
+  const suggestions = await loadSuggestions(projectDir);
+  const out: ApplyResult[] = [];
+  for (let i = 0; i < suggestions.length; i++) {
+    const decision = await prompt(suggestions[i], i, suggestions.length);
+    if (decision === "quit") break;
+    if (decision === "approve") out.push(await applySuggestion(suggestions[i], projectDir));
   }
+  return out;
 }
 
-export async function runReview(_args: Args): Promise<number> {
-  const suggestions = loadSuggestions();
-  if (!suggestions) {
-    process.stderr.write(
-      `${c.coral("no scan cache")} — run ${c.violet("gradient scan")} first\n`,
+export function readlinePrompter(): Prompter {
+  return async (s, index, total) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const label = s.payload.type;
+    process.stdout.write(
+      `\n(${index + 1}/${total})  ${s.name} · ${label} · seen ${s.evidence.count}× · ${s.confidence}\n  ${s.title}\n`,
     );
-    return 1;
-  }
-  if (suggestions.length === 0) {
-    process.stdout.write(`  ${c.muted("nothing to review.")}\n`);
-    return 0;
-  }
-
-  const lines: string[] = [""];
-  for (const s of suggestions) {
-    lines.push(`  ${c.bold(s.name)} ${c.dim(`(${s.type})`)}  ${c.dim(s.id)}`);
-    lines.push(`    ${s.title.replace(/\s+/g, " ").slice(0, 72)}`);
-    lines.push(
-      `    ${c.muted(s.rationale)}  →  ${c.violet(`gradient apply ${s.id}`)}`,
-    );
-    lines.push("");
-  }
-  lines.push(
-    `  ${c.dim("an interactive approve/skip flow lands in v1; for now, apply by id above.")}`,
-  );
-  process.stdout.write(`${lines.join("\n")}\n`);
-  return 0;
+    const ans = (await rl.question("  [a]pprove [s]kip [q]uit › ")).trim().toLowerCase();
+    rl.close();
+    if (ans === "a") return "approve";
+    if (ans === "q") return "quit";
+    return "skip";
+  };
 }

@@ -1,20 +1,31 @@
-import type { LLMBackend } from "./backend";
+import Anthropic from "@anthropic-ai/sdk";
+import type { LLMBackend, LLMRequest } from "./backend.js";
 
-/**
- * Fallback backend: Anthropic SDK + ANTHROPIC_API_KEY. The SDK call is wired in
- * the implementation plan; v1 keeps the dependency optional so `npx gradient`
- * stays lean when the default `claude` CLI backend is present.
- */
-export const anthropic: LLMBackend = {
-  name: "anthropic-sdk",
+export class AnthropicBackend implements LLMBackend {
+  name = "anthropic";
+  private model: string;
+  private apiKey: string | undefined;
+
+  constructor(deps: { apiKey?: string; model?: string } = {}) {
+    this.apiKey = deps.apiKey ?? process.env.ANTHROPIC_API_KEY;
+    this.model = deps.model ?? "claude-sonnet-4-6";
+  }
 
   async available(): Promise<boolean> {
-    return Boolean(process.env.ANTHROPIC_API_KEY);
-  },
+    return Boolean(this.apiKey);
+  }
 
-  async complete(_prompt: string): Promise<string> {
-    throw new Error(
-      "anthropic backend not wired in this scaffold — set up @anthropic-ai/sdk in the implementation plan, or use the default claude CLI backend",
-    );
-  },
-};
+  async complete(req: LLMRequest): Promise<string> {
+    const client = new Anthropic({ apiKey: this.apiKey });
+    const resp = await client.messages.create({
+      model: this.model,
+      max_tokens: 4096,
+      system: req.system,
+      messages: [{ role: "user", content: req.prompt }],
+    });
+    return resp.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map(b => b.text)
+      .join("");
+  }
+}
