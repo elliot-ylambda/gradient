@@ -28,19 +28,17 @@ the same things everyone does in Claude Code:
 
 `gradient` mines those patterns out of your history and hands you the artifact.
 
-## Monorepo layout
+## Repository layout
 
 ```
 gradient/
-  webapp/   →  the gradient.md website (Next.js + TypeScript)
-  cli/      →  the gradient CLI — the v1 analysis engine (TypeScript / npx)
-  docs/     →  design spec and implementation plan
+  cli/    →  the gradient CLI — the v1 analysis engine (TypeScript / npx)
+  docs/   →  design spec and implementation plan
 ```
 
 | Dir | What it is |
 |-----|------------|
 | [`cli/`](cli/) | The `gradient` CLI — the v1 analysis engine. The read-only `scan` pipeline runs end-to-end today. See [`cli/README.md`](cli/README.md). |
-| [`webapp/`](webapp/) | The marketing + docs site at [gradient.md](https://gradient.md). See [`webapp/README.md`](webapp/README.md). |
 | [`docs/`](docs/) | Design spec and implementation plan. |
 
 ## Quickstart (CLI)
@@ -57,11 +55,8 @@ Clustering is local and LLM-free; only short candidate snippets ever reach a mod
 
 ## Develop
 
-Each package is self-contained:
-
 ```bash
-cd cli && npm install && npm test && npm run build   # CLI
-cd webapp && npm install && npm run dev              # website
+cd cli && npm install && npm test && npm run build
 ```
 
 ## Status

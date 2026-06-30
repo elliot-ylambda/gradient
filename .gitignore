@@ -5,3 +5,7 @@ dist/
 .DS_Store
 .worktrees/
 .claude/worktrees/
+
+# The marketing site lives in a separate private repo (gradient-web).
+# Guard against it being re-added to this public repo.
+webapp/
