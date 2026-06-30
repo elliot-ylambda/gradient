@@ -51,4 +51,8 @@ export interface ManifestEntry {
 export interface Config {
   backend?: "claude-cli" | "anthropic";
   model?: string;
+  /** Default recency window (days) for `scan --user`. Defaults to 7. */
+  userScopeDays?: number;
+  /** Max prompts fed into clustering before older ones are dropped. Defaults to 1500. */
+  maxPrompts?: number;
 }

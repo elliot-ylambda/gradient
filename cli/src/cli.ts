@@ -8,13 +8,18 @@ import { remove } from "./commands/remove.js";
 import { init } from "./commands/init.js";
 import { checkpoint } from "./commands/checkpoint.js";
 import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
+import { resolveScanScope } from "./core/scope.js";
+import { loadConfig } from "./config.js";
 import { VERSION } from "./version.js";
 
 const HELP = `gradient — turn repeated Claude Code workflows into artifacts
 
 Usage:
   gradient init                 configure + install the /gradient skill
-  gradient scan [--all] [--since 7d] [--limit N]
+  gradient scan                 this project, all history
+  gradient scan --user          all projects, last 7 days (configurable)
+  gradient scan --all           all projects, no time limit
+    [--since 7d] [--limit N] [--max-prompts N]
   gradient review               approve cached suggestions
   gradient apply <id|name>...   generate specific suggestions
   gradient list                 show generated artifacts
@@ -31,9 +36,11 @@ export function parseCliArgs(argv: string[]): {
     args: argv.slice(1),
     allowPositionals: true,
     options: {
+      user: { type: "boolean" },
       all: { type: "boolean" },
       since: { type: "string" },
       limit: { type: "string" },
+      "max-prompts": { type: "string" },
       "no-skill": { type: "boolean" },
     },
   });
@@ -72,14 +79,21 @@ export async function main(
       }
       case "scan": {
         log(banner(VERSION));
+        const config = await loadConfig();
+        const resolved = resolveScanScope(
+          { user: !!flags.user, all: !!flags.all, since: sinceDays(flags.since) },
+          config,
+        );
+        log(c.dim(resolved.label));
         const out = await scan(
           {
-            scope: flags.all ? "all" : "project",
+            scope: resolved.scope,
             projectPath: projectDir,
-            sinceDays: sinceDays(flags.since),
+            sinceDays: resolved.sinceDays,
             limit: flags.limit ? Number(flags.limit) : undefined,
+            maxPrompts: flags["max-prompts"] ? Number(flags["max-prompts"]) : undefined,
           },
-          { log },
+          { log, config },
         );
         for (const s of out) {
           log(

@@ -1,9 +1,11 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { Suggestion, Turn } from "../core/types.js";
+import type { Suggestion, Turn, Config } from "../core/types.js";
 import { collect } from "../core/collect.js";
 import { parseFile } from "../core/parse.js";
 import { filterPrompts } from "../core/filter.js";
+import { capByRecency } from "../core/cap.js";
+import { DEFAULT_MAX_PROMPTS } from "../core/scope.js";
 import { cluster } from "../core/cluster.js";
 import { detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
@@ -17,11 +19,15 @@ export interface ScanOptions {
   projectPath?: string;
   sinceDays?: number;
   limit?: number;
+  /** Ceiling on prompts entering clustering; older ones are dropped. */
+  maxPrompts?: number;
   home?: string;
 }
 
 export interface ScanDeps {
   backend?: LLMBackend | null;
+  /** Pre-loaded config, to avoid a redundant read by the caller. */
+  config?: Config;
   collectFn?: (o: ScanOptions) => Promise<string[]>;
   parseFn?: (path: string) => Promise<Turn[]>;
   log?: (msg: string) => void;
@@ -40,11 +46,17 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const prompts = filterPrompts(turns);
   log(`prompts: ${prompts.length} after filtering injected text`);
 
-  const candidates = cluster(prompts);
+  const config = deps.config ?? (await loadConfig(opts.home));
+  const max = opts.maxPrompts ?? config.maxPrompts ?? DEFAULT_MAX_PROMPTS;
+  const { kept, dropped } = capByRecency(prompts, max);
+  if (dropped > 0) {
+    log(`capped to most recent ${max} prompts; ${dropped} older dropped (raise with --max-prompts)`);
+  }
+
+  const candidates = cluster(kept);
   log(`clustering → ${candidates.length} candidate patterns`);
 
-  const backend =
-    deps.backend !== undefined ? deps.backend : await selectBackend({ config: await loadConfig(opts.home) });
+  const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });
   if (!backend) log("no LLM backend available — degrading to exact-repeat command suggestions only");
 
   const suggestions = await detect(candidates, backend, {
