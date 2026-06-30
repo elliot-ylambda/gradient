@@ -44,10 +44,18 @@ gradient/
 ## Quickstart (CLI)
 
 ```bash
-npx gradient scan       # read history, propose automations (read-only, no API key)
-npx gradient review     # inspect the ranked suggestions and their evidence
-npx gradient apply <id> # generate an approved slash-command / loop / hook
+npx gradient scan        # this project's history (all of it)
+npx gradient scan --user # all projects, last 7 days — your recent cross-project habits
+npx gradient scan --all  # all projects, no time limit (thorough; can be slow)
+npx gradient review      # inspect the ranked suggestions and their evidence
+npx gradient apply <id>  # generate an approved slash-command / loop / hook
 ```
+
+**Scope.** `scan` defaults to the project you're in. `--user` widens to every
+project but bounds it to a recent window (last 7 days, set via `userScopeDays`
+in config or `--since`), so it stays fast. A recency cap (`--max-prompts`,
+default 1500) protects the clustering step from very large histories and reports
+anything it drops.
 
 The default backend reuses your existing `claude` CLI auth — no API key required.
 Clustering is local and LLM-free; only short candidate snippets ever reach a model
