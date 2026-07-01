@@ -27,8 +27,11 @@ export async function installHook(projectDir: string, event: string, command: st
   let existing: Record<string, any> = {};
   try {
     existing = JSON.parse(await readFile(path, "utf8"));
-  } catch {
-    existing = {};
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new Error(`refusing to overwrite unreadable ${path}: ${(e as Error).message}`);
+    }
+    // ENOENT → no existing settings; start fresh
   }
   const merged = mergeHookIntoSettings(existing, event, command);
   await mkdir(dirname(path), { recursive: true });

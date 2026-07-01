@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mergeHookIntoSettings, installHook } from "./settings.js";
@@ -23,5 +23,15 @@ describe("installHook", () => {
     const p = await installHook(dir, "SessionStart", "gradient scan --detach");
     const written = JSON.parse(await readFile(p, "utf8"));
     expect(written.hooks.SessionStart[0].hooks[0].command).toBe("gradient scan --detach");
+  });
+
+  it("refuses to overwrite a corrupt settings.json instead of clobbering it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-settings-corrupt-"));
+    const cdir = join(dir, ".claude");
+    await mkdir(cdir, { recursive: true });
+    const file = join(cdir, "settings.json");
+    await writeFile(file, "{ this is not valid json");
+    await expect(installHook(dir, "SessionStart", "gradient scan --detach")).rejects.toThrow();
+    expect(await readFile(file, "utf8")).toBe("{ this is not valid json"); // untouched, not clobbered
   });
 });
