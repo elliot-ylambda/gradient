@@ -1,10 +1,11 @@
 import type { Turn, Candidate, Confidence } from "./types.js";
+import { minhash, bandKeys } from "./lsh.js";
 
 export function normalize(s: string): string {
   return s.toLowerCase().trim().replace(/\s+/g, " ").replace(/[.!?,;:]+$/g, "").trim();
 }
 
-function trigrams(s: string): Set<string> {
+export function trigrams(s: string): Set<string> {
   const padded = `  ${s} `;
   const out = new Set<string>();
   for (let i = 0; i < padded.length - 2; i++) out.add(padded.slice(i, i + 3));
@@ -42,20 +43,37 @@ export function cluster(
     if (b.examples.length < 5) b.examples.push(t.text);
   }
 
-  // Stage 2: merge near-duplicate buckets (fuzzy).
+  // Stage 2: merge near-duplicate buckets, comparing only LSH-band-sharing hosts.
   const buckets = [...exact.values()].sort((a, b) => b.count - a.count);
   const merged: Bucket[] = [];
   const fuzzyMember: boolean[] = [];
+  const bandIndex = new Map<string, number[]>(); // bandKey -> host indices
+
   for (const b of buckets) {
-    const host = merged.find(m => similarity(m.signature, b.signature) >= simThreshold);
-    if (host) {
+    const keys = bandKeys(minhash(trigrams(b.signature)));
+    const candidateHosts = new Set<number>();
+    for (const k of keys) for (const hi of bandIndex.get(k) ?? []) candidateHosts.add(hi);
+
+    let hostIdx = -1;
+    for (const hi of [...candidateHosts].sort((x, y) => x - y)) {
+      if (similarity(merged[hi].signature, b.signature) >= simThreshold) { hostIdx = hi; break; }
+    }
+
+    if (hostIdx >= 0) {
+      const host = merged[hostIdx];
       host.count += b.count;
       for (const s of b.sessions) host.sessions.add(s);
       for (const ex of b.examples) if (host.examples.length < 5) host.examples.push(ex);
-      fuzzyMember[merged.indexOf(host)] = true;
+      fuzzyMember[hostIdx] = true;
     } else {
       merged.push({ ...b, sessions: new Set(b.sessions) });
-      fuzzyMember[merged.length - 1] = false;
+      const idx = merged.length - 1;
+      fuzzyMember[idx] = false;
+      for (const k of keys) {
+        const arr = bandIndex.get(k) ?? [];
+        arr.push(idx);
+        bandIndex.set(k, arr);
+      }
     }
   }
 
