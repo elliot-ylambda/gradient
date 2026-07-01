@@ -20,3 +20,6 @@ export async function saveConfig(c: Config, home?: string): Promise<void> {
   await mkdir(dirname(p), { recursive: true });
   await writeFile(p, JSON.stringify(c, null, 2));
 }
+
+export const DEFAULT_AUTOPILOT_BUDGET = 10;
+export const DEFAULT_AUTOPILOT_MODEL = "haiku";
