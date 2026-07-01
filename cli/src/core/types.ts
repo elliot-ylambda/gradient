@@ -17,6 +17,15 @@ export interface Clarify {
   chosen?: string;
 }
 
+/** Local-only temporal evidence per cluster (core/temporal.ts). */
+export interface TemporalFeatures {
+  maxRunLength: number;      // longest streak of consecutive user prompts in one session, all in this cluster
+  runSessions: number;       // sessions containing a run of length ≥ 2
+  medianGapMinutes: number;  // median gap between successive occurrences
+  distinctDays: number;
+  spanDays: number;
+}
+
 /** One genuine user prompt after parse + filter. (The mining pipeline consumes
  * only user text; assistant turns are rendered by core/tail.ts for autopilot.) */
 export interface Turn {
@@ -47,6 +56,7 @@ export interface Candidate {
   memberSignatures: string[];
   confidence: Confidence;
   assistants?: Assistant[];
+  temporal?: TemporalFeatures;
 }
 
 /** Semantic content of a suggestion; emit/* formats it into an artifact. */
