@@ -10,6 +10,7 @@ import { cluster } from "../core/cluster.js";
 import { detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
 import { gradientDir } from "../core/manifest.js";
+import { writePlaybook } from "../core/playbook.js";
 import { selectBackend } from "../llm/index.js";
 import { loadConfig } from "../config.js";
 import type { LLMBackend } from "../llm/backend.js";
@@ -79,5 +80,13 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   await mkdir(gdir, { recursive: true });
   await writeFile(join(gdir, "suggestions.json"), JSON.stringify(valid, null, 2));
   log(`found ${valid.length} suggestions → cached`);
+
+  try {
+    const pb = await writePlaybook(valid, opts.home);
+    log(pb ? `playbook updated → ${pb}` : "playbook markers missing — left untouched");
+  } catch (e) {
+    log(`playbook update failed: ${(e as Error).message}`); // never fails the scan
+  }
+
   return valid;
 }
