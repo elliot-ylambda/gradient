@@ -19,10 +19,12 @@ async function seed(): Promise<string> {
 
 describe("stats", () => {
   it("reports coverage and top patterns sorted by frequency", async () => {
-    const report = await stats(await seed());
+    const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
+    const report = await stats(await seed(), { home });
     expect(report.total).toBe(2);
     expect(report.covered).toBe(1);
     expect(report.coveragePct).toBe(50);
+    expect(report.sessionScanEnabled).toBe(false);
     expect(report.patterns[0].name).toBe("ship");
     expect(report.patterns[0].covered).toBe(true);
     expect(report.patterns[1].covered).toBe(false);
@@ -30,7 +32,17 @@ describe("stats", () => {
 
   it("reports zeros with no cache", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-stats-empty-"));
-    const report = await stats(dir);
-    expect(report).toEqual({ total: 0, covered: 0, coveragePct: 0, patterns: [] });
+    const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
+    const report = await stats(dir, { home });
+    expect(report).toEqual({ total: 0, covered: 0, coveragePct: 0, sessionScanEnabled: false, patterns: [] });
+  });
+
+  it("reports sessionScanEnabled from config", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-stats-cfg-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-stats-home-on-"));
+    await mkdir(join(home, ".config", "gradient"), { recursive: true });
+    await writeFile(join(home, ".config", "gradient", "config.json"), JSON.stringify({ scanOnSessionStart: true }));
+    const report = await stats(dir, { home });
+    expect(report.sessionScanEnabled).toBe(true);
   });
 });
