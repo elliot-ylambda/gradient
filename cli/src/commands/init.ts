@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { saveConfig } from "../config.js";
 import { selectBackend } from "../llm/index.js";
+import { installHook } from "../core/settings.js";
 import type { LLMBackend } from "../llm/backend.js";
 import type { Config } from "../core/types.js";
 
@@ -11,6 +12,7 @@ export interface InitResult {
   backend: string;
   configPath: string;
   skillInstalled: boolean;
+  sessionScanInstalled: boolean;
 }
 
 async function defaultSkillSource(): Promise<string> {
@@ -22,7 +24,7 @@ async function defaultSkillSource(): Promise<string> {
 }
 
 export async function init(
-  opts: { installSkill: boolean; home?: string },
+  opts: { installSkill: boolean; sessionScan?: boolean; home?: string; projectDir?: string },
   deps: { backend?: LLMBackend | null; skillSource?: string } = {},
 ): Promise<InitResult> {
   const home = opts.home ?? homedir();
@@ -30,6 +32,7 @@ export async function init(
   const backendName = backend?.name ?? "none";
 
   const config: Config = backend ? { backend: backend.name as Config["backend"] } : {};
+  if (opts.sessionScan) config.scanOnSessionStart = true;
   await saveConfig(config, home);
 
   let skillInstalled = false;
@@ -41,5 +44,11 @@ export async function init(
     skillInstalled = true;
   }
 
-  return { backend: backendName, configPath: join(home, ".config/gradient/config.json"), skillInstalled };
+  let sessionScanInstalled = false;
+  if (opts.sessionScan) {
+    await installHook(opts.projectDir ?? process.cwd(), "SessionStart", "gradient scan --detach");
+    sessionScanInstalled = true;
+  }
+
+  return { backend: backendName, configPath: join(home, ".config/gradient/config.json"), skillInstalled, sessionScanInstalled };
 }

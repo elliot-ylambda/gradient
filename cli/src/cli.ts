@@ -19,6 +19,7 @@ const HELP = `gradient — turn repeated Claude Code workflows into artifacts
 
 Usage:
   gradient init                 configure + install the /gradient skill
+  gradient init --session-scan  also run a scan at the start of each session
   gradient scan                 this project, all history
   gradient scan --user          all projects, last 7 days (configurable)
   gradient scan --all           all projects, no time limit
@@ -47,6 +48,7 @@ export function parseCliArgs(argv: string[]): {
       limit: { type: "string" },
       "max-prompts": { type: "string" },
       "no-skill": { type: "boolean" },
+      "session-scan": { type: "boolean" },
       detach: { type: "boolean" },
     },
   });
@@ -76,10 +78,10 @@ export async function main(
   try {
     switch (command) {
       case "init": {
-        const r = await init({ installSkill: !flags["no-skill"] });
+        const r = await init({ installSkill: !flags["no-skill"], sessionScan: !!flags["session-scan"], projectDir });
         log(banner(VERSION));
         log(
-          `${c.muted("backend:")} ${r.backend}\n${c.muted("config:")} ${r.configPath}\n${c.muted("skill installed:")} ${r.skillInstalled}`,
+          `${c.muted("backend:")} ${r.backend}\n${c.muted("config:")} ${r.configPath}\n${c.muted("skill installed:")} ${r.skillInstalled}\n${c.muted("session-start scan:")} ${r.sessionScanInstalled}`,
         );
         return 0;
       }
