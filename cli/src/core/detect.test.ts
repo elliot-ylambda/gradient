@@ -121,14 +121,14 @@ describe("detect", () => {
     const llm = {
       name: "fake", available: async () => true,
       complete: async () => JSON.stringify({ suggestions: [{
-        sourceSignatures: ["deploy with token sk-ant-xyz"],
+        sourceSignatures: ["deploy with token sk-ant-abc123def"],
         name: "deploy", title: "Deploy", rationale: "r", confidence: "high",
         payload: { type: "command", commandName: "deploy", body: "deploy" },
       }] }),
     };
-    const c: Candidate = { kind: "unknown", signature: "deploy with token sk-ant-xyz", examples: ["deploy with token sk-ant-xyz"], count: 4, sessions: 1, sessionIds: ["s1"], confidence: "high" };
+    const c: Candidate = { kind: "unknown", signature: "deploy with token sk-ant-abc123def", examples: ["deploy with token sk-ant-abc123def"], count: 4, sessions: 1, sessionIds: ["s1"], confidence: "high" };
     const out = await detect([c], llm);
     expect(out[0].examples?.[0]).toContain("[REDACTED]");
-    expect(out[0].examples?.[0]).not.toContain("sk-ant-xyz");
+    expect(out[0].examples?.[0]).not.toContain("sk-ant-abc123def");
   });
 });

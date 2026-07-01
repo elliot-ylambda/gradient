@@ -21,7 +21,7 @@ export function sanitizeName(raw: string): string {
 
 const SECRET_PATTERNS: RegExp[] = [
   /\b[A-Za-z_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)\s*=\s*\S+/gi,
-  /\bsk-ant-[A-Za-z0-9_-]{3,}/g,
+  /\bsk-ant-[A-Za-z0-9_-]{6,}/g,
   /\bgh[a-z]_[A-Za-z0-9]{20,}/g,
 ];
 
