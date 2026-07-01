@@ -8,6 +8,7 @@ import { remove } from "./commands/remove.js";
 import { init } from "./commands/init.js";
 import { checkpoint } from "./commands/checkpoint.js";
 import { stats } from "./commands/stats.js";
+import { explain } from "./commands/explain.js";
 import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
 import { resolveScanScope } from "./core/scope.js";
 import { loadConfig } from "./config.js";
@@ -23,6 +24,7 @@ Usage:
     [--since 7d] [--limit N] [--max-prompts N]
   gradient review               approve cached suggestions
   gradient apply <id|name>...   generate specific suggestions
+  gradient explain <id|name>    show the evidence behind a suggestion
   gradient list                 show generated artifacts
   gradient remove <name>        delete a generated artifact
   gradient stats                show your most-repeated patterns + coverage
@@ -118,6 +120,18 @@ export async function main(
         for (const a of applied) {
           log(a.written ? `${c.ok("wrote")} ${c.muted(a.written)}` : `${c.dim("run:")} ${a.printed}`);
         }
+        return 0;
+      }
+      case "explain": {
+        const s = await explain(projectDir, positionals[0] ?? "");
+        if (!s) {
+          log(c.coral(`no suggestion matching: ${positionals[0] ?? "(none given)"}`));
+          return 1;
+        }
+        log(`${confidenceChip(s.confidence)} ${c.bold(s.name)}  ${c.muted(s.title)}`);
+        log(c.dim(s.rationale));
+        log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions`));
+        for (const ex of s.examples ?? []) log(`  ${c.muted("·")} ${ex}`);
         return 0;
       }
       case "list": {
