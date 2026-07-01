@@ -26,3 +26,33 @@ describe("ClaudeCliBackend", () => {
     await expect(b.complete({ system: "s", prompt: "p" })).rejects.toThrow("boom");
   });
 });
+
+describe("spawn options", () => {
+  it("threads spawnCwd and extraEnv through to the run function", async () => {
+    let captured: { cwd?: string; env?: NodeJS.ProcessEnv } | undefined;
+    const backend = new ClaudeCliBackend({
+      runFn: async (_cmd, _args, _input, opts) => {
+        captured = opts;
+        return { code: 0, stdout: JSON.stringify({ result: "ok" }), stderr: "" };
+      },
+      spawnCwd: "/tmp/neutral",
+      extraEnv: { GRADIENT_AUTOPILOT_CHILD: "1" },
+    });
+    await backend.complete({ system: "s", prompt: "p" });
+    expect(captured?.cwd).toBe("/tmp/neutral");
+    expect(captured?.env?.GRADIENT_AUTOPILOT_CHILD).toBe("1");
+    expect(captured?.env?.PATH).toBe(process.env.PATH); // parent env preserved
+  });
+
+  it("passes no env override when extraEnv is not set", async () => {
+    let captured: { cwd?: string; env?: NodeJS.ProcessEnv } | undefined;
+    const backend = new ClaudeCliBackend({
+      runFn: async (_cmd, _args, _input, opts) => {
+        captured = opts;
+        return { code: 0, stdout: "{}", stderr: "" };
+      },
+    });
+    await backend.complete({ system: "s", prompt: "p" });
+    expect(captured?.env).toBeUndefined();
+  });
+});
