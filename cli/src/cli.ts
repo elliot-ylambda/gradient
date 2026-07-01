@@ -7,6 +7,7 @@ import { list } from "./commands/list.js";
 import { remove } from "./commands/remove.js";
 import { init } from "./commands/init.js";
 import { checkpoint } from "./commands/checkpoint.js";
+import { stats } from "./commands/stats.js";
 import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
 import { resolveScanScope } from "./core/scope.js";
 import { loadConfig } from "./config.js";
@@ -24,6 +25,7 @@ Usage:
   gradient apply <id|name>...   generate specific suggestions
   gradient list                 show generated artifacts
   gradient remove <name>        delete a generated artifact
+  gradient stats                show your most-repeated patterns + coverage
 `;
 
 export function parseCliArgs(argv: string[]): {
@@ -128,6 +130,15 @@ export async function main(
         const ok = await remove(projectDir, positionals[0]);
         log(ok ? `${c.ok("removed")} ${positionals[0]}` : c.coral(`no such artifact: ${positionals[0]}`));
         return ok ? 0 : 1;
+      }
+      case "stats": {
+        log(banner(VERSION));
+        const r = await stats(projectDir);
+        log(c.dim(`coverage: ${r.covered}/${r.total} patterns automated (${r.coveragePct}%)`));
+        for (const p of r.patterns) {
+          log(`  ${confidenceChip(p.confidence)} ${c.bold(p.name)}  ${c.dim(`(seen ${p.count}× · ${p.sessions} sessions)`)}  ${p.covered ? c.ok("✓ automated") : c.muted("—")}`);
+        }
+        return 0;
       }
       case "checkpoint": {
         const input = await readStdinJson();
