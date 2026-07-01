@@ -38,6 +38,7 @@ export interface Suggestion {
   rationale: string;
   evidence: { count: number; sessions: number };
   confidence: Confidence;
+  examples?: string[];   // representative redacted prompts, for `explain`
   payload: SuggestionPayload;
 }
 

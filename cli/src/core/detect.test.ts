@@ -99,4 +99,36 @@ describe("detect", () => {
     expect(out.length).toBe(1);
     expect(out[0].confidence).toBe("inferred");
   });
+
+  it("merges synonymous clusters, summing counts and unioning sessions", async () => {
+    const a: Candidate = { kind: "unknown", signature: "lgtm", examples: ["lgtm"], count: 5, sessions: 2, sessionIds: ["s1", "s2"], confidence: "high" };
+    const b: Candidate = { kind: "unknown", signature: "looks good", examples: ["looks good"], count: 3, sessions: 2, sessionIds: ["s2", "s3"], confidence: "inferred" };
+    const llm = {
+      name: "fake", available: async () => true,
+      complete: async () => JSON.stringify({ suggestions: [{
+        sourceSignatures: ["lgtm", "looks good"],
+        name: "approve", title: "Approve", rationale: "r", confidence: "high",
+        payload: { type: "command", commandName: "approve", body: "lgtm" },
+      }] }),
+    };
+    const out = await detect([a, b], llm);
+    expect(out.length).toBe(1);
+    expect(out[0].evidence.count).toBe(8);        // 5 + 3
+    expect(out[0].evidence.sessions).toBe(3);     // union {s1,s2,s3}
+  });
+
+  it("populates redacted examples on a suggestion for explain", async () => {
+    const llm = {
+      name: "fake", available: async () => true,
+      complete: async () => JSON.stringify({ suggestions: [{
+        sourceSignatures: ["deploy with token sk-ant-xyz"],
+        name: "deploy", title: "Deploy", rationale: "r", confidence: "high",
+        payload: { type: "command", commandName: "deploy", body: "deploy" },
+      }] }),
+    };
+    const c: Candidate = { kind: "unknown", signature: "deploy with token sk-ant-xyz", examples: ["deploy with token sk-ant-xyz"], count: 4, sessions: 1, sessionIds: ["s1"], confidence: "high" };
+    const out = await detect([c], llm);
+    expect(out[0].examples?.[0]).toContain("[REDACTED]");
+    expect(out[0].examples?.[0]).not.toContain("sk-ant-xyz");
+  });
 });
