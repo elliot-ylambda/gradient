@@ -254,21 +254,26 @@ it("sends up to DEFAULT_DETECT_WINDOW candidates to the llm", async () => {
   expect(logs.some(l => l.includes("top 24"))).toBe(true);
 });
 
-it("does not apply the recency cap for --all", async () => {
-  const logs: string[] = [];
-  const turns = Array.from({ length: 20 }, (_, i) => ({ ts: `t${i}`, project: "p", role: "user" as const, text: "continue", sessionId: `s${i}` }));
-  await scan(
-    { scope: "all", projectPath: process.cwd(), maxPrompts: undefined },
-    { backend: null, collectFn: async () => ["f"], parseFn: async () => turns, log: (m) => logs.push(m) },
-  );
-  expect(logs.some(l => l.includes("capped to most recent"))).toBe(false);
+it("disables the recency cap for --all but keeps it for project scope", async () => {
+  // 1600 > DEFAULT_MAX_PROMPTS (1500): project scope caps, --all must not.
+  const big = Array.from({ length: 1600 }, (_, i) => ({ ts: String(i).padStart(5, "0"), project: "p", role: "user" as const, text: "continue", sessionId: `s${i % 5}` }));
+  const run = async (scope: "all" | "project") => {
+    const logs: string[] = [];
+    await scan(
+      { scope, projectPath: process.cwd() },
+      { backend: null, collectFn: async () => ["f"], parseFn: async () => big, log: (m) => logs.push(m) },
+    );
+    return logs;
+  };
+  expect((await run("all")).some(l => l.includes("capped to most recent"))).toBe(false);
+  expect((await run("project")).some(l => l.includes("capped to most recent"))).toBe(true);
 });
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd cli && npx vitest run src/commands/scan.test.ts -t "DEFAULT_DETECT_WINDOW"`
-Expected: FAIL — log says "top 12", not "top 24".
+Run: `cd cli && npx vitest run src/commands/scan.test.ts`
+Expected: the two new tests FAIL — the window test logs "top 12" not "top 24", and the `--all` test caps at 1500 (the "capped to most recent" log fires) until the demotion lands.
 
 - [ ] **Step 3: Add the constant** — in `cli/src/core/scope.ts`, add alongside the other defaults:
 
