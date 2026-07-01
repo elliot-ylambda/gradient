@@ -3,7 +3,7 @@ import { detect, candidateToCommand } from "./detect.js";
 import type { Candidate } from "./types.js";
 
 const cand = (signature: string, count: number, confidence: any = "high"): Candidate =>
-  ({ kind: "unknown", signature, examples: [signature], count, sessions: count, confidence });
+  ({ kind: "unknown", signature, examples: [signature], count, sessions: count, sessionIds: ["s"], confidence });
 
 describe("candidateToCommand", () => {
   it("derives a slash-command suggestion from a high-confidence candidate", () => {
@@ -45,7 +45,7 @@ describe("detect", () => {
       name: "fake", available: async () => true,
       complete: async (req: any) => { seenPrompt = req.prompt; return JSON.stringify({ suggestions: [] }); },
     };
-    const c: Candidate = { kind: "unknown", signature: "deploy with token sk-ant-abc123def", examples: ["deploy with token sk-ant-abc123def"], count: 5, sessions: 3, confidence: "high" };
+    const c: Candidate = { kind: "unknown", signature: "deploy with token sk-ant-abc123def", examples: ["deploy with token sk-ant-abc123def"], count: 5, sessions: 3, sessionIds: ["s1", "s2", "s3"], confidence: "high" };
     await detect([c], llm);
     expect(seenPrompt).not.toContain("sk-ant-abc123def");
     expect(seenPrompt).toContain("[REDACTED]");
@@ -98,5 +98,37 @@ describe("detect", () => {
     const out = await detect([cand("x", 5)], llm);
     expect(out.length).toBe(1);
     expect(out[0].confidence).toBe("inferred");
+  });
+
+  it("merges synonymous clusters, summing counts and unioning sessions", async () => {
+    const a: Candidate = { kind: "unknown", signature: "lgtm", examples: ["lgtm"], count: 5, sessions: 2, sessionIds: ["s1", "s2"], confidence: "high" };
+    const b: Candidate = { kind: "unknown", signature: "looks good", examples: ["looks good"], count: 3, sessions: 2, sessionIds: ["s2", "s3"], confidence: "inferred" };
+    const llm = {
+      name: "fake", available: async () => true,
+      complete: async () => JSON.stringify({ suggestions: [{
+        sourceSignatures: ["lgtm", "looks good"],
+        name: "approve", title: "Approve", rationale: "r", confidence: "high",
+        payload: { type: "command", commandName: "approve", body: "lgtm" },
+      }] }),
+    };
+    const out = await detect([a, b], llm);
+    expect(out.length).toBe(1);
+    expect(out[0].evidence.count).toBe(8);        // 5 + 3
+    expect(out[0].evidence.sessions).toBe(3);     // union {s1,s2,s3}
+  });
+
+  it("populates redacted examples on a suggestion for explain", async () => {
+    const llm = {
+      name: "fake", available: async () => true,
+      complete: async () => JSON.stringify({ suggestions: [{
+        sourceSignatures: ["deploy with token sk-ant-abc123def"],
+        name: "deploy", title: "Deploy", rationale: "r", confidence: "high",
+        payload: { type: "command", commandName: "deploy", body: "deploy" },
+      }] }),
+    };
+    const c: Candidate = { kind: "unknown", signature: "deploy with token sk-ant-abc123def", examples: ["deploy with token sk-ant-abc123def"], count: 4, sessions: 1, sessionIds: ["s1"], confidence: "high" };
+    const out = await detect([c], llm);
+    expect(out[0].examples?.[0]).toContain("[REDACTED]");
+    expect(out[0].examples?.[0]).not.toContain("sk-ant-abc123def");
   });
 });

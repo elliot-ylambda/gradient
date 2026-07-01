@@ -20,6 +20,7 @@ export interface Candidate {
   examples: string[];    // representative raw prompts
   count: number;
   sessions: number;
+  sessionIds: string[];  // distinct session ids (for exact union when clusters merge)
   confidence: Confidence;
 }
 
@@ -37,6 +38,7 @@ export interface Suggestion {
   rationale: string;
   evidence: { count: number; sessions: number };
   confidence: Confidence;
+  examples?: string[];   // representative redacted prompts, for `explain`
   payload: SuggestionPayload;
 }
 
@@ -55,4 +57,6 @@ export interface Config {
   userScopeDays?: number;
   /** Max prompts fed into clustering before older ones are dropped. Defaults to 1500. */
   maxPrompts?: number;
+  /** When true, a SessionStart hook runs `gradient scan --detach`. */
+  scanOnSessionStart?: boolean;
 }

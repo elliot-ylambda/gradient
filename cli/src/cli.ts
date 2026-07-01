@@ -7,7 +7,10 @@ import { list } from "./commands/list.js";
 import { remove } from "./commands/remove.js";
 import { init } from "./commands/init.js";
 import { checkpoint } from "./commands/checkpoint.js";
+import { stats } from "./commands/stats.js";
+import { explain } from "./commands/explain.js";
 import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
+import { spawnDetached } from "./core/spawn.js";
 import { resolveScanScope } from "./core/scope.js";
 import { loadConfig } from "./config.js";
 import { VERSION } from "./version.js";
@@ -16,14 +19,17 @@ const HELP = `gradient — turn repeated Claude Code workflows into artifacts
 
 Usage:
   gradient init                 configure + install the /gradient skill
+  gradient init --session-scan  also run a scan at the start of each session
   gradient scan                 this project, all history
   gradient scan --user          all projects, last 7 days (configurable)
   gradient scan --all           all projects, no time limit
     [--since 7d] [--limit N] [--max-prompts N]
   gradient review               approve cached suggestions
   gradient apply <id|name>...   generate specific suggestions
+  gradient explain <id|name>    show the evidence behind a suggestion
   gradient list                 show generated artifacts
   gradient remove <name>        delete a generated artifact
+  gradient stats                show your most-repeated patterns + coverage
 `;
 
 export function parseCliArgs(argv: string[]): {
@@ -42,6 +48,8 @@ export function parseCliArgs(argv: string[]): {
       limit: { type: "string" },
       "max-prompts": { type: "string" },
       "no-skill": { type: "boolean" },
+      "session-scan": { type: "boolean" },
+      detach: { type: "boolean" },
     },
   });
   return { command, positionals, flags: values as Record<string, string | boolean> };
@@ -70,14 +78,19 @@ export async function main(
   try {
     switch (command) {
       case "init": {
-        const r = await init({ installSkill: !flags["no-skill"] });
+        const r = await init({ installSkill: !flags["no-skill"], sessionScan: !!flags["session-scan"], projectDir });
         log(banner(VERSION));
         log(
-          `${c.muted("backend:")} ${r.backend}\n${c.muted("config:")} ${r.configPath}\n${c.muted("skill installed:")} ${r.skillInstalled}`,
+          `${c.muted("backend:")} ${r.backend}\n${c.muted("config:")} ${r.configPath}\n${c.muted("skill installed:")} ${r.skillInstalled}\n${c.muted("session-start scan:")} ${r.sessionScanInstalled}`,
         );
         return 0;
       }
       case "scan": {
+        if (flags.detach) {
+          const passthrough = argv.slice(1).filter(a => a !== "--detach");
+          spawnDetached(["scan", ...passthrough], projectDir);
+          return 0;
+        }
         log(banner(VERSION));
         const config = await loadConfig();
         const resolved = resolveScanScope(
@@ -118,6 +131,18 @@ export async function main(
         }
         return 0;
       }
+      case "explain": {
+        const s = await explain(projectDir, positionals[0] ?? "");
+        if (!s) {
+          log(c.coral(`no suggestion matching: ${positionals[0] ?? "(none given)"}`));
+          return 1;
+        }
+        log(`${confidenceChip(s.confidence)} ${c.bold(s.name)}  ${c.muted(s.title)}`);
+        log(c.dim(s.rationale));
+        log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions`));
+        for (const ex of s.examples ?? []) log(`  ${c.muted("·")} ${ex}`);
+        return 0;
+      }
       case "list": {
         for (const e of await list(projectDir)) {
           log(`  ${c.bold(e.name)}\t${kindLabel(e.type)}\t${c.muted(e.path || "(printed)")}\t${c.dim(e.createdAt)}`);
@@ -128,6 +153,16 @@ export async function main(
         const ok = await remove(projectDir, positionals[0]);
         log(ok ? `${c.ok("removed")} ${positionals[0]}` : c.coral(`no such artifact: ${positionals[0]}`));
         return ok ? 0 : 1;
+      }
+      case "stats": {
+        log(banner(VERSION));
+        const r = await stats(projectDir);
+        log(c.dim(`coverage: ${r.covered}/${r.total} patterns automated (${r.coveragePct}%)`));
+        log(c.dim(`session-start scan: ${r.sessionScanEnabled ? "on" : "off"}`));
+        for (const p of r.patterns) {
+          log(`  ${confidenceChip(p.confidence)} ${c.bold(p.name)}  ${c.dim(`(seen ${p.count}× · ${p.sessions} sessions)`)}  ${p.covered ? c.ok("✓ automated") : c.muted("—")}`);
+        }
+        return 0;
       }
       case "checkpoint": {
         const input = await readStdinJson();

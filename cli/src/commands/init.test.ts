@@ -24,4 +24,17 @@ describe("init", () => {
     expect(r.backend).toBe("none");
     expect(r.skillInstalled).toBe(false);
   });
+  it("installs a SessionStart scan hook and sets the config flag when sessionScan is on", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-init-home-"));
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-init-proj-"));
+    const r = await init(
+      { installSkill: false, sessionScan: true, home, projectDir },
+      { backend: null },
+    );
+    expect(r.sessionScanInstalled).toBe(true);
+    const cfg = JSON.parse(await readFile(join(home, ".config", "gradient", "config.json"), "utf8"));
+    expect(cfg.scanOnSessionStart).toBe(true);
+    const settings = JSON.parse(await readFile(join(projectDir, ".claude", "settings.json"), "utf8"));
+    expect(settings.hooks.SessionStart[0].hooks[0].command).toBe("gradient scan --detach");
+  });
 });

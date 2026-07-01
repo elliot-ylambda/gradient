@@ -19,6 +19,7 @@ export function candidateToCommand(c: Candidate): Suggestion {
     rationale: `Repeated ${c.count}× across ${c.sessions} sessions.`,
     evidence: { count: c.count, sessions: c.sessions },
     confidence: c.confidence,
+    examples: c.examples.map(redact).slice(0, 5),
     payload: { type: "command", commandName, body: c.examples[0] ?? c.signature },
   };
 }
@@ -33,8 +34,9 @@ export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt:
     "For each cluster decide a type: 'command' (a repeated instruction → slash command), " +
     "'loop' (a recurring cadence task), or 'hook' (an automation tied to a Claude Code lifecycle event; " +
     "the only supported hook event is PreCompact backed by the gradient subcommand 'checkpoint'). " +
-    "Echo back the cluster's exact 'signature' as 'sourceSignature' on each suggestion so it can be traced. " +
-    "Respond ONLY with JSON: {\"suggestions\":[{sourceSignature,name,title,rationale,confidence,payload}]} where payload is one of " +
+    "Merge clusters that mean the same thing (e.g. 'lgtm' and 'looks good') into ONE suggestion. " +
+    "Echo back EVERY merged cluster's exact 'signature' in a 'sourceSignatures' string array so evidence can be summed. " +
+    "Respond ONLY with JSON: {\"suggestions\":[{sourceSignatures,name,title,rationale,confidence,payload}]} where payload is one of " +
     "{type:'command',commandName,body} | {type:'loop',instruction,cadence?} | {type:'hook',event:'PreCompact',subcommand:'checkpoint',description}. " +
     "confidence must be exactly one of \"high\", \"inferred\", or \"flagged\".";
   // Redact secrets from examples/signatures before they ever leave the machine (spec §7).
@@ -52,7 +54,8 @@ export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt:
 }
 
 interface LlmSuggestion {
-  sourceSignature?: string;
+  sourceSignatures?: string[];
+  sourceSignature?: string;   // legacy single form still tolerated
   name: string; title: string; rationale: string; confidence: Confidence;
   payload: Suggestion["payload"];
 }
@@ -79,14 +82,19 @@ export async function detect(
     return (parsed.suggestions ?? [])
       .filter(s => !!s && !!s.payload && typeof s.payload.type === "string")
       .map(s => {
-        const ev = s.sourceSignature ? bySignature.get(s.sourceSignature) : undefined;
+        const sigs = s.sourceSignatures ?? (s.sourceSignature ? [s.sourceSignature] : []);
+        const matched = sigs.map(sig => bySignature.get(redact(sig))).filter((c): c is Candidate => !!c);
+        const count = matched.reduce((n, c) => n + c.count, 0);
+        const sessions = new Set(matched.flatMap(c => c.sessionIds)).size;
+        const examples = matched.flatMap(c => c.examples).map(redact).slice(0, 5);
         return {
           id: idFor(s.payload.type === "command" ? (s.payload.commandName ?? s.name) : s.name),
           name: s.name,
           title: s.title,
           rationale: s.rationale,
-          evidence: { count: ev?.count ?? 0, sessions: ev?.sessions ?? 0 },
+          evidence: { count, sessions },
           confidence: ALLOWED_CONFIDENCE.has(s.confidence) ? s.confidence : "inferred",
+          examples,
           payload: s.payload,
         };
       });

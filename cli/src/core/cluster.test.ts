@@ -39,4 +39,20 @@ describe("cluster", () => {
     const cands = cluster(turns, { minCount: 3, simThreshold: 0.5 });
     expect(cands.some(c => c.count >= 3 && c.confidence === "inferred")).toBe(true);
   });
+  it("exposes the distinct session ids on each candidate", () => {
+    const turns = [u("continue", "s1"), u("continue", "s1"), u("continue", "s2")];
+    const top = cluster(turns, { minCount: 2 })[0];
+    expect([...top.sessionIds].sort()).toEqual(["s1", "s2"]);
+    expect(top.sessions).toBe(2);
+  });
+  it("still merges an in-threshold near-duplicate hidden among many distinct prompts", () => {
+    const noise: Turn[] = Array.from({ length: 200 }, (_, i) => u(`unrelated distinct prompt ${i}`, `n${i}`));
+    const trio = [
+      u("push and create a pull request", "s1"),
+      u("push and create a pull request then", "s2"),
+      u("push and create the pull request", "s3"),
+    ];
+    const cands = cluster([...noise, ...trio], { minCount: 3, simThreshold: 0.5 });
+    expect(cands.some(c => c.signature.includes("pull request") && c.count >= 3 && c.confidence === "inferred")).toBe(true);
+  });
 });

@@ -4,6 +4,8 @@ import type { Config } from "./types.js";
 export const DEFAULT_USER_SCOPE_DAYS = 7;
 /** Default ceiling on prompts entering O(n²) clustering. */
 export const DEFAULT_MAX_PROMPTS = 1500;
+/** Default number of candidates passed to the LLM detect step. */
+export const DEFAULT_DETECT_WINDOW = 24;
 
 export interface ScopeFlags {
   /** --user: every project, bounded to a recent window. */

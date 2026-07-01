@@ -5,7 +5,7 @@ import { collect } from "../core/collect.js";
 import { parseFile } from "../core/parse.js";
 import { filterPrompts } from "../core/filter.js";
 import { capByRecency } from "../core/cap.js";
-import { DEFAULT_MAX_PROMPTS } from "../core/scope.js";
+import { DEFAULT_MAX_PROMPTS, DEFAULT_DETECT_WINDOW } from "../core/scope.js";
 import { cluster } from "../core/cluster.js";
 import { detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
@@ -47,21 +47,22 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   log(`prompts: ${prompts.length} after filtering injected text`);
 
   const config = deps.config ?? (await loadConfig(opts.home));
-  const max = opts.maxPrompts ?? config.maxPrompts ?? DEFAULT_MAX_PROMPTS;
+  const isAll = opts.scope === "all";
+  const max = opts.maxPrompts ?? config.maxPrompts ?? (isAll ? 0 : DEFAULT_MAX_PROMPTS);
   const { kept, dropped } = capByRecency(prompts, max);
   if (dropped > 0) {
     log(`capped to most recent ${max} prompts; ${dropped} older dropped (raise with --max-prompts)`);
   }
 
   const candidates = cluster(kept);
-  log(`clustering → ${candidates.length} candidate patterns`);
+  const window = opts.limit ?? DEFAULT_DETECT_WINDOW;
+  log(`clustering → ${candidates.length} candidate patterns; sending top ${window} to llm`);
 
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });
   if (!backend) log("no LLM backend available — degrading to exact-repeat command suggestions only");
-
   const suggestions = await detect(candidates, backend, {
-    limit: opts.limit ?? 12,
-    onCap: dropped => log(`capped to top ${opts.limit ?? 12}; ${dropped} lower-frequency candidates dropped`),
+    limit: window,
+    onCap: dropped => log(`capped to top ${window}; ${dropped} lower-frequency candidates dropped`),
   });
   const valid: Suggestion[] = [];
   for (const s of suggestions) {

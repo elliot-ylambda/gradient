@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { parseCliArgs, main } from "./cli.js";
+import { spawnDetached } from "./core/spawn.js";
+
+vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
 
 describe("parseCliArgs", () => {
   it("parses command, flags, and positionals", () => {
@@ -47,5 +50,16 @@ describe("main", () => {
     const output = logs.join("\n");
     expect(output).toContain("gradient");
     expect(output).toContain("unknowncmd");
+  });
+
+  it("scan --detach does not forward --detach to child (fork-bomb guard)", async () => {
+    vi.mocked(spawnDetached).mockClear();
+    const code = await main(["scan", "--detach", "--all"], { log: () => {} });
+    expect(code).toBe(0);
+    expect(vi.mocked(spawnDetached)).toHaveBeenCalledTimes(1);
+    const forwardedArgs = vi.mocked(spawnDetached).mock.calls[0][0] as string[];
+    expect(forwardedArgs).not.toContain("--detach");
+    expect(forwardedArgs).toContain("scan");
+    expect(forwardedArgs).toContain("--all");
   });
 });
