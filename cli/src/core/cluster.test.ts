@@ -53,6 +53,6 @@ describe("cluster", () => {
       u("push and create the pull request", "s3"),
     ];
     const cands = cluster([...noise, ...trio], { minCount: 3, simThreshold: 0.5 });
-    expect(cands.some(c => c.count >= 3 && c.confidence === "inferred")).toBe(true);
+    expect(cands.some(c => c.signature.includes("pull request") && c.count >= 3 && c.confidence === "inferred")).toBe(true);
   });
 });
