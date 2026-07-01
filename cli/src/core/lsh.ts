@@ -2,6 +2,10 @@
 // scales near-linearly instead of comparing every candidate pair. No RNG — hash
 // coefficients are derived from the index so signatures are stable across runs.
 
+// Operating point: 120 hashes / 20 bands / 6 rows per band gives an S-curve
+// midpoint around Jaccard ≈ 0.57 (t ≈ (1/b)^(1/r) = (1/20)^(1/6) ≈ 0.57).
+// This deliberately favors precision and near-linear scaling over exhaustive
+// recall at the ~0.5–0.6 boundary, keeping false-positive candidate pairs low.
 export const LSH_NUM_HASHES = 120;
 export const LSH_BANDS = 20;
 export const LSH_ROWS = 6; // LSH_BANDS * LSH_ROWS === LSH_NUM_HASHES
