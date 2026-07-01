@@ -114,6 +114,8 @@ export function mineAnswerCandidates(pairs: AnswerPair[]): Candidate[] {
         count: subgroup.length,
         sessions: sessions.size,
         sessionIds: [...sessions],
+        occurrences: subgroup.map(pair => ({ ts: pair.ts, sessionId: pair.sessionId })),
+        memberSignatures: [],
         confidence: "inferred",
         assistants: [...new Set(subgroup.map(pair => pair.assistant))],
       });

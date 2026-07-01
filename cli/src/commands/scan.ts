@@ -195,6 +195,8 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     count: chain.count,
     sessions: chain.sessions,
     sessionIds: chain.sessionIds,
+    occurrences: [],
+    memberSignatures: [],
     confidence: "high",
     assistants: [...new Set(chain.sessionIds.map(sessionId => assistantBySession.get(sessionId) ?? "claude-code"))],
   }));

@@ -17,6 +17,8 @@ const cand = (signature: string, count: number, confidence: any = "high"): Candi
   count,
   sessions: count,
   sessionIds: Array.from({ length: count }, (_, i) => `s${i}`),
+  occurrences: Array.from({ length: count }, (_, i) => ({ ts: `2026-06-01T10:0${i % 10}:00Z`, sessionId: `s${i}` })),
+  memberSignatures: [signature],
   confidence,
 });
 

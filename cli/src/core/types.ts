@@ -40,6 +40,11 @@ export interface Candidate {
   count: number;
   sessions: number;
   sessionIds: string[];  // distinct session ids (for exact union when clusters merge)
+  /** One entry per occurrence, in encounter order; unioned when clusters merge. */
+  occurrences: { ts: string; sessionId: string }[];
+  /** Host signature plus every absorbed near-duplicate signature (for turn→cluster
+   * membership). Non-cluster producers (paste/answer/sequence) leave it empty. */
+  memberSignatures: string[];
   confidence: Confidence;
   assistants?: Assistant[];
 }

@@ -27,6 +27,8 @@ interface Bucket {
   count: number;
   sessions: Set<string>;
   assistants: Set<"claude-code" | "codex">;
+  occurrences: { ts: string; sessionId: string }[];
+  memberSignatures: string[];
 }
 
 export function cluster(
@@ -44,12 +46,13 @@ export function cluster(
     if (norm.length < 2) continue;
     let b = exact.get(norm);
     if (!b) {
-      b = { signature: norm, examples: [], count: 0, sessions: new Set(), assistants: new Set() };
+      b = { signature: norm, examples: [], count: 0, sessions: new Set(), assistants: new Set(), occurrences: [], memberSignatures: [norm] };
       exact.set(norm, b);
     }
     b.count++;
     b.sessions.add(t.sessionId);
     b.assistants.add(t.assistant ?? "claude-code");
+    b.occurrences.push({ ts: t.ts, sessionId: t.sessionId });
     if (b.examples.length < 5) b.examples.push(t.text);
   }
 
@@ -74,10 +77,12 @@ export function cluster(
       host.count += b.count;
       for (const s of b.sessions) host.sessions.add(s);
       for (const assistant of b.assistants) host.assistants.add(assistant);
+      host.occurrences.push(...b.occurrences);
+      host.memberSignatures.push(...b.memberSignatures);
       for (const ex of b.examples) if (host.examples.length < 5) host.examples.push(ex);
       fuzzyMember[hostIdx] = true;
     } else {
-      merged.push({ ...b, sessions: new Set(b.sessions), assistants: new Set(b.assistants) });
+      merged.push({ ...b, sessions: new Set(b.sessions), assistants: new Set(b.assistants), occurrences: [...b.occurrences], memberSignatures: [...b.memberSignatures] });
       const idx = merged.length - 1;
       fuzzyMember[idx] = false;
       for (const k of keys) {
@@ -99,6 +104,8 @@ export function cluster(
       count: b.count,
       sessions: b.sessions.size,
       sessionIds: [...b.sessions],
+      occurrences: b.occurrences,
+      memberSignatures: b.memberSignatures,
       confidence,
       assistants: [...b.assistants],
     });
