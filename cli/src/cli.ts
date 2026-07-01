@@ -10,6 +10,7 @@ import { checkpoint } from "./commands/checkpoint.js";
 import { stats } from "./commands/stats.js";
 import { explain } from "./commands/explain.js";
 import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
+import { spawnDetached } from "./core/spawn.js";
 import { resolveScanScope } from "./core/scope.js";
 import { loadConfig } from "./config.js";
 import { VERSION } from "./version.js";
@@ -46,6 +47,7 @@ export function parseCliArgs(argv: string[]): {
       limit: { type: "string" },
       "max-prompts": { type: "string" },
       "no-skill": { type: "boolean" },
+      detach: { type: "boolean" },
     },
   });
   return { command, positionals, flags: values as Record<string, string | boolean> };
@@ -82,6 +84,11 @@ export async function main(
         return 0;
       }
       case "scan": {
+        if (flags.detach) {
+          const passthrough = argv.slice(1).filter(a => a !== "--detach");
+          spawnDetached(["scan", ...passthrough], projectDir);
+          return 0;
+        }
         log(banner(VERSION));
         const config = await loadConfig();
         const resolved = resolveScanScope(
