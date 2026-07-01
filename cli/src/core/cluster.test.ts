@@ -39,4 +39,10 @@ describe("cluster", () => {
     const cands = cluster(turns, { minCount: 3, simThreshold: 0.5 });
     expect(cands.some(c => c.count >= 3 && c.confidence === "inferred")).toBe(true);
   });
+  it("exposes the distinct session ids on each candidate", () => {
+    const turns = [u("continue", "s1"), u("continue", "s1"), u("continue", "s2")];
+    const top = cluster(turns, { minCount: 2 })[0];
+    expect([...top.sessionIds].sort()).toEqual(["s1", "s2"]);
+    expect(top.sessions).toBe(2);
+  });
 });

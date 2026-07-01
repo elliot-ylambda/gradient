@@ -20,6 +20,7 @@ export interface Candidate {
   examples: string[];    // representative raw prompts
   count: number;
   sessions: number;
+  sessionIds: string[];  // distinct session ids (for exact union when clusters merge)
   confidence: Confidence;
 }
 

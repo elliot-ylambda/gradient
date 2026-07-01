@@ -69,6 +69,7 @@ export function cluster(
       examples: b.examples,
       count: b.count,
       sessions: b.sessions.size,
+      sessionIds: [...b.sessions],
       confidence,
     });
   });

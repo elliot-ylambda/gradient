@@ -3,7 +3,7 @@ import { detect, candidateToCommand } from "./detect.js";
 import type { Candidate } from "./types.js";
 
 const cand = (signature: string, count: number, confidence: any = "high"): Candidate =>
-  ({ kind: "unknown", signature, examples: [signature], count, sessions: count, confidence });
+  ({ kind: "unknown", signature, examples: [signature], count, sessions: count, sessionIds: ["s"], confidence });
 
 describe("candidateToCommand", () => {
   it("derives a slash-command suggestion from a high-confidence candidate", () => {
@@ -45,7 +45,7 @@ describe("detect", () => {
       name: "fake", available: async () => true,
       complete: async (req: any) => { seenPrompt = req.prompt; return JSON.stringify({ suggestions: [] }); },
     };
-    const c: Candidate = { kind: "unknown", signature: "deploy with token sk-ant-abc123def", examples: ["deploy with token sk-ant-abc123def"], count: 5, sessions: 3, confidence: "high" };
+    const c: Candidate = { kind: "unknown", signature: "deploy with token sk-ant-abc123def", examples: ["deploy with token sk-ant-abc123def"], count: 5, sessions: 3, sessionIds: ["s1", "s2", "s3"], confidence: "high" };
     await detect([c], llm);
     expect(seenPrompt).not.toContain("sk-ant-abc123def");
     expect(seenPrompt).toContain("[REDACTED]");
