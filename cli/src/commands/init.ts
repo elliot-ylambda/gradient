@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { saveConfig } from "../config.js";
+import { loadConfig, saveConfig } from "../config.js";
 import { selectBackend } from "../llm/index.js";
 import { installHook } from "../core/settings.js";
 import type { LLMBackend } from "../llm/backend.js";
@@ -31,7 +31,8 @@ export async function init(
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend();
   const backendName = backend?.name ?? "none";
 
-  const config: Config = backend ? { backend: backend.name as Config["backend"] } : {};
+  const config: Config = { ...(await loadConfig(home)) };
+  if (backend) config.backend = backend.name as Config["backend"];
   if (opts.sessionScan) config.scanOnSessionStart = true;
   await saveConfig(config, home);
 

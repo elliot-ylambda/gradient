@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, readFile, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mergeHookIntoSettings, installHook } from "./settings.js";
+import { mergeHookIntoSettings, installHook, removeHookFromSettings, removeHook, hookInstalled } from "./settings.js";
 
 describe("mergeHookIntoSettings", () => {
   it("adds a hook, preserving unrelated settings", () => {
@@ -33,5 +33,63 @@ describe("installHook", () => {
     await writeFile(file, "{ this is not valid json");
     await expect(installHook(dir, "SessionStart", "gradient scan --detach")).rejects.toThrow();
     expect(await readFile(file, "utf8")).toBe("{ this is not valid json"); // untouched, not clobbered
+  });
+});
+
+describe("hook timeout option", () => {
+  it("adds timeout to the hook entry when given", () => {
+    const out = mergeHookIntoSettings({}, "Stop", "gradient respond", { timeout: 60 });
+    expect(out.hooks.Stop[0].hooks[0]).toEqual({ type: "command", command: "gradient respond", timeout: 60 });
+  });
+
+  it("omits timeout when not given (existing behavior unchanged)", () => {
+    const out = mergeHookIntoSettings({}, "Stop", "gradient respond");
+    expect(out.hooks.Stop[0].hooks[0]).toEqual({ type: "command", command: "gradient respond" });
+  });
+});
+
+describe("removeHookFromSettings", () => {
+  it("removes the matching hook and drops empty groups and events", () => {
+    const withHook = mergeHookIntoSettings({}, "Stop", "gradient respond");
+    const out = removeHookFromSettings(withHook, "Stop", "gradient respond");
+    expect(out.hooks).toBeUndefined();
+  });
+
+  it("preserves unrelated hooks in the same event", () => {
+    let s = mergeHookIntoSettings({}, "Stop", "gradient respond");
+    s = mergeHookIntoSettings(s, "Stop", "other-tool run");
+    const out = removeHookFromSettings(s, "Stop", "gradient respond");
+    expect(JSON.stringify(out)).toContain("other-tool run");
+    expect(JSON.stringify(out)).not.toContain("gradient respond");
+  });
+
+  it("preserves other events and non-hook settings keys", () => {
+    const s = mergeHookIntoSettings({ model: "opus" }, "SessionStart", "gradient scan --detach");
+    const out = removeHookFromSettings(s, "Stop", "gradient respond");
+    expect(out.model).toBe("opus");
+    expect(out.hooks.SessionStart).toHaveLength(1);
+  });
+});
+
+describe("removeHook / hookInstalled (fs round-trip)", () => {
+  it("removeHook is a no-op when settings.json does not exist", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-set-"));
+    await expect(removeHook(dir, "Stop", "gradient respond")).resolves.toContain("settings.json");
+  });
+
+  it("removeHook refuses to touch a corrupt settings.json", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-set-"));
+    await mkdir(join(dir, ".claude"), { recursive: true });
+    await writeFile(join(dir, ".claude", "settings.json"), "{ not json");
+    await expect(removeHook(dir, "Stop", "gradient respond")).rejects.toThrow(/refusing/);
+  });
+
+  it("hookInstalled reflects install → remove round-trip", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-set-"));
+    expect(await hookInstalled(dir, "Stop", "gradient respond")).toBe(false);
+    await installHook(dir, "Stop", "gradient respond", { timeout: 60 });
+    expect(await hookInstalled(dir, "Stop", "gradient respond")).toBe(true);
+    await removeHook(dir, "Stop", "gradient respond");
+    expect(await hookInstalled(dir, "Stop", "gradient respond")).toBe(false);
   });
 });

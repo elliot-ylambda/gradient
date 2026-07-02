@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import type { Suggestion } from "../core/types.js";
 import { applySuggestion, type ApplyResult } from "../core/apply.js";
+import { isNudge } from "../core/playbook.js";
 import { loadSuggestions } from "./apply.js";
 
 export type Prompter = (s: Suggestion, index: number, total: number) => Promise<"approve" | "skip" | "quit">;
@@ -23,6 +24,9 @@ export function readlinePrompter(): Prompter {
     process.stdout.write(
       `\n(${index + 1}/${total})  ${s.name} · ${label} · seen ${s.evidence.count}× · ${s.confidence}\n  ${s.title}\n`,
     );
+    if (isNudge(s)) {
+      process.stdout.write("  tip: this is what autopilot automates → gradient autopilot nudge\n");
+    }
     const ans = (await rl.question("  [a]pprove [s]kip [q]uit › ")).trim().toLowerCase();
     rl.close();
     if (ans === "a") return "approve";

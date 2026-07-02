@@ -2,12 +2,17 @@ import { spawn } from "node:child_process";
 import type { LLMBackend, LLMRequest } from "./backend.js";
 
 export interface RunResult { code: number; stdout: string; stderr: string }
-type RunFn = (cmd: string, args: string[], input: string) => Promise<RunResult>;
+type RunFn = (
+  cmd: string,
+  args: string[],
+  input: string,
+  opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
+) => Promise<RunResult>;
 type WhichFn = (bin: string) => Promise<string | null>;
 
-const defaultRun: RunFn = (cmd, args, input) =>
+const defaultRun: RunFn = (cmd, args, input, opts) =>
   new Promise((resolveP) => {
-    const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"], cwd: opts?.cwd, env: opts?.env });
     let stdout = "", stderr = "";
     child.stdout.on("data", d => (stdout += d));
     child.stderr.on("data", d => (stderr += d));
@@ -32,11 +37,17 @@ export class ClaudeCliBackend implements LLMBackend {
   private runFn: RunFn;
   private whichFn: WhichFn;
   private model?: string;
+  private spawnCwd?: string;
+  private extraEnv?: Record<string, string>;
 
-  constructor(deps: { runFn?: RunFn; whichFn?: WhichFn; model?: string } = {}) {
+  constructor(
+    deps: { runFn?: RunFn; whichFn?: WhichFn; model?: string; spawnCwd?: string; extraEnv?: Record<string, string> } = {},
+  ) {
     this.runFn = deps.runFn ?? defaultRun;
     this.whichFn = deps.whichFn ?? defaultWhich;
     this.model = deps.model;
+    this.spawnCwd = deps.spawnCwd;
+    this.extraEnv = deps.extraEnv;
   }
 
   async available(): Promise<boolean> {
@@ -46,7 +57,11 @@ export class ClaudeCliBackend implements LLMBackend {
   async complete(req: LLMRequest): Promise<string> {
     const args = ["-p", req.prompt, "--output-format", "json", "--append-system-prompt", req.system];
     if (this.model) args.push("--model", this.model);
-    const { code, stdout, stderr } = await this.runFn("claude", args, "");
+    const opts = {
+      cwd: this.spawnCwd,
+      env: this.extraEnv ? { ...process.env, ...this.extraEnv } : undefined,
+    };
+    const { code, stdout, stderr } = await this.runFn("claude", args, "", opts);
     if (code !== 0) throw new Error(`claude CLI failed (${code}): ${stderr}`);
     try {
       const wrapper = JSON.parse(stdout) as { result?: string };
