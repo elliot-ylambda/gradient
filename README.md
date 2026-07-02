@@ -90,12 +90,15 @@ cd cli && npm install && npm test && npm run build
 ## Status
 
 v1 is the **offline analysis engine**: it mines transcripts and proposes
-slash-command / loop / hook artifacts you approve. A live "autopilot" loop (an
-LLM-driven `Stop` hook that auto-continues until a task is actually done) is
-planned as phase 2.
+slash-command / loop / hook artifacts you approve, with continuous mining
+keeping the playbook fresh. The autopilot loop — `gradient autopilot`, an
+opt-in `Stop`-hook auto-responder — has now shipped as well; see the
+"Autopilot (opt-in)" section above.
 
 - Design spec: [`docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md`](docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md)
 - Implementation plan: [`docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md`](docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md)
+- Autopilot design spec: [`docs/superpowers/specs/2026-07-01-gradient-auto-responder-design.md`](docs/superpowers/specs/2026-07-01-gradient-auto-responder-design.md)
+- Autopilot implementation plan: [`docs/superpowers/plans/2026-07-01-gradient-auto-responder.md`](docs/superpowers/plans/2026-07-01-gradient-auto-responder.md)
 
 ## License
 
