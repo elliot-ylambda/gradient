@@ -40,6 +40,8 @@ describe("parseJudgeResponse", () => {
     ["continue with blank response", '{"action":"continue","response":"  ","why":"w"}'],
     ["oversized response", JSON.stringify({ action: "continue", response: "x".repeat(MAX_RESPONSE_CHARS + 1), why: "w" })],
     ["oversized why", JSON.stringify({ action: "stand_down", why: "y".repeat(501) })],
+    ["missing why", '{"action":"stand_down"}'],
+    ["non-string why", '{"action":"continue","response":"go","why":42}'],
   ])("throws on %s", (_name, raw) => {
     expect(() => parseJudgeResponse(raw)).toThrow();
   });

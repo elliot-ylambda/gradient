@@ -34,7 +34,8 @@ export function parseJudgeResponse(raw: string): JudgeDecision {
   if (action !== "continue" && action !== "stand_down") {
     throw new Error(`invalid judge action: ${String(action)}`);
   }
-  const why = typeof parsed.why === "string" ? parsed.why : "";
+  const why = parsed.why;
+  if (typeof why !== "string") throw new Error(`judge why must be a string, got ${typeof why}`);
   if (why.length > MAX_WHY_CHARS) throw new Error("judge why exceeds cap");
   if (action === "continue") {
     const response = parsed.response;
