@@ -71,8 +71,9 @@ export async function writePlaybook(suggestions: Suggestion[], home?: string): P
   let existing: string | undefined;
   try {
     existing = await readFile(path, "utf8");
-  } catch {
-    existing = undefined; // first run
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") return null; // unreadable — leave it alone
+    existing = undefined; // ENOENT → first run
   }
   const next = generatePlaybook(suggestions, existing);
   if (next === null) return null;

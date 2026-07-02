@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import {
@@ -77,5 +77,16 @@ describe("writePlaybook / loadPlaybook", () => {
   it("falls back to DEFAULT_PLAYBOOK when no file exists", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     expect(await loadPlaybook(home)).toBe(DEFAULT_PLAYBOOK);
+  });
+
+  it("leaves an unreadable playbook untouched and returns null (not just ENOENT)", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const path = playbookPath(home);
+    // A directory at the playbook path makes readFile fail with EISDIR, not
+    // ENOENT — writePlaybook must not treat that as "first run".
+    await mkdir(path, { recursive: true });
+    expect(await writePlaybook([nudge], home)).toBeNull();
+    // The directory must still be there — nothing was overwritten.
+    expect((await stat(path)).isDirectory()).toBe(true);
   });
 });
