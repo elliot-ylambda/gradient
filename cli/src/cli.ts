@@ -9,9 +9,12 @@ import { init } from "./commands/init.js";
 import { checkpoint } from "./commands/checkpoint.js";
 import { stats } from "./commands/stats.js";
 import { explain } from "./commands/explain.js";
+import { respond, type StopHookInput } from "./commands/respond.js";
+import { setAutopilotMode, autopilotStatus } from "./commands/autopilot.js";
 import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
 import { spawnDetached } from "./core/spawn.js";
 import { resolveScanScope } from "./core/scope.js";
+import { isNudge } from "./core/playbook.js";
 import { loadConfig } from "./config.js";
 import { VERSION } from "./version.js";
 
@@ -30,6 +33,9 @@ Usage:
   gradient list                 show generated artifacts
   gradient remove <name>        delete a generated artifact
   gradient stats                show your most-repeated patterns + coverage
+  gradient autopilot <off|nudge|full>
+                                auto-respond when Claude stops (opt-in)
+  gradient autopilot status     mode, budget, and recent auto-responses
 `;
 
 export function parseCliArgs(argv: string[]): {
@@ -63,9 +69,10 @@ function sinceDays(flag: string | boolean | undefined): number | undefined {
 
 export async function main(
   argv: string[],
-  io: { log?: (s: string) => void } = {},
+  io: { log?: (s: string) => void; readStdin?: () => Promise<Record<string, unknown>> } = {},
 ): Promise<number> {
   const log = io.log ?? ((s: string) => process.stdout.write(s + "\n"));
+  const readStdin = io.readStdin ?? readStdinJson;
 
   if (argv.length === 0) {
     log(`${banner(VERSION)}\n\n${HELP}`);
@@ -112,6 +119,9 @@ export async function main(
           log(
             `  ${confidenceChip(s.confidence)} ${c.bold(s.name)}  ${c.muted(s.title)}  ${c.dim(`(seen ${s.evidence.count}×)`)}`,
           );
+          if (isNudge(s)) {
+            log(`      ${c.dim("tip: this is what autopilot automates →")} ${c.violet("gradient autopilot nudge")}`);
+          }
         }
         log(`\n${c.dim("Next:")} ${c.violet("gradient review")}`);
         return 0;
@@ -165,9 +175,49 @@ export async function main(
         return 0;
       }
       case "checkpoint": {
-        const input = await readStdinJson();
-        const path = await checkpoint(input, projectDir);
+        const input = await readStdin();
+        const path = await checkpoint(input as { transcript_path?: string }, projectDir);
         log(`checkpoint written: ${path}`);
+        return 0;
+      }
+      case "autopilot": {
+        const arg = positionals[0] ?? "status";
+        if (arg === "off" || arg === "nudge" || arg === "full") {
+          const r = await setAutopilotMode(arg, projectDir); // narrowed to AutopilotMode by the condition
+          log(banner(VERSION));
+          log(`${c.muted("autopilot:")} ${c.bold(r.mode)}`);
+          log(
+            r.hookInstalled
+              ? `${c.ok("Stop hook installed")} ${c.muted(r.settingsPath)}`
+              : `${c.muted("Stop hook removed:")} ${r.settingsPath}`,
+          );
+          return 0;
+        }
+        if (arg !== "status") {
+          log(c.coral(`unknown autopilot mode: ${arg} (use off|nudge|full|status)`));
+          return 2;
+        }
+        const s = await autopilotStatus(projectDir);
+        log(banner(VERSION));
+        log(`${c.muted("mode:")} ${c.bold(s.mode)}`);
+        log(`${c.muted("budget:")} ${s.budget} auto-responses/session`);
+        log(`${c.muted("playbook:")} ${s.playbookPath}${s.playbookExists ? "" : c.dim(" (not yet generated — run gradient scan)")}`);
+        log(`${c.muted("stop hook here:")} ${s.hookInstalled ? c.ok("installed") : "not installed"}`);
+        for (const e of s.recent) {
+          log(`  ${c.dim(e.ts)} ${e.action === "continue" ? c.ok("continued") : c.muted("stood down")}  ${c.dim(e.why)}`);
+        }
+        return 0;
+      }
+      case "respond": {
+        // Stop-hook target. Contract: exit 0 ALWAYS; stdout carries ONLY the
+        // block JSON (exit code 2 / stderr would be injected into Claude).
+        try {
+          const input = await readStdin();
+          const r = await respond(input as StopHookInput);
+          if (r.decision === "block") log(JSON.stringify({ decision: "block", reason: r.reason }));
+        } catch {
+          // fail-open: the stop stands
+        }
         return 0;
       }
       default:
@@ -180,12 +230,12 @@ export async function main(
   }
 }
 
-async function readStdinJson(): Promise<{ transcript_path?: string }> {
+async function readStdinJson(): Promise<Record<string, unknown>> {
   if (process.stdin.isTTY) return {};
   let data = "";
   for await (const chunk of process.stdin) data += chunk;
   try {
-    return JSON.parse(data) as { transcript_path?: string };
+    return JSON.parse(data) as Record<string, unknown>;
   } catch {
     return {};
   }

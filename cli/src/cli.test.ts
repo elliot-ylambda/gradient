@@ -63,3 +63,29 @@ describe("main", () => {
     expect(forwardedArgs).toContain("--all");
   });
 });
+
+describe("autopilot dispatch", () => {
+  it("help text lists autopilot", async () => {
+    const lines: string[] = [];
+    await main([], { log: s => lines.push(s) });
+    expect(lines.join("\n")).toContain("gradient autopilot <off|nudge|full>");
+  });
+
+  it("rejects an unknown autopilot mode", async () => {
+    const lines: string[] = [];
+    const code = await main(["autopilot", "sideways"], { log: s => lines.push(s) });
+    expect(code).toBe(2);
+    expect(lines.join("\n")).toContain("unknown autopilot mode");
+  });
+});
+
+describe("respond dispatch", () => {
+  it("prints nothing and exits 0 when the stop stands", async () => {
+    // Injected stdin: empty hook input → respond lacks session_id → allow.
+    // The contract under test: exit 0, completely silent stdout.
+    const lines: string[] = [];
+    const code = await main(["respond"], { log: s => lines.push(s), readStdin: async () => ({}) });
+    expect(code).toBe(0);
+    expect(lines).toEqual([]);
+  });
+});
