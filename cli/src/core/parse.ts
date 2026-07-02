@@ -17,7 +17,8 @@ function project(cwd: string | undefined): string {
   return cwd.split("/").filter(Boolean).pop() ?? "?";
 }
 
-// v1 parses only genuine user prompts; assistant turns are skipped on purpose.
+// Mining pipeline: genuine user prompts only. Assistant turns + tool activity
+// are consumed separately by core/tail.ts for the autopilot judge.
 function parseOne(line: string): Turn | null {
   let raw: Raw;
   try {

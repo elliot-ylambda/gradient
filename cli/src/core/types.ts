@@ -2,8 +2,8 @@ export type Role = "user" | "assistant";
 export type Confidence = "high" | "inferred" | "flagged";
 export type ArtifactType = "command" | "loop" | "hook";
 
-/** One genuine user prompt after parse + filter. (v1 consumes only user text;
- * assistant turns / tool sequences are intentionally not parsed until phase 2.) */
+/** One genuine user prompt after parse + filter. (The mining pipeline consumes
+ * only user text; assistant turns are rendered by core/tail.ts for autopilot.) */
 export interface Turn {
   ts: string;
   project: string;

@@ -7,7 +7,7 @@
 `gradient` reads your own Claude Code history, finds the workflows you repeat,
 and generates the automations to stop — **slash commands, loops, and hooks** —
 through a read-only **scan** → approve **review** → reversible **apply** flow.
-It only ever suggests: nothing runs without you.
+It only ever suggests: nothing runs without you turning it on.
 
 [gradient.md](https://gradient.md) · open source · MIT
 
@@ -60,6 +60,26 @@ anything it drops.
 The default backend reuses your existing `claude` CLI auth — no API key required.
 Clustering is local and LLM-free; only short candidate snippets ever reach a model
 — never whole transcripts — and a redaction pass strips secrets first.
+
+## Autopilot (opt-in)
+
+The most-mined pattern in every history is the nudge — `continue`, `what's
+next?` — typed hundreds of times. `gradient autopilot` automates exactly that:
+a `Stop` hook that answers the way *you* would, using the phrasings mined into
+your playbook (`~/.config/gradient/playbook.md`, yours to edit — `scan`
+refreshes only its marked region).
+
+```bash
+npx gradient autopilot nudge   # opt in (this project): push unfinished work forward
+npx gradient autopilot full    # also answer routine questions / start your usual next step
+npx gradient autopilot status  # what did it do while I was away?
+npx gradient autopilot off     # remove the hook
+```
+
+Bounded by design: a per-session budget (default 10), a progress gate that
+stands down when Claude stops twice with no new tool activity, and fail-open
+errors — anything unexpected means Claude just stops normally. Your permission
+prompts still gate dangerous tools; autopilot cannot answer those.
 
 ## Develop
 
