@@ -44,7 +44,7 @@ AGENTS.md:
 | 1 | Scope | **Layered, like CLAUDE.md.** Personal file at `~/.config/gradient/gradient.md` (renamed from `playbook.md`); optional committed file at `<repo>/gradient.md` holding the repo's automation contract. |
 | 2 | Project-file authorship | **Suggest-only.** `scan` never auto-writes the committed file — mined content comes from personal transcripts (evidence counts are personal telemetry) and gradient's core promise is "only ever suggests". Hand-authored now; `gradient apply` writes approved project-level suggestions later (deferred, §6). The global file keeps its auto-refreshed mined region. |
 | 3 | Composition | **Clamp, never escalate.** A committed file is writable by anyone who can merge a PR; if it could raise autopilot authority, a teammate's (or attacker's) commit could silently escalate what local automation does on the user's machine. Effective mode = `min(global, project max-mode)` on the `off < nudge < full` ladder; effective budget = `min` of the two; prose rules from both files reach the judge. Repo maintainers can restrict automation, never expand it. |
-| 4 | Malformed clamps | **Fail to `off`.** Unparseable frontmatter clamps to `off` for that repo and records the fact in the decision log — consistent with Spec 2 Decision 6 (failure mode is "off", never "more authority than intended"). Note the direction: judge/spawn errors fail *open* (the stop stands, autopilot does nothing); clamp-parse errors fail *closed* (autopilot off). Both resolve to "no action", never to escalation. |
+| 4 | Malformed clamps | **Fail to `off`.** Unparseable frontmatter clamps to `off` for that repo — consistent with Spec 2 Decision 6 (failure mode is "off", never "more authority than intended"). The clamp gate stays free and silent (no per-session state writes on the hot path, no per-stop log spam); the malformed fact is surfaced by `gradient autopilot status`, which recomputes the effective mode for the current repo. Note the direction: judge/spawn errors fail *open* (the stop stands, autopilot does nothing); clamp-parse errors fail *closed* (autopilot off). Both resolve to "no action", never to escalation. |
 | 5 | Vocabulary | **"Playbook" is the concept; "gradient.md" is the artifact.** Code symbols (`loadPlaybook`, `buildJudgePrompt`'s playbook param) and prose keep the noun; every user-facing surface (paths, template header, CLI output, docs) says `gradient.md`. |
 | 6 | Migration | **None.** `playbook.md` exists only on the author's machine (no npm release yet); a one-time manual `mv` suffices. No fallback-read code. |
 
@@ -80,8 +80,9 @@ autopilot:
 - Parsed by a small lenient line-based parser (~20 lines) in
   `core/playbook.ts`. No new dependency — the CLI has exactly one runtime
   dependency and stays that way.
-- Malformed frontmatter (unreadable delimiters, unrecognizable values for
-  known keys) → clamp to `off` (Decision 4).
+- Malformed frontmatter (unopened/unclosed delimiters, unrecognizable values
+  for known keys) → clamp to `off` (Decision 4). The `respond` clamp gate
+  exits silently in this case; `autopilot status` reports it.
 
 ## 4. Composition in the `respond` pipeline
 
