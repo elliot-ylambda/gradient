@@ -90,7 +90,8 @@ Ordering within Spec 2 §3.2's gate chain:
 
 1. Recursion guard, mode gate — unchanged.
 2. **New: project clamp.** Load `<cwd>/gradient.md` (cwd comes from the hook
-   stdin JSON). Missing file → no clamp. Effective mode =
+   stdin JSON; a missing cwd means the clamp can't be checked, so the stop
+   stands — never "act unclamped"). Missing file → no clamp. Effective mode =
    `min(config mode, project max-mode)`; if `off`, exit silently. Effective
    budget = `min(config autopilotBudget, project budget)` feeding the
    existing budget gate.
