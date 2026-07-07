@@ -286,7 +286,7 @@ describe("plugin bundle", () => {
 Run: `cd cli && npx vitest run src/plugin.test.ts`
 Expected: FAIL — `plugin/bin/gradient.mjs` does not exist. (The version test passes already — both read `0.1.0`.)
 
-- [ ] **Step 3: Add esbuild + script** — in `cli/package.json`: add to `devDependencies`: `"esbuild": "0.25.5"` (pin exact; bump deliberately). Add to `scripts`: `"build:plugin": "node scripts/build-plugin.mjs"`. Then `cd cli && npm install`.
+- [ ] **Step 3: Add esbuild + script** — in `cli/package.json`: add the current stable esbuild to `devDependencies`, pinned exact (check npm at execution time; e.g. `"esbuild": "0.25.5"` — no `^`, bump deliberately). Add to `scripts`: `"build:plugin": "node scripts/build-plugin.mjs"`. Then `cd cli && npm install`.
 
 - [ ] **Step 4: Create `cli/scripts/build-plugin.mjs`:**
 
@@ -319,16 +319,29 @@ await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
 console.log(`plugin bundle → ${outfile} (v${pkg.version})`);
 ```
 
-- [ ] **Step 5: Build and verify**
+- [ ] **Step 5: Harden the CLI entry guard** — `cli/src/cli.ts`'s last lines compare `import.meta.url === \`file://${process.argv[1]}\`` by string concatenation, which breaks on any path needing URL encoding (a space in the plugin cache path) — the bundle would then exit 0 printing *nothing*. Replace with:
+
+```ts
+import { pathToFileURL } from "node:url";
+// …
+// Entry point when run as a binary.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main(process.argv.slice(2)).then((code) => process.exit(code));
+}
+```
+
+`dist/cli.js` uses the same guard, so this hardens the npx path too. Run `cd cli && npm test` — existing suites must stay green.
+
+- [ ] **Step 6: Build and verify**
 
 Run: `cd cli && npm run build:plugin && npx vitest run src/plugin.test.ts`
 Expected: bundle written; all plugin tests PASS. Also verify by hand: `node ../plugin/bin/gradient.mjs` prints banner + help, exit 0.
 
-- [ ] **Step 6: Commit (bundle included — it is a distribution artifact)**
+- [ ] **Step 7: Commit (bundle included — it is a distribution artifact)**
 
 ```bash
-git add cli/package.json cli/package-lock.json cli/scripts/build-plugin.mjs plugin/bin/gradient.mjs plugin/.claude-plugin/plugin.json cli/src/plugin.test.ts
-git commit -m "feat(plugin): build:plugin bundles the CLI into plugin/bin + version sync"
+git add cli/package.json cli/package-lock.json cli/scripts/build-plugin.mjs cli/src/cli.ts plugin/bin/gradient.mjs plugin/.claude-plugin/plugin.json cli/src/plugin.test.ts
+git commit -m "feat(plugin): build:plugin bundles the CLI into plugin/bin + version sync; robust entry guard"
 ```
 
 ---

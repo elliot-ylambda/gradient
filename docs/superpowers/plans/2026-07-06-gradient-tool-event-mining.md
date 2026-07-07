@@ -658,9 +658,13 @@ git commit -m "feat(core): command hooks install on apply and uninstall on remov
 Append to `cli/src/commands/scan.test.ts` (reuse its existing injected-deps style):
 
 ```ts
+import type { ToolEvent } from "../core/types.js";
+
 it("mines tool events into candidates and logs the summary", async () => {
   const logs: string[] = [];
-  const events = [/* 4 failing "npm test" bash events across 2 sessions — build with a helper like toolmine.test.ts's bash() */];
+  const fail = (sessionId: string): ToolEvent =>
+    ({ ts: "2026-07-01T00:00:00Z", sessionId, kind: "bash", command: "npm test", isError: true, errorHead: "FAIL" });
+  const events = [fail("s1"), fail("s1"), fail("s2"), fail("s2")];
   await scan({ scope: "project", projectPath: dir }, {
     backend: null, config: {}, log: m => logs.push(m),
     collectFn: async () => ["f1"], parseFn: async () => [],
@@ -689,8 +693,15 @@ it("degraded mode (no backend) skips toolfail/ritual candidates instead of fakin
   const out = await detect([cand as any], null, { limit: 10 });
   expect(out).toEqual([]);
 });
-it("prompt briefing covers toolfail and ritual kinds", () => {
-  // assert on the exported/buildable prompt text used by detect (see Step 4's exact wording)
+it("prompt briefing covers toolfail and ritual kinds and serializes kind", async () => {
+  // Reuse the recording-fake-backend pattern already used in this test file:
+  // a backend whose completion fn captures the prompt it receives and returns "[]".
+  let seen = "";
+  const backend = recordingBackend(prompt => { seen = prompt; return "[]"; });
+  await detect([cand as any], backend, { limit: 10 });
+  expect(seen).toContain("toolfail");           // candidate kind serialized
+  expect(seen).toContain("kind 'ritual'");      // briefing text present
+  expect(seen).toContain("PostToolUse");        // hook guidance present
 });
 ```
 
@@ -701,7 +712,22 @@ Expected: FAIL — `parseToolEventsFn` is not a known dep; degraded mode current
 
 - [ ] **Step 3: Implement scan** — in `cli/src/commands/scan.ts`:
   - `ScanDeps` gains `parseToolEventsFn?: (path: string) => Promise<{ events: ToolEvent[]; dropped: number }>`.
-  - In the file loop, when `config.mineToolEvents !== false`, also collect events (`deps.parseToolEventsFn ?? parseToolEventsFile`). Note: config is loaded *after* the loop today — hoist `const config = deps.config ?? (await loadConfig(opts.home));` above the file loop.
+  - Config is loaded *after* the file loop today — hoist `const config = deps.config ?? (await loadConfig(opts.home));` above the loop, then extend the loop:
+
+```ts
+const parseToolEventsFn = deps.parseToolEventsFn ?? parseToolEventsFile;
+const events: ToolEvent[] = [];
+let eventsDropped = 0;
+for (const f of files) {
+  turns.push(...(await parseFn(f)));
+  if (config.mineToolEvents !== false) {
+    const r = await parseToolEventsFn(f);
+    events.push(...r.events);
+    eventsDropped += r.dropped;
+  }
+}
+```
+
   - After `const candidates = cluster(kept);` and the window line:
 
 ```ts

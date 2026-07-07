@@ -269,6 +269,16 @@ describe("audit — corrections", () => {
     const long = "don't " + "x".repeat(200);
     expect(audit([turn(long, "s1"), turn(long, "s2"), turn(long, "s3")], []).candidates).toEqual([]);
   });
+  it("never double-counts a correction as a restatement", () => {
+    const instructions = [inst("never edit generated files")];
+    const prompts = [
+      turn("no, never edit generated files", "s1"), turn("don't edit generated files!", "s2"),
+      turn("stop, never edit generated files", "s3"),
+    ];
+    const { candidates, tallies } = audit(prompts, instructions);
+    expect(tallies[0].restatements).toBe(0);
+    expect(candidates.filter(c => c.hint?.startsWith("restated"))).toEqual([]);
+  });
 });
 ```
 
@@ -323,7 +333,13 @@ export function audit(prompts: Turn[], instructions: InstructionLine[]):
   const corrections: Turn[] = [];
   for (const p of prompts) {
     const text = p.text ?? "";
-    if (CORRECTION_RE.test(text) && text.length < AUDIT.MAX_CORRECTION_LEN) corrections.push(p);
+    if (CORRECTION_RE.test(text)) {
+      // Corrections flow ONLY through the correction path: a correction that
+      // matches an instruction must count as a violation, not a restatement —
+      // otherwise one behavior produces two candidates and inflated tallies.
+      if (text.length < AUDIT.MAX_CORRECTION_LEN) corrections.push(p);
+      continue;
+    }
     const hit = bestMatch(normalize(text), instructions);
     if (hit) {
       restated.set(hit, [...(restated.get(hit) ?? []), p]);
@@ -405,9 +421,14 @@ it("degraded mode skips instruction candidates", async () => {
     confidence: "inferred", hint: 'restated instruction (project): "always use pnpm, never npm"' };
   expect(await detect([cand as any], null, { limit: 10 })).toEqual([]);
 });
-it("serializes hint into the judge prompt", async () => {
-  // recording fake backend: capture the prompt detect sends; assert it contains
-  // 'restated instruction (project)' for the candidate above.
+it("serializes and redacts hint text in the judge prompt", async () => {
+  // Reuse the recording-fake-backend pattern already used in this test file.
+  let seen = "";
+  const backend = recordingBackend(prompt => { seen = prompt; return "[]"; });
+  const leaky = { ...cand, hint: 'restated instruction (project): "use key sk-ant-api03-abcdef1234567890"' };
+  await detect([leaky as any], backend, { limit: 10 });
+  expect(seen).toContain("restated instruction (project)");
+  expect(seen).not.toContain("sk-ant-api03-abcdef1234567890"); // hint passes redact()
 });
 ```
 
@@ -418,7 +439,7 @@ Expected: FAIL (degraded mode currently fabricates a command suggestion; hint is
 
 - [ ] **Step 3: Implement** — in `cli/src/core/detect.ts`:
   - Degraded-mode guard: add `"instruction"` to the kinds skipped without a backend.
-  - Candidate serialization: when `c.hint` is set, include a `hint: <text>` line in that candidate's block.
+  - Candidate serialization: when `c.hint` is set, include a `hint: <text>` line in that candidate's block, passed through `redact()` (`./security.js`) exactly like example text — instruction lines are the user's own files, but the pass is cheap and consistent (spec §5).
   - Append to the single authoritative type-decision briefing:
 
 ```
@@ -456,6 +477,12 @@ git commit -m "feat(detect): instruction-audit briefing — rules vs command hoo
 - [ ] **Step 1: Write the failing tests** — append to `cli/src/commands/scan.test.ts` (injected-deps style; write a real CLAUDE.md into the temp project dir):
 
 ```ts
+import type { Turn } from "../core/types.js";
+
+const turn = (text: string, sessionId: string): Turn =>
+  ({ ts: "2026-07-01T00:00:00Z", project: "p", role: "user", sessionId, text });
+// dir and fakeHome: fresh mkdtemp dirs per test, matching this file's existing setup.
+
 it("runs the instruction audit and persists tallies", async () => {
   await writeFile(join(dir, "CLAUDE.md"), "- Always use pnpm, never npm.");
   const logs: string[] = [];
