@@ -65,6 +65,8 @@ export interface Config {
   autopilotBudget?: number;
   /** Judge model (fast by design; the judge sits in the user's stop path). Defaults to "haiku". */
   autopilotModel?: string;
+  /** Extra regexes (source strings) classified as machine-injected during mining. */
+  ignorePatterns?: string[];
 }
 
 /** Autopilot authority ladder (spec §2 #1). */

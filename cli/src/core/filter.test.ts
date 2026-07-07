@@ -33,3 +33,42 @@ describe("filterPrompts", () => {
     expect(kept.map(t => t.text)).toEqual(["fix the bug"]);
   });
 });
+
+import { classifyPrompt, classifyPrompts, compileIgnorePatterns } from "./filter.js";
+
+const turn = (text: string): Turn =>
+  ({ ts: "2026-07-01T00:00:00Z", project: "p", role: "user", sessionId: "s1", text });
+
+describe("classifyPrompt", () => {
+  it("classifies ordinary prompts as human", () => {
+    expect(classifyPrompt("fix the login bug")).toBe("human");
+  });
+  it("keeps existing injected patterns as injected", () => {
+    expect(classifyPrompt("<command-name>/compact</command-name>")).toBe("injected");
+    expect(classifyPrompt("Caveat: The messages below were generated")).toBe("injected");
+  });
+  it("classifies continuation summaries", () => {
+    expect(classifyPrompt("This session is being continued from a previous conversation that ran out of context.")).toBe("continuation");
+  });
+  it("classifies task notifications", () => {
+    expect(classifyPrompt("<task-notification><task-id>x</task-id></task-notification>")).toBe("notification");
+  });
+  it("applies user ignore patterns as injected", () => {
+    const ignore = compileIgnorePatterns(["^review this change for security vulnerabilities"]);
+    expect(classifyPrompt("Review this change for security vulnerabilities. Changed files: a.ts", ignore)).toBe("injected");
+  });
+  it("compileIgnorePatterns skips invalid regexes", () => {
+    expect(compileIgnorePatterns(["[unclosed", "^ok$"])).toHaveLength(1);
+  });
+});
+
+describe("classifyPrompts / filterPrompts", () => {
+  it("buckets by class and filterPrompts keeps only human", () => {
+    const turns = [turn("do the thing"), turn("This session is being continued from a previous conversation."), turn("<task-notification>x</task-notification>")];
+    const buckets = classifyPrompts(turns);
+    expect(buckets.human).toHaveLength(1);
+    expect(buckets.continuation).toHaveLength(1);
+    expect(buckets.notification).toHaveLength(1);
+    expect(filterPrompts(turns)).toHaveLength(1);
+  });
+});
