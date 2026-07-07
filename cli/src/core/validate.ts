@@ -21,6 +21,13 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
   if (payload.type === "command" && typeof payload.commandName !== "string") {
     throw new Error("command payload needs commandName");
   }
+  if (payload.type === "command") {
+    if (payload.triggers !== undefined) {
+      if (!Array.isArray(payload.triggers) || payload.triggers.some(t => typeof t !== "string")) {
+        throw new Error("command payload triggers must be an array of strings");
+      }
+    }
+  }
   if (payload.type === "hook") {
     if (typeof payload.event !== "string" || typeof payload.subcommand !== "string") {
       throw new Error("hook payload needs event + subcommand");

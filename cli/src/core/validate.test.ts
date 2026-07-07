@@ -41,3 +41,17 @@ describe("assertHookRunnable", () => {
     expect(() => assertHookRunnable(s)).not.toThrow();
   });
 });
+
+describe("triggers validation", () => {
+  it("rejects non-string triggers", () => {
+    const s = { id: "1", name: "n", title: "t", rationale: "r", confidence: "high",
+      payload: { type: "command", commandName: "n", body: "b", triggers: [1] } };
+    expect(() => validateSuggestion(s)).toThrow(/triggers/);
+  });
+  it("accepts string triggers and absent triggers", () => {
+    const base = { id: "1", name: "n", title: "t", rationale: "r", confidence: "high",
+      payload: { type: "command", commandName: "n", body: "b" } };
+    expect(() => validateSuggestion(base)).not.toThrow();
+    expect(() => validateSuggestion({ ...base, payload: { ...base.payload, triggers: ["x"] } })).not.toThrow();
+  });
+});
