@@ -7,12 +7,14 @@
   "files": ["dist", "src/skill"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:plugin": "node scripts/build-plugin.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": { "@anthropic-ai/sdk": "^0.40.0" },
   "devDependencies": {
+    "esbuild": "0.28.1",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0",
     "@types/node": "^20.16.0"

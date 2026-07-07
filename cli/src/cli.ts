@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
+import { pathToFileURL } from "node:url";
 import { scan } from "./commands/scan.js";
 import { review, readlinePrompter, reviewJson } from "./commands/review.js";
 import { applyByIds } from "./commands/apply.js";
@@ -252,6 +253,6 @@ async function readStdinJson(): Promise<Record<string, unknown>> {
 }
 
 // Entry point when run as a binary.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2)).then((code) => process.exit(code));
 }
