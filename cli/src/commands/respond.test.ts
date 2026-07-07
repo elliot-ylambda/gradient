@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { join as pjoin } from "node:path";
 import { respond, type RespondDeps, type StopHookInput } from "./respond.js";
 import { loadState, saveState, freshState } from "../core/state.js";
 import type { LLMBackend } from "../llm/backend.js";
@@ -25,7 +26,7 @@ const transcript = (tools: number): string[] => [
   }),
 ];
 
-const input: StopHookInput = { session_id: "sess1", transcript_path: "t.jsonl" };
+const input: StopHookInput = { session_id: "sess1", transcript_path: "t.jsonl", cwd: "/nonexistent-repo" };
 
 async function run(over: Partial<RespondDeps> & { home: string; tools?: number }) {
   const deps: RespondDeps = {
@@ -56,6 +57,13 @@ describe("respond gates (all fail-open)", () => {
   it("missing session_id or transcript_path → allow", async () => {
     const home = await tmpHome();
     const r = await respond({}, { home, config: { autopilot: "nudge" } as Config, env: {} });
+    expect(r.decision).toBe("allow");
+  });
+
+  it("missing cwd → allow (clamp can't be checked, so no action)", async () => {
+    const home = await tmpHome();
+    const r = await respond({ session_id: "s", transcript_path: "t" },
+      { home, config: { autopilot: "nudge" } as Config, backend: fakeBackend(CONTINUE), readLines: async () => transcript(3), env: {} });
     expect(r.decision).toBe("allow");
   });
 
@@ -136,5 +144,77 @@ describe("respond judge outcomes", () => {
     await run({ home, backend, readLines: async () => lines });
     expect(seen).toContain("[REDACTED]");
     expect(seen).not.toContain("supersecret123");
+  });
+});
+
+// helper: a temp repo dir containing a gradient.md
+async function repoWith(contents: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "grad-repo-"));
+  await writeFile(pjoin(dir, "gradient.md"), contents);
+  return dir;
+}
+
+describe("respond project clamp", () => {
+  it("project max-mode: off → allow without calling the judge", async () => {
+    const home = await tmpHome();
+    const cwd = await repoWith("---\nautopilot:\n  max-mode: off\n---\n## Rules\n");
+    let called = false;
+    const backend: LLMBackend = { name: "f", available: async () => true, complete: async () => { called = true; return CONTINUE; } };
+    const r = await respond({ session_id: "s", transcript_path: "t", cwd },
+      { home, config: { autopilot: "full" } as Config, backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
+    expect(r.decision).toBe("allow");
+    expect(called).toBe(false);
+  });
+
+  it("malformed project frontmatter → allow (clamped off), judge not called", async () => {
+    const home = await tmpHome();
+    const cwd = await repoWith("---\nautopilot:\n  max-mode: turbo\n---\n");
+    let called = false;
+    const backend: LLMBackend = { name: "f", available: async () => true, complete: async () => { called = true; return CONTINUE; } };
+    const r = await respond({ session_id: "s", transcript_path: "t", cwd },
+      { home, config: { autopilot: "full" } as Config, backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
+    expect(r.decision).toBe("allow");
+    expect(called).toBe(false);
+  });
+
+  it("project budget clamps below config: budget:0 → allow, judge not called", async () => {
+    const home = await tmpHome();
+    const cwd = await repoWith("---\nautopilot:\n  budget: 0\n---\n");
+    let called = false;
+    const backend: LLMBackend = { name: "f", available: async () => true, complete: async () => { called = true; return CONTINUE; } };
+    const r = await respond({ session_id: "s", transcript_path: "t", cwd },
+      { home, config: { autopilot: "nudge", autopilotBudget: 10 } as Config, backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
+    expect(r.decision).toBe("allow");
+    expect(called).toBe(false);
+  });
+
+  it("project prose reaches the judge prompt", async () => {
+    const home = await tmpHome();
+    const cwd = await repoWith("---\nautopilot:\n  max-mode: full\n---\n## Rules\n- SENTINEL-PROSE\n");
+    let seenPrompt = "";
+    const backend: LLMBackend = { name: "f", available: async () => true, complete: async (req) => { seenPrompt = req.prompt; return CONTINUE; } };
+    const r = await respond({ session_id: "s", transcript_path: "t", cwd },
+      { home, config: { autopilot: "full" } as Config, backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
+    expect(r.decision).toBe("block");
+    expect(seenPrompt).toContain("SENTINEL-PROSE");
+  });
+
+  it("clamp that lowers but doesn't disable: config full + project nudge → judge sees nudge-mode system prompt", async () => {
+    const home = await tmpHome();
+    const cwd = await repoWith("---\nautopilot:\n  max-mode: nudge\n---\n");
+    let seenSystem = "";
+    const backend: LLMBackend = { name: "f", available: async () => true, complete: async (req) => { seenSystem = req.system; return CONTINUE; } };
+    const r = await respond({ session_id: "s", transcript_path: "t", cwd },
+      { home, config: { autopilot: "full" } as Config, backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
+    expect(r.decision).toBe("block");           // still continues (nudge authority)
+    expect(seenSystem).not.toContain("typical next step"); // but without full-mode next-step authority
+  });
+
+  it("no project file → behaves exactly as before (nudge continues)", async () => {
+    const home = await tmpHome();
+    const cwd = await mkdtemp(join(tmpdir(), "grad-empty-"));
+    const r = await respond({ session_id: "s", transcript_path: "t", cwd },
+      { home, config: { autopilot: "nudge" } as Config, backend: fakeBackend(CONTINUE), readLines: async () => transcript(3), env: {}, now: () => "T" });
+    expect(r.decision).toBe("block");
   });
 });

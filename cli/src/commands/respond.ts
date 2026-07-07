@@ -3,7 +3,7 @@ import type { Config } from "../core/types.js";
 import { loadConfig, DEFAULT_AUTOPILOT_BUDGET, DEFAULT_AUTOPILOT_MODEL } from "../config.js";
 import { loadState, saveState, cleanupStale } from "../core/state.js";
 import { renderTail, fingerprint, readTranscriptLines } from "../core/tail.js";
-import { loadPlaybook } from "../core/playbook.js";
+import { loadPlaybook, loadProjectPlaybook, clampMode } from "../core/playbook.js";
 import { buildJudgePrompt, judge } from "../core/judge.js";
 import { redact } from "../core/security.js";
 import { selectBackend } from "../llm/index.js";
@@ -18,6 +18,8 @@ export interface StopHookInput {
   hook_event_name?: string;
   stop_hook_active?: boolean; // intentionally unused as a gate (spec §1): budget + progress are the loop protection
 }
+
+const PROJECT_PROSE_CAP = 4096; // spec §4: project prose redacted then truncated
 
 export interface RespondResult {
   decision: "allow" | "block";
@@ -67,14 +69,35 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
     const config = deps.config ?? (await loadConfig(deps.home));
     const mode = config.autopilot;
     if (mode !== "nudge" && mode !== "full") return allow;
-    if (!input.session_id || !input.transcript_path) return allow;
+    // cwd joins the required hook fields: without it the project clamp can't
+    // be checked, and "can't check the clamp" must mean "no action" — never
+    // "act unclamped".
+    if (!input.session_id || !input.transcript_path || !input.cwd) return allow;
+
+    // Gate 2b: project clamp (spec §4). A committed gradient.md may only
+    // restrict authority. Malformed frontmatter clamps this repo to off.
+    let effectiveMode: "nudge" | "full" = mode;
+    let effectiveBudget = config.autopilotBudget ?? DEFAULT_AUTOPILOT_BUDGET;
+    let projectProse = "";
+    const project = await loadProjectPlaybook(input.cwd);
+    if (project) {
+      if (project.clamps.malformed) return allow; // fail closed: off
+      if (project.clamps.maxMode) {
+        const clamped = clampMode(effectiveMode, project.clamps.maxMode);
+        if (clamped !== "nudge" && clamped !== "full") return allow; // clamped to off
+        effectiveMode = clamped;
+      }
+      if (project.clamps.budget !== undefined) {
+        effectiveBudget = Math.min(effectiveBudget, project.clamps.budget);
+      }
+      projectProse = project.prose;
+    }
 
     void cleanupStale(deps.home).catch(() => {}); // opportunistic, never awaited on the hot path
 
-    // Gate 3: budget.
+    // Gate 3: budget (effective).
     const state = await loadState(input.session_id, deps.home);
-    const budget = config.autopilotBudget ?? DEFAULT_AUTOPILOT_BUDGET;
-    if (state.count >= budget) return allow;
+    if (state.count >= effectiveBudget) return allow;
 
     // Gate 4: progress. Fingerprint is tool-activity only (see tail.ts).
     const lines = await (deps.readLines ?? readTranscriptLines)(input.transcript_path);
@@ -94,7 +117,12 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
 
     const tail = redact(renderTail(lines));
     const playbook = await loadPlaybook(deps.home);
-    const decision = await judge(backend, buildJudgePrompt(mode, playbook, "", tail), { timeoutMs: deps.timeoutMs });
+    const projectPrompt = redact(projectProse).slice(0, PROJECT_PROSE_CAP);
+    const decision = await judge(
+      backend,
+      buildJudgePrompt(effectiveMode, playbook, projectPrompt, tail),
+      { timeoutMs: deps.timeoutMs },
+    );
 
     const ts = (deps.now ?? (() => new Date().toISOString()))();
     state.lastFingerprint = fp; // recorded on every decision: identical transcripts are never re-judged
