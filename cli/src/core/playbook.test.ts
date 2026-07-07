@@ -5,6 +5,7 @@ import { join, dirname } from "node:path";
 import {
   generatePlaybook, writePlaybook, loadPlaybook, playbookPath,
   isNudge, DEFAULT_PLAYBOOK, MINED_START, MINED_END,
+  parseProjectPlaybook, clampMode, projectPlaybookPath, loadProjectPlaybook,
 } from "./playbook.js";
 import type { Suggestion } from "./types.js";
 
@@ -102,5 +103,86 @@ describe("DEFAULT_PLAYBOOK", () => {
     expect(DEFAULT_PLAYBOOK).toContain("# gradient.md");
     expect(DEFAULT_PLAYBOOK).toContain(MINED_START);
     expect(DEFAULT_PLAYBOOK).toContain("## Rules");
+  });
+});
+
+describe("clampMode", () => {
+  it("returns the lower authority on off < nudge < full", () => {
+    expect(clampMode("full", "nudge")).toBe("nudge");
+    expect(clampMode("nudge", "full")).toBe("nudge");
+    expect(clampMode("nudge", "off")).toBe("off");
+    expect(clampMode("full", "full")).toBe("full");
+  });
+});
+
+describe("parseProjectPlaybook", () => {
+  it("no frontmatter → all prose, no clamps", () => {
+    const r = parseProjectPlaybook("## Rules\n- be careful\n");
+    expect(r.clamps).toEqual({});
+    expect(r.prose).toContain("be careful");
+  });
+
+  it("reads max-mode and budget; prose excludes the frontmatter", () => {
+    const raw = "---\nautopilot:\n  max-mode: nudge\n  budget: 5\n---\n## Rules\n- no pushes\n";
+    const r = parseProjectPlaybook(raw);
+    expect(r.clamps).toEqual({ maxMode: "nudge", budget: 5 });
+    expect(r.prose).toContain("no pushes");
+    expect(r.prose).not.toContain("max-mode");
+  });
+
+  it("each clamp is independent — max-mode without budget", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: off\n---\nx\n");
+    expect(r.clamps).toEqual({ maxMode: "off" });
+  });
+
+  it("unknown keys are ignored", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: full\n  future: 9\n---\nx\n");
+    expect(r.clamps).toEqual({ maxMode: "full" });
+  });
+
+  it("unclosed frontmatter → malformed", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: nudge\n## Rules\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("bad max-mode value → malformed", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: turbo\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("bad budget value → malformed", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  budget: lots\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("recognized key with trailing text → malformed, never silently ignored", () => {
+    // If this were ignored instead, the repo would get MORE authority than
+    // the author intended — the one direction clamps must never fail.
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: nudge # weekdays only\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("recognized key with empty value → malformed", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  budget:\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+});
+
+describe("projectPlaybookPath / loadProjectPlaybook", () => {
+  it("path is <cwd>/gradient.md", () => {
+    expect(projectPlaybookPath("/repo")).toBe("/repo/gradient.md");
+  });
+
+  it("missing file → null", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-proj-"));
+    expect(await loadProjectPlaybook(dir)).toBeNull();
+  });
+
+  it("present file → parsed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-proj-"));
+    await writeFile(join(dir, "gradient.md"), "---\nautopilot:\n  budget: 3\n---\n## Rules\n- careful\n");
+    const r = await loadProjectPlaybook(dir);
+    expect(r?.clamps).toEqual({ budget: 3 });
+    expect(r?.prose).toContain("careful");
   });
 });
