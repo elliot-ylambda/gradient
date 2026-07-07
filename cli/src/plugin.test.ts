@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -46,5 +46,37 @@ describe("plugin bundle", () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain(VERSION);   // banner includes the version
     expect(r.stdout).toContain("gradient scan");  // HELP text
+  });
+});
+
+function frontmatter(skill: string): Record<string, string> {
+  const raw = readFileSync(join(pluginDir, "skills", skill, "SKILL.md"), "utf8");
+  const m = /^---\n([\s\S]*?)\n---/.exec(raw);
+  expect(m).not.toBeNull();
+  const out: Record<string, string> = {};
+  for (const line of m![1].split("\n")) {
+    const kv = /^([\w-]+):\s*(.*)$/.exec(line);
+    if (kv) out[kv[1]] = kv[2];
+  }
+  return out;
+}
+
+describe("plugin skills", () => {
+  it("ships exactly scan, review, stats, autopilot", () => {
+    expect(readdirSync(join(pluginDir, "skills")).sort()).toEqual(["autopilot", "review", "scan", "stats"]);
+  });
+  it("every skill has a description and invokes the bundled bin", () => {
+    for (const s of ["scan", "review", "stats", "autopilot"]) {
+      expect(frontmatter(s).description).toBeTruthy();
+      const body = readFileSync(join(pluginDir, "skills", s, "SKILL.md"), "utf8");
+      expect(body).toContain('node "${CLAUDE_PLUGIN_ROOT}/bin/gradient.mjs"');
+      expect(body).not.toMatch(/(^|[^/])\bgradient (scan|review|apply|stats|autopilot)/); // no PATH fallback
+    }
+  });
+  it("only autopilot is user-invocation-only", () => {
+    expect(frontmatter("autopilot")["disable-model-invocation"]).toBe("true");
+    for (const s of ["scan", "review", "stats"]) {
+      expect(frontmatter(s)["disable-model-invocation"]).toBeUndefined();
+    }
   });
 });
