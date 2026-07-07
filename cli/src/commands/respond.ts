@@ -94,7 +94,7 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
 
     const tail = redact(renderTail(lines));
     const playbook = await loadPlaybook(deps.home);
-    const decision = await judge(backend, buildJudgePrompt(mode, playbook, tail), { timeoutMs: deps.timeoutMs });
+    const decision = await judge(backend, buildJudgePrompt(mode, playbook, "", tail), { timeoutMs: deps.timeoutMs });
 
     const ts = (deps.now ?? (() => new Date().toISOString()))();
     state.lastFingerprint = fp; // recorded on every decision: identical transcripts are never re-judged

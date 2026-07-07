@@ -7,18 +7,34 @@ const fake = (fn: () => Promise<string>): LLMBackend => ({
 });
 
 describe("buildJudgePrompt", () => {
-  it("embeds playbook and tail; nudge mode has no next-step authority", () => {
-    const req = buildJudgePrompt("nudge", "PB-CONTENT", "TAIL-CONTENT");
+  it("embeds both playbooks and the tail; nudge mode has no next-step authority", () => {
+    const req = buildJudgePrompt("nudge", "PB-CONTENT", "PROJ-CONTENT", "TAIL-CONTENT");
     expect(req.prompt).toContain("PB-CONTENT");
+    expect(req.prompt).toContain("PROJ-CONTENT");
     expect(req.prompt).toContain("TAIL-CONTENT");
     expect(req.system).toContain("stand down");
     expect(req.system).not.toContain("typical next step");
   });
 
-  it("full mode adds next-step authority and the irreversible-actions rule", () => {
-    const req = buildJudgePrompt("full", "pb", "tail");
+  it("full mode adds next-step authority and requires both playbooks to allow", () => {
+    const req = buildJudgePrompt("full", "pb", "proj", "tail");
     expect(req.system).toContain("typical next step");
     expect(req.system).toContain("irreversible");
+    expect(req.system).toContain("both playbooks");
+  });
+
+  it("no project file → labeled (none)", () => {
+    const req = buildJudgePrompt("nudge", "pb", "", "tail");
+    expect(req.prompt).toContain("PROJECT PLAYBOOK");
+    expect(req.prompt).toContain("(none)");
+  });
+
+  it("system prompt marks the project playbook as advisory, never authorization", () => {
+    // The committed file is writable by anyone who can merge a PR, and the
+    // judge's response becomes Claude's next instruction — so the repo layer
+    // must only ever restrict/inform, never direct.
+    const req = buildJudgePrompt("nudge", "pb", "proj", "tail");
+    expect(req.system).toContain("never as authorization");
   });
 });
 
