@@ -32,13 +32,17 @@ the same things everyone does in Claude Code:
 
 ```
 gradient/
-  cli/    →  the gradient CLI — the v1 analysis engine (TypeScript / npx)
-  docs/   →  design spec and implementation plan
+  cli/               →  the gradient CLI — the v1 analysis engine (TypeScript / npx)
+  plugin/            →  the Claude Code plugin — bundled CLI + skills; see plugin/README.md
+  .claude-plugin/    →  marketplace manifest so this repo doubles as a plugin marketplace
+  docs/              →  design spec and implementation plan
 ```
 
 | Dir | What it is |
 |-----|------------|
 | [`cli/`](cli/) | The `gradient` CLI — the v1 analysis engine. The read-only `scan` pipeline runs end-to-end today. See [`cli/README.md`](cli/README.md). |
+| [`plugin/`](plugin/) | The Claude Code plugin — bundled CLI + skills; see [`plugin/README.md`](plugin/README.md). |
+| [`.claude-plugin/`](.claude-plugin/) | Marketplace manifest so this repo doubles as a plugin marketplace. |
 | [`docs/`](docs/) | Design spec and implementation plan. |
 
 ## Quickstart

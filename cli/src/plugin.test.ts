@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { VERSION } from "./version.js";
 
-export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-export const pluginDir = join(repoRoot, "plugin");
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const pluginDir = join(repoRoot, "plugin");
 
 describe("plugin is inert on install (spec §2 #1)", () => {
   it("ships no hooks, MCP servers, agents, monitors, or default settings", () => {
@@ -22,6 +22,8 @@ describe("plugin manifest", () => {
     expect(m.name).toBe("gradient");
     expect(typeof m.description).toBe("string");
     expect(typeof m.version).toBe("string");
+    // Nothing but metadata — no inline hooks/mcpServers/agents/settings sneaking in.
+    expect(Object.keys(m).sort()).toEqual(["author", "description", "homepage", "name", "version"]);
   });
 });
 
@@ -70,7 +72,7 @@ describe("plugin skills", () => {
       expect(frontmatter(s).description).toBeTruthy();
       const body = readFileSync(join(pluginDir, "skills", s, "SKILL.md"), "utf8");
       expect(body).toContain('node "${CLAUDE_PLUGIN_ROOT}/bin/gradient.mjs"');
-      expect(body).not.toMatch(/(^|[^/])\bgradient (scan|review|apply|stats|autopilot)/); // no PATH fallback
+      expect(body).not.toMatch(/(^|[^/])\bgradient (scan|review|apply|stats|autopilot|remove|list|explain|init)/); // no PATH fallback
     }
   });
   it("only autopilot is user-invocation-only", () => {

@@ -7,6 +7,6 @@ Installs the gradient CLI (bundled, no npm needed) and four skills:
 changes. Every automation gradient can set up (autopilot, session-start scans)
 stays opt-in via its own command and is reversible.
 
-Do not also run `gradient init --skill` (the npx flow's user-level skill) —
-you'd get duplicate skills. Plugin users never need `init`: the bundled CLI
-uses your existing `claude` auth by default.
+Do not also run `gradient init` from the npx flow — it installs a user-level
+gradient skill by default, and you'd get duplicate skills. Plugin users never
+need `init`: the bundled CLI uses your existing `claude` auth by default.
