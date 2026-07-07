@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { scan } from "./commands/scan.js";
-import { review, readlinePrompter } from "./commands/review.js";
+import { review, readlinePrompter, reviewJson } from "./commands/review.js";
 import { applyByIds } from "./commands/apply.js";
 import { list } from "./commands/list.js";
 import { remove } from "./commands/remove.js";
@@ -27,7 +27,7 @@ Usage:
   gradient scan --user          all projects, last 7 days (configurable)
   gradient scan --all           all projects, no time limit
     [--since 7d] [--limit N] [--max-prompts N]
-  gradient review               approve cached suggestions
+  gradient review [--json]      approve cached suggestions (--json: print them, no prompts)
   gradient apply <id|name>...   generate specific suggestions
   gradient explain <id|name>    show the evidence behind a suggestion
   gradient list                 show generated artifacts
@@ -56,6 +56,7 @@ export function parseCliArgs(argv: string[]): {
       "no-skill": { type: "boolean" },
       "session-scan": { type: "boolean" },
       detach: { type: "boolean" },
+      json: { type: "boolean" },
     },
   });
   return { command, positionals, flags: values as Record<string, string | boolean> };
@@ -127,6 +128,10 @@ export async function main(
         return 0;
       }
       case "review": {
+        if (flags.json) {
+          log(await reviewJson(projectDir));
+          return 0;
+        }
         const applied = await review(projectDir, readlinePrompter());
         log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
         for (const a of applied) {

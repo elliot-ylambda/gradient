@@ -37,3 +37,26 @@ describe("nudge hint", () => {
     expect(isNudge(s)).toBe(true);
   });
 });
+
+describe("reviewJson", () => {
+  it("prints the cached suggestions as JSON", async () => {
+    const { reviewJson } = await import("./review.js");
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const SUGGESTION = {
+      id: "abc123def4", name: "fix-push", title: "Fix push", rationale: "r",
+      evidence: { count: 3, sessions: 2 }, confidence: "high" as const,
+      payload: { type: "command" as const, commandName: "fix-push", body: "do the thing" },
+    };
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "suggestions.json"), JSON.stringify([SUGGESTION]));
+    const out = JSON.parse(await reviewJson(dir));
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe("abc123def4");
+    expect(out[0].payload.type).toBe("command");
+  });
+  it("prints [] when no cache exists", async () => {
+    const { reviewJson } = await import("./review.js");
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    expect(JSON.parse(await reviewJson(dir))).toEqual([]);
+  });
+});
