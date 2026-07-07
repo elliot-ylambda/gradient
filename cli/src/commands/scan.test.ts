@@ -92,4 +92,20 @@ describe("scan", () => {
     expect(pb).toContain(MINED_START);
     expect(pb).toContain('"continue until actually done" (seen 3× · 3 sessions)');
   });
+
+  it("excludes template floods from detection and logs the exclusion", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const flood = "Review this change for security vulnerabilities. Changed files (you may read these and any other file in the repo): " + "x".repeat(200);
+    const turns = Array.from({ length: 30 }, (_, i) => ({
+      ts: `2026-07-0${(i % 9) + 1}T00:00:00Z`, project: "p", role: "user" as const,
+      sessionId: `s${i}`, text: flood,
+    }));
+    const logs: string[] = [];
+    const out = await scan(
+      { scope: "project", projectPath: dir },
+      { backend: null, collectFn: async () => ["f"], parseFn: async () => turns, log: m => logs.push(m), config: {} },
+    );
+    expect(out).toHaveLength(0);
+    expect(logs.join("\n")).toContain("excluded 1 machine-template pattern(s)");
+  });
 });

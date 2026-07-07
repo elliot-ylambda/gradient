@@ -72,3 +72,27 @@ describe("classifyPrompts / filterPrompts", () => {
     expect(filterPrompts(turns)).toHaveLength(1);
   });
 });
+
+import { isTemplateFlood, TEMPLATE_MIN_CHARS, TEMPLATE_MIN_COUNT } from "./filter.js";
+import type { Candidate } from "./types.js";
+
+const cand = (over: Partial<Candidate>): Candidate => ({
+  kind: "unknown", signature: "x".repeat(300), examples: [], count: 30,
+  sessions: 30, sessionIds: [], confidence: "high", ...over,
+});
+
+describe("isTemplateFlood", () => {
+  it("flags long, high-volume, once-per-session clusters", () => {
+    // The dogfood case: 1,318 CI-injected security-review prompts, one per session.
+    expect(isTemplateFlood(cand({ count: 1318, sessions: 1318 }))).toBe(true);
+  });
+  it("spares short prompts regardless of volume (human habits are short)", () => {
+    expect(isTemplateFlood(cand({ signature: "continue", count: 200, sessions: 100 }))).toBe(false);
+  });
+  it("spares low counts (single pastes, small repeats)", () => {
+    expect(isTemplateFlood(cand({ count: TEMPLATE_MIN_COUNT - 1, sessions: TEMPLATE_MIN_COUNT - 1 }))).toBe(false);
+  });
+  it("spares within-session repetition (occurrences ≫ sessions = a human habit)", () => {
+    expect(isTemplateFlood(cand({ count: 60, sessions: 10 }))).toBe(false);
+  });
+});

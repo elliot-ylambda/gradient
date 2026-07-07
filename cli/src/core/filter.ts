@@ -1,4 +1,4 @@
-import type { Turn } from "./types.js";
+import type { Turn, Candidate } from "./types.js";
 
 const INJECTED_PATTERNS: RegExp[] = [
   /^<command-(name|message|args)/i,
@@ -48,4 +48,16 @@ export function classifyPrompts(turns: Turn[], ignore: RegExp[] = []): Record<Pr
 
 export function filterPrompts(turns: Turn[], ignore: RegExp[] = []): Turn[] {
   return classifyPrompts(turns, ignore).human;
+}
+
+/** Template floods: long, voluminous, ~once-per-session → machine-injected, not a habit (spec §3 A1). */
+export const TEMPLATE_MIN_CHARS = 240;
+export const TEMPLATE_MIN_COUNT = 25;
+
+export function isTemplateFlood(c: Candidate): boolean {
+  return (
+    c.signature.length > TEMPLATE_MIN_CHARS &&
+    c.count >= TEMPLATE_MIN_COUNT &&
+    c.sessions >= Math.ceil(c.count * 0.9)
+  );
 }
