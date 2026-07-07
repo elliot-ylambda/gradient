@@ -66,7 +66,7 @@ Clustering is local and LLM-free; only short candidate snippets ever reach a mod
 The most-mined pattern in every history is the nudge — `continue`, `what's
 next?` — typed hundreds of times. `gradient autopilot` automates exactly that:
 a `Stop` hook that answers the way *you* would, using the phrasings mined into
-your playbook (`~/.config/gradient/playbook.md`, yours to edit — `scan`
+your `gradient.md` (`~/.config/gradient/gradient.md`, yours to edit — `scan`
 refreshes only its marked region).
 
 ```bash
@@ -81,6 +81,24 @@ stands down when Claude stops twice with no new tool activity, and fail-open
 errors — anything unexpected means Claude just stops normally. Your permission
 prompts still gate dangerous tools; autopilot cannot answer those.
 
+**Per-repo limits.** Drop a committed `gradient.md` at a repo root to bound
+autopilot for everyone who works there. Optional frontmatter clamps authority —
+it can only *lower* it, never raise your global setting:
+
+```yaml
+---
+autopilot:
+  max-mode: nudge   # ceiling here: off | nudge | full
+  budget: 5         # max auto-responses per session in this repo
+---
+## Rules
+- Never push, deploy, or publish from autopilot in this repo.
+```
+
+Everything below the frontmatter is prose the auto-responder reads as context.
+Malformed frontmatter turns autopilot off for that repo; `gradient autopilot
+status` shows the effective mode.
+
 ## Develop
 
 ```bash
@@ -91,7 +109,7 @@ cd cli && npm install && npm test && npm run build
 
 v1 is the **offline analysis engine**: it mines transcripts and proposes
 slash-command / loop / hook artifacts you approve, with continuous mining
-keeping the playbook fresh. The autopilot loop — `gradient autopilot`, an
+keeping your `gradient.md` fresh. The autopilot loop — `gradient autopilot`, an
 opt-in `Stop`-hook auto-responder — has now shipped as well; see the
 "Autopilot (opt-in)" section above.
 

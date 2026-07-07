@@ -5,6 +5,7 @@ import { join, dirname } from "node:path";
 import {
   generatePlaybook, writePlaybook, loadPlaybook, playbookPath,
   isNudge, DEFAULT_PLAYBOOK, MINED_START, MINED_END,
+  parseProjectPlaybook, clampMode, projectPlaybookPath, loadProjectPlaybook,
 } from "./playbook.js";
 import type { Suggestion } from "./types.js";
 
@@ -59,7 +60,7 @@ describe("generatePlaybook", () => {
 });
 
 describe("writePlaybook / loadPlaybook", () => {
-  it("writes to ~/.config/gradient/playbook.md and loads it back", async () => {
+  it("writes to ~/.config/gradient/gradient.md and loads it back", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const path = await writePlaybook([nudge], home);
     expect(path).toBe(playbookPath(home));
@@ -88,5 +89,135 @@ describe("writePlaybook / loadPlaybook", () => {
     expect(await writePlaybook([nudge], home)).toBeNull();
     // The directory must still be there — nothing was overwritten.
     expect((await stat(path)).isDirectory()).toBe(true);
+  });
+});
+
+describe("playbookPath", () => {
+  it("points at gradient.md under the config dir", () => {
+    expect(playbookPath("/home/u")).toBe("/home/u/.config/gradient/gradient.md");
+  });
+});
+
+describe("DEFAULT_PLAYBOOK", () => {
+  it("is titled gradient.md and keeps the mined markers + Rules", () => {
+    expect(DEFAULT_PLAYBOOK).toContain("# gradient.md");
+    expect(DEFAULT_PLAYBOOK).toContain(MINED_START);
+    expect(DEFAULT_PLAYBOOK).toContain("## Rules");
+  });
+});
+
+describe("clampMode", () => {
+  it("returns the lower authority on off < nudge < full", () => {
+    expect(clampMode("full", "nudge")).toBe("nudge");
+    expect(clampMode("nudge", "full")).toBe("nudge");
+    expect(clampMode("nudge", "off")).toBe("off");
+    expect(clampMode("full", "full")).toBe("full");
+  });
+});
+
+describe("parseProjectPlaybook", () => {
+  it("no frontmatter → all prose, no clamps", () => {
+    const r = parseProjectPlaybook("## Rules\n- be careful\n");
+    expect(r.clamps).toEqual({});
+    expect(r.prose).toContain("be careful");
+  });
+
+  it("reads max-mode and budget; prose excludes the frontmatter", () => {
+    const raw = "---\nautopilot:\n  max-mode: nudge\n  budget: 5\n---\n## Rules\n- no pushes\n";
+    const r = parseProjectPlaybook(raw);
+    expect(r.clamps).toEqual({ maxMode: "nudge", budget: 5 });
+    expect(r.prose).toContain("no pushes");
+    expect(r.prose).not.toContain("max-mode");
+  });
+
+  it("each clamp is independent — max-mode without budget", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: off\n---\nx\n");
+    expect(r.clamps).toEqual({ maxMode: "off" });
+  });
+
+  it("unknown keys are ignored", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: full\n  future: 9\n---\nx\n");
+    expect(r.clamps).toEqual({ maxMode: "full" });
+  });
+
+  it("unclosed frontmatter → malformed", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: nudge\n## Rules\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("bad max-mode value → malformed", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: turbo\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("bad budget value → malformed", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  budget: lots\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("recognized key with trailing text → malformed, never silently ignored", () => {
+    // If this were ignored instead, the repo would get MORE authority than
+    // the author intended — the one direction clamps must never fail.
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: nudge # weekdays only\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("recognized key with empty value → malformed", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  budget:\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("CRLF line endings still honor clamps", () => {
+    const r = parseProjectPlaybook("---\r\nautopilot:\r\n  max-mode: nudge\r\n  budget: 5\r\n---\r\nprose\r\n");
+    expect(r.clamps).toEqual({ maxMode: "nudge", budget: 5 });
+    expect(r.prose).toContain("prose");
+  });
+
+  it("space before the colon on a known key still applies the clamp (not silently dropped)", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode : off\n---\nx\n");
+    expect(r.clamps).toEqual({ maxMode: "off" });
+  });
+
+  it("uppercase known key is recognized; a bad value then fails closed", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  MAX-MODE: turbo\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("space before the colon on budget still clamps", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  budget : 3\n---\nx\n");
+    expect(r.clamps).toEqual({ budget: 3 });
+  });
+
+  it("genuinely unknown keys are still ignored (forward-compat preserved)", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: full\n  future: 9\n---\nx\n");
+    expect(r.clamps).toEqual({ maxMode: "full" });
+  });
+});
+
+describe("projectPlaybookPath / loadProjectPlaybook", () => {
+  it("path is <cwd>/gradient.md", () => {
+    expect(projectPlaybookPath("/repo")).toBe("/repo/gradient.md");
+  });
+
+  it("missing file → null", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-proj-"));
+    expect(await loadProjectPlaybook(dir)).toBeNull();
+  });
+
+  it("present file → parsed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-proj-"));
+    await writeFile(join(dir, "gradient.md"), "---\nautopilot:\n  budget: 3\n---\n## Rules\n- careful\n");
+    const r = await loadProjectPlaybook(dir);
+    expect(r?.clamps).toEqual({ budget: 3 });
+    expect(r?.prose).toContain("careful");
+  });
+
+  it("unreadable file (directory) fails closed with malformed clamp", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-proj-"));
+    const gradPath = join(dir, "gradient.md");
+    // Create a directory at the playbook path to trigger EISDIR error
+    await mkdir(gradPath);
+    const r = await loadProjectPlaybook(dir);
+    expect(r?.clamps.malformed).toBe(true);
   });
 });

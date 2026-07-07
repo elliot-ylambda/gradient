@@ -1,5 +1,10 @@
 # gradient Autopilot (Personalized Auto-Responder) Implementation Plan
 
+> **Amended 2026-07-03:** the playbook artifact was renamed to `gradient.md`
+> and gained a per-project layer. See
+> [`2026-07-01-gradient-md-design.md`](../specs/2026-07-01-gradient-md-design.md).
+> References to `playbook.md` below are preserved as the original record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship `gradient autopilot` — an opt-in Stop-hook auto-responder that nudges Claude Code with the user's own mined phrasings when work is unfinished, per `docs/superpowers/specs/2026-07-01-gradient-auto-responder-design.md`.

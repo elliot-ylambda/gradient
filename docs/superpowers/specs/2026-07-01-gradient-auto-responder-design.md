@@ -1,5 +1,10 @@
 # gradient — Personalized Auto-Responder (`autopilot`): Design
 
+> **Amended 2026-07-03:** the playbook artifact was renamed to `gradient.md`
+> and gained a per-project layer. See
+> [`2026-07-01-gradient-md-design.md`](./2026-07-01-gradient-md-design.md).
+> References to `playbook.md` below are preserved as the original record.
+
 **Date:** 2026-07-01
 **Status:** Approved (brainstorming complete; implementation plan pending)
 **Scope:** Third sub-project of `gradient` — the phase-2 autopilot deferred from

@@ -2,7 +2,7 @@ import { access } from "node:fs/promises";
 import { loadConfig, saveConfig, DEFAULT_AUTOPILOT_BUDGET } from "../config.js";
 import { installHook, removeHook, hookInstalled } from "../core/settings.js";
 import { latestState } from "../core/state.js";
-import { playbookPath } from "../core/playbook.js";
+import { playbookPath, projectPlaybookPath, loadProjectPlaybook, clampMode } from "../core/playbook.js";
 import type { AutopilotLogEntry, AutopilotMode } from "../core/types.js";
 
 export type { AutopilotMode }; // single source of truth: core/types.ts
@@ -36,9 +36,14 @@ export async function setAutopilotMode(
 
 export interface AutopilotStatus {
   mode: AutopilotMode;
+  effectiveMode: AutopilotMode;   // mode after this repo's project clamp
   budget: number;
+  effectiveBudget: number;        // budget after this repo's project clamp
   playbookPath: string;
   playbookExists: boolean;
+  projectPlaybookPath: string;
+  projectPlaybookExists: boolean;
+  projectMalformed: boolean;
   hookInstalled: boolean;
   recent: AutopilotLogEntry[];
 }
@@ -55,12 +60,37 @@ export async function autopilotStatus(
   } catch {
     playbookExists = false;
   }
+
+  const mode = (config.autopilot ?? "off") as AutopilotMode;
+  const project = await loadProjectPlaybook(projectDir);
+  let effectiveMode = mode;
+  let projectMalformed = false;
+  if (project) {
+    if (project.clamps.malformed) {
+      effectiveMode = "off";
+      projectMalformed = true;
+    } else if (project.clamps.maxMode) {
+      effectiveMode = clampMode(effectiveMode, project.clamps.maxMode);
+    }
+  }
+
+  const budget = config.autopilotBudget ?? DEFAULT_AUTOPILOT_BUDGET;
+  let effectiveBudget = budget;
+  if (project && !project.clamps.malformed && project.clamps.budget !== undefined) {
+    effectiveBudget = Math.min(budget, project.clamps.budget);
+  }
+
   const latest = await latestState(opts.home);
   return {
-    mode: (config.autopilot ?? "off") as AutopilotMode,
-    budget: config.autopilotBudget ?? DEFAULT_AUTOPILOT_BUDGET,
+    mode,
+    effectiveMode,
+    budget,
+    effectiveBudget,
     playbookPath: pbPath,
     playbookExists,
+    projectPlaybookPath: projectPlaybookPath(projectDir),
+    projectPlaybookExists: project !== null,
+    projectMalformed,
     hookInstalled: await hookInstalled(projectDir, "Stop", RESPOND_HOOK_COMMAND),
     recent: latest?.state.log.slice(-STATUS_RECENT) ?? [],
   };

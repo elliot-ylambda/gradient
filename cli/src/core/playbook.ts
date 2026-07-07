@@ -1,12 +1,12 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import type { Suggestion } from "./types.js";
+import type { Suggestion, AutopilotMode } from "./types.js";
 
 export const MINED_START = "<!-- gradient:mined:start -->";
 export const MINED_END = "<!-- gradient:mined:end -->";
 
-export const DEFAULT_PLAYBOOK = `# gradient autopilot playbook
+export const DEFAULT_PLAYBOOK = `# gradient.md — autopilot playbook
 
 The Rules section is yours — edit freely. \`gradient scan\` refreshes only the
 region between the mined markers.
@@ -23,7 +23,7 @@ ${MINED_END}
 `;
 
 export function playbookPath(home?: string): string {
-  return join(home ?? homedir(), ".config", "gradient", "playbook.md");
+  return join(home ?? homedir(), ".config", "gradient", "gradient.md");
 }
 
 /** A nudge is a cadence-less loop suggestion — "continue"-style, not scheduled. */
@@ -88,5 +88,86 @@ export async function loadPlaybook(home?: string): Promise<string> {
     return await readFile(playbookPath(home), "utf8");
   } catch {
     return DEFAULT_PLAYBOOK;
+  }
+}
+
+export interface ProjectClamps {
+  maxMode?: AutopilotMode;  // ceiling in this repo; absent = no mode clamp
+  budget?: number;          // ceiling in this repo; absent = no budget clamp
+  malformed?: boolean;      // frontmatter present but unparseable → treat as off
+}
+
+export interface ProjectPlaybook {
+  prose: string;            // file minus its frontmatter block; judge context
+  clamps: ProjectClamps;
+}
+
+const MODE_RANK: Record<AutopilotMode, number> = { off: 0, nudge: 1, full: 2 };
+
+/** The lower authority of two modes on off < nudge < full. */
+export function clampMode(a: AutopilotMode, b: AutopilotMode): AutopilotMode {
+  return MODE_RANK[a] <= MODE_RANK[b] ? a : b;
+}
+
+export function projectPlaybookPath(cwd: string): string {
+  return join(cwd, "gradient.md");
+}
+
+const isMode = (v: string): v is AutopilotMode => v === "off" || v === "nudge" || v === "full";
+
+/**
+ * Lenient line scanner for the optional frontmatter clamp block. Recognizes
+ * `max-mode:` and `budget:` lines anywhere inside the block (the `autopilot:`
+ * grouping line is decorative); unknown keys ignored. No frontmatter → all
+ * prose, empty clamps. Unclosed block, or a recognized key whose value is
+ * anything but a clean valid token → { malformed: true } (caller clamps that
+ * repo to off). Key-first, then validate: a recognized key with a bad or
+ * decorated value must fail closed, never be silently ignored. Key matching
+ * tolerates surrounding whitespace and is case-insensitive.
+ */
+export function parseProjectPlaybook(raw: string): ProjectPlaybook {
+  const lines = raw.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") return { prose: raw, clamps: {} }; // no frontmatter
+  let end = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") { end = i; break; }
+  }
+  if (end === -1) return { prose: raw, clamps: { malformed: true } }; // unclosed
+
+  const clamps: ProjectClamps = {};
+  const malformed = (): ProjectPlaybook => ({ prose: bodyAfter(lines, end), clamps: { malformed: true } });
+  for (let i = 1; i < end; i++) {
+    const modeM = lines[i].match(/^\s*max-mode\s*:(.*)$/i);
+    if (modeM) {
+      const v = modeM[1].trim();
+      if (!isMode(v)) return malformed();
+      clamps.maxMode = v;
+      continue;
+    }
+    const budgetM = lines[i].match(/^\s*budget\s*:(.*)$/i);
+    if (budgetM) {
+      const v = budgetM[1].trim();
+      const n = Number(v);
+      if (v === "" || !Number.isInteger(n) || n < 0) return malformed();
+      clamps.budget = n;
+    }
+  }
+  return { prose: bodyAfter(lines, end), clamps };
+}
+
+function bodyAfter(lines: string[], end: number): string {
+  return lines.slice(end + 1).join("\n");
+}
+
+/** The committed per-project gradient.md, or null when the repo has none.
+ * Missing file (ENOENT) → null (no clamp). Unreadable file → { prose: "", clamps: { malformed: true } }
+ * (a present-but-unreadable gradient.md must not grant authority). */
+export async function loadProjectPlaybook(cwd: string): Promise<ProjectPlaybook | null> {
+  try {
+    return parseProjectPlaybook(await readFile(projectPlaybookPath(cwd), "utf8"));
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") return null; // no file → no clamp, no prose
+    return { prose: "", clamps: { malformed: true } }; // unreadable → fail closed
   }
 }
