@@ -1,0 +1,11 @@
+{
+  "name": "gradient",
+  "owner": { "name": "ylambda" },
+  "plugins": [
+    {
+      "name": "gradient",
+      "source": "./plugin",
+      "description": "Turn the prompts you keep retyping into Claude Code automations, mined from your own history."
+    }
+  ]
+}
