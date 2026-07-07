@@ -32,3 +32,10 @@ npm install
 npm test         # vitest
 npm run build    # tsc → dist/
 ```
+
+## Releasing
+
+1. Bump `version` in `package.json`.
+2. `npm run build:plugin` — regenerates `../plugin/bin/gradient.mjs` and syncs
+   `../plugin/.claude-plugin/plugin.json`. Commit both with the bump
+   (the version-sync test fails otherwise).

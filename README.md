@@ -41,7 +41,14 @@ gradient/
 | [`cli/`](cli/) | The `gradient` CLI — the v1 analysis engine. The read-only `scan` pipeline runs end-to-end today. See [`cli/README.md`](cli/README.md). |
 | [`docs/`](docs/) | Design spec and implementation plan. |
 
-## Quickstart (CLI)
+## Quickstart
+
+**Plugin (recommended):** in Claude Code run
+`/plugin marketplace add ylambda/gradient` then `/plugin install gradient`,
+and use `/gradient:scan` → `/gradient:review`. Installing runs nothing —
+every automation stays opt-in.
+
+**CLI (npx):**
 
 ```bash
 npx gradient scan        # this project's history (all of it)

@@ -13,8 +13,9 @@ artifacts you approve.
 Run the CLI and show the user the results:
 
 - `gradient scan` — analyze recent history, print + cache suggestions (read-only).
-- `gradient review` — walk through cached suggestions and approve them.
-- `gradient apply <id>` — generate a specific suggestion non-interactively.
+- `gradient review --json` — list cached suggestions; present them and let the
+  user choose (the interactive `gradient review` is for the terminal, not here).
+- `gradient apply <id>` — generate an approved suggestion non-interactively.
 - `gradient list` / `gradient remove <name>` — manage what was generated.
 
 Always run `gradient scan` first, summarize the suggestions for the user, and
