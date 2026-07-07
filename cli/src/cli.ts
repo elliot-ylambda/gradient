@@ -199,9 +199,14 @@ export async function main(
         }
         const s = await autopilotStatus(projectDir);
         log(banner(VERSION));
-        log(`${c.muted("mode:")} ${c.bold(s.mode)}`);
+        log(`${c.muted("mode:")} ${c.bold(s.mode)}${s.effectiveMode !== s.mode ? c.dim(` → ${s.effectiveMode} here (clamped by project gradient.md)`) : ""}`);
         log(`${c.muted("budget:")} ${s.budget} auto-responses/session`);
-        log(`${c.muted("playbook:")} ${s.playbookPath}${s.playbookExists ? "" : c.dim(" (not yet generated — run gradient scan)")}`);
+        log(`${c.muted("gradient.md:")} ${s.playbookPath}${s.playbookExists ? "" : c.dim(" (not yet generated — run gradient scan)")}`);
+        log(
+          `${c.muted("project gradient.md:")} ${s.projectPlaybookExists
+            ? s.projectPlaybookPath + (s.projectMalformed ? c.coral(" (malformed — autopilot off here)") : "")
+            : c.dim("none in this repo")}`,
+        );
         log(`${c.muted("stop hook here:")} ${s.hookInstalled ? c.ok("installed") : "not installed"}`);
         for (const e of s.recent) {
           log(`  ${c.dim(e.ts)} ${e.action === "continue" ? c.ok("continued") : c.muted("stood down")}  ${c.dim(e.why)}`);

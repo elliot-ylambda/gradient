@@ -3,7 +3,7 @@ import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { setAutopilotMode, autopilotStatus, RESPOND_HOOK_COMMAND } from "./autopilot.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, saveConfig } from "../config.js";
 import { hookInstalled } from "../core/settings.js";
 import { saveState, freshState } from "../core/state.js";
 import { playbookPath } from "../core/playbook.js";
@@ -65,5 +65,37 @@ describe("autopilotStatus", () => {
     expect(s.hookInstalled).toBe(true);
     expect(s.recent).toHaveLength(1);
     expect(s.recent[0].why).toBe("open todos");
+  });
+});
+
+describe("autopilotStatus project layer", () => {
+  it("no project file → effectiveMode equals config mode; not malformed", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await saveConfig({ autopilot: "full" }, home);
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-repo-"));
+    const s = await autopilotStatus(projectDir, { home });
+    expect(s.effectiveMode).toBe("full");
+    expect(s.projectPlaybookExists).toBe(false);
+    expect(s.projectMalformed).toBe(false);
+  });
+
+  it("project max-mode clamps the effective mode below config", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await saveConfig({ autopilot: "full" }, home);
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-repo-"));
+    await writeFile(join(projectDir, "gradient.md"), "---\nautopilot:\n  max-mode: nudge\n---\n");
+    const s = await autopilotStatus(projectDir, { home });
+    expect(s.effectiveMode).toBe("nudge");
+    expect(s.projectPlaybookExists).toBe(true);
+  });
+
+  it("malformed project file → effectiveMode off, projectMalformed true", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await saveConfig({ autopilot: "full" }, home);
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-repo-"));
+    await writeFile(join(projectDir, "gradient.md"), "---\nautopilot:\n  max-mode: turbo\n---\n");
+    const s = await autopilotStatus(projectDir, { home });
+    expect(s.effectiveMode).toBe("off");
+    expect(s.projectMalformed).toBe(true);
   });
 });
