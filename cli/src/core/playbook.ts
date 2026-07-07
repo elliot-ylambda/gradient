@@ -125,7 +125,7 @@ const isMode = (v: string): v is AutopilotMode => v === "off" || v === "nudge" |
  * decorated value must fail closed, never be silently ignored.
  */
 export function parseProjectPlaybook(raw: string): ProjectPlaybook {
-  const lines = raw.split("\n");
+  const lines = raw.split(/\r?\n/);
   if (lines[0]?.trim() !== "---") return { prose: raw, clamps: {} }; // no frontmatter
   let end = -1;
   for (let i = 1; i < lines.length; i++) {
@@ -158,11 +158,15 @@ function bodyAfter(lines: string[], end: number): string {
   return lines.slice(end + 1).join("\n");
 }
 
-/** The committed per-project gradient.md, or null when the repo has none. */
+/** The committed per-project gradient.md, or null when the repo has none.
+ * Missing file (ENOENT) → null (no clamp). Unreadable file → { prose: "", clamps: { malformed: true } }
+ * (a present-but-unreadable gradient.md must not grant authority). */
 export async function loadProjectPlaybook(cwd: string): Promise<ProjectPlaybook | null> {
   try {
     return parseProjectPlaybook(await readFile(projectPlaybookPath(cwd), "utf8"));
-  } catch {
-    return null; // no file → no clamp, no prose
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") return null; // no file → no clamp, no prose
+    return { prose: "", clamps: { malformed: true } }; // unreadable → fail closed
   }
 }

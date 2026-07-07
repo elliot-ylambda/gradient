@@ -166,6 +166,12 @@ describe("parseProjectPlaybook", () => {
     const r = parseProjectPlaybook("---\nautopilot:\n  budget:\n---\nx\n");
     expect(r.clamps.malformed).toBe(true);
   });
+
+  it("CRLF line endings still honor clamps", () => {
+    const r = parseProjectPlaybook("---\r\nautopilot:\r\n  max-mode: nudge\r\n  budget: 5\r\n---\r\nprose\r\n");
+    expect(r.clamps).toEqual({ maxMode: "nudge", budget: 5 });
+    expect(r.prose).toContain("prose");
+  });
 });
 
 describe("projectPlaybookPath / loadProjectPlaybook", () => {
@@ -184,5 +190,14 @@ describe("projectPlaybookPath / loadProjectPlaybook", () => {
     const r = await loadProjectPlaybook(dir);
     expect(r?.clamps).toEqual({ budget: 3 });
     expect(r?.prose).toContain("careful");
+  });
+
+  it("unreadable file (directory) fails closed with malformed clamp", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-proj-"));
+    const gradPath = join(dir, "gradient.md");
+    // Create a directory at the playbook path to trigger EISDIR error
+    await mkdir(gradPath);
+    const r = await loadProjectPlaybook(dir);
+    expect(r?.clamps.malformed).toBe(true);
   });
 });
