@@ -122,7 +122,8 @@ const isMode = (v: string): v is AutopilotMode => v === "off" || v === "nudge" |
  * prose, empty clamps. Unclosed block, or a recognized key whose value is
  * anything but a clean valid token → { malformed: true } (caller clamps that
  * repo to off). Key-first, then validate: a recognized key with a bad or
- * decorated value must fail closed, never be silently ignored.
+ * decorated value must fail closed, never be silently ignored. Key matching
+ * tolerates surrounding whitespace and is case-insensitive.
  */
 export function parseProjectPlaybook(raw: string): ProjectPlaybook {
   const lines = raw.split(/\r?\n/);
@@ -136,14 +137,14 @@ export function parseProjectPlaybook(raw: string): ProjectPlaybook {
   const clamps: ProjectClamps = {};
   const malformed = (): ProjectPlaybook => ({ prose: bodyAfter(lines, end), clamps: { malformed: true } });
   for (let i = 1; i < end; i++) {
-    const modeM = lines[i].match(/^\s*max-mode:(.*)$/);
+    const modeM = lines[i].match(/^\s*max-mode\s*:(.*)$/i);
     if (modeM) {
       const v = modeM[1].trim();
       if (!isMode(v)) return malformed();
       clamps.maxMode = v;
       continue;
     }
-    const budgetM = lines[i].match(/^\s*budget:(.*)$/);
+    const budgetM = lines[i].match(/^\s*budget\s*:(.*)$/i);
     if (budgetM) {
       const v = budgetM[1].trim();
       const n = Number(v);

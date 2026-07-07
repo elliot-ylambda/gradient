@@ -172,6 +172,26 @@ describe("parseProjectPlaybook", () => {
     expect(r.clamps).toEqual({ maxMode: "nudge", budget: 5 });
     expect(r.prose).toContain("prose");
   });
+
+  it("space before the colon on a known key still applies the clamp (not silently dropped)", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode : off\n---\nx\n");
+    expect(r.clamps).toEqual({ maxMode: "off" });
+  });
+
+  it("uppercase known key is recognized; a bad value then fails closed", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  MAX-MODE: turbo\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("space before the colon on budget still clamps", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  budget : 3\n---\nx\n");
+    expect(r.clamps).toEqual({ budget: 3 });
+  });
+
+  it("genuinely unknown keys are still ignored (forward-compat preserved)", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: full\n  future: 9\n---\nx\n");
+    expect(r.clamps).toEqual({ maxMode: "full" });
+  });
 });
 
 describe("projectPlaybookPath / loadProjectPlaybook", () => {
