@@ -110,8 +110,15 @@ export interface ToolEvent {
 - `core/settings.ts#installHook` generalizes to accept `{event, matcher?,
   command}` alongside the existing gradient-subcommand form. Idempotent
   merge and the corrupt-settings refusal (Spec 1) are unchanged.
-- Manifest entries for command hooks record the full hook shape so `remove`
-  deletes exactly what was added.
+- **Deliberate behavior change, command hooks only:** today `apply` merely
+  *prints* hook payloads as a settings patch (`core/apply.ts`). A command
+  hook instead installs through the corrupt-refusing merge on `apply` —
+  `apply` is the approval, and printing a JSON patch for hand-editing is
+  exactly the retyping gradient exists to kill. Gradient-subcommand hook
+  payloads keep their existing print-only behavior, unchanged.
+- Manifest entries for command hooks record the full hook shape
+  (`{event, matcher?, command}`) so `remove` uninstalls exactly what was
+  added, via `removeHook`.
 
 ## 7. `insights` integration (additive)
 
