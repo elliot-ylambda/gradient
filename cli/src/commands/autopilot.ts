@@ -38,6 +38,7 @@ export interface AutopilotStatus {
   mode: AutopilotMode;
   effectiveMode: AutopilotMode;   // mode after this repo's project clamp
   budget: number;
+  effectiveBudget: number;        // budget after this repo's project clamp
   playbookPath: string;
   playbookExists: boolean;
   projectPlaybookPath: string;
@@ -73,11 +74,18 @@ export async function autopilotStatus(
     }
   }
 
+  const budget = config.autopilotBudget ?? DEFAULT_AUTOPILOT_BUDGET;
+  let effectiveBudget = budget;
+  if (project && !project.clamps.malformed && project.clamps.budget !== undefined) {
+    effectiveBudget = Math.min(budget, project.clamps.budget);
+  }
+
   const latest = await latestState(opts.home);
   return {
     mode,
     effectiveMode,
-    budget: config.autopilotBudget ?? DEFAULT_AUTOPILOT_BUDGET,
+    budget,
+    effectiveBudget,
     playbookPath: pbPath,
     playbookExists,
     projectPlaybookPath: projectPlaybookPath(projectDir),

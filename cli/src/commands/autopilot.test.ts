@@ -77,6 +77,7 @@ describe("autopilotStatus project layer", () => {
     expect(s.effectiveMode).toBe("full");
     expect(s.projectPlaybookExists).toBe(false);
     expect(s.projectMalformed).toBe(false);
+    expect(s.effectiveBudget).toBe(s.budget);
   });
 
   it("project max-mode clamps the effective mode below config", async () => {
@@ -89,6 +90,17 @@ describe("autopilotStatus project layer", () => {
     expect(s.projectPlaybookExists).toBe(true);
   });
 
+  it("project budget clamps the effective budget below config", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await saveConfig({ autopilot: "nudge", autopilotBudget: 10 }, home);
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-repo-"));
+    await writeFile(join(projectDir, "gradient.md"), "---\nautopilot:\n  budget: 3\n---\n");
+    const s = await autopilotStatus(projectDir, { home });
+    expect(s.budget).toBe(10);
+    expect(s.effectiveBudget).toBe(3);
+    expect(s.projectPlaybookExists).toBe(true);
+  });
+
   it("malformed project file → effectiveMode off, projectMalformed true", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     await saveConfig({ autopilot: "full" }, home);
@@ -97,5 +109,6 @@ describe("autopilotStatus project layer", () => {
     const s = await autopilotStatus(projectDir, { home });
     expect(s.effectiveMode).toBe("off");
     expect(s.projectMalformed).toBe(true);
+    expect(s.projectPlaybookExists).toBe(true);
   });
 });
