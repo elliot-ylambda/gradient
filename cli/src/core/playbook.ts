@@ -6,7 +6,7 @@ import type { Suggestion } from "./types.js";
 export const MINED_START = "<!-- gradient:mined:start -->";
 export const MINED_END = "<!-- gradient:mined:end -->";
 
-export const DEFAULT_PLAYBOOK = `# gradient autopilot playbook
+export const DEFAULT_PLAYBOOK = `# gradient.md — autopilot playbook
 
 The Rules section is yours — edit freely. \`gradient scan\` refreshes only the
 region between the mined markers.
@@ -23,7 +23,7 @@ ${MINED_END}
 `;
 
 export function playbookPath(home?: string): string {
-  return join(home ?? homedir(), ".config", "gradient", "playbook.md");
+  return join(home ?? homedir(), ".config", "gradient", "gradient.md");
 }
 
 /** A nudge is a cadence-less loop suggestion — "continue"-style, not scheduled. */

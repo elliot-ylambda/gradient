@@ -59,7 +59,7 @@ describe("generatePlaybook", () => {
 });
 
 describe("writePlaybook / loadPlaybook", () => {
-  it("writes to ~/.config/gradient/playbook.md and loads it back", async () => {
+  it("writes to ~/.config/gradient/gradient.md and loads it back", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const path = await writePlaybook([nudge], home);
     expect(path).toBe(playbookPath(home));
@@ -88,5 +88,19 @@ describe("writePlaybook / loadPlaybook", () => {
     expect(await writePlaybook([nudge], home)).toBeNull();
     // The directory must still be there — nothing was overwritten.
     expect((await stat(path)).isDirectory()).toBe(true);
+  });
+});
+
+describe("playbookPath", () => {
+  it("points at gradient.md under the config dir", () => {
+    expect(playbookPath("/home/u")).toBe("/home/u/.config/gradient/gradient.md");
+  });
+});
+
+describe("DEFAULT_PLAYBOOK", () => {
+  it("is titled gradient.md and keeps the mined markers + Rules", () => {
+    expect(DEFAULT_PLAYBOOK).toContain("# gradient.md");
+    expect(DEFAULT_PLAYBOOK).toContain(MINED_START);
+    expect(DEFAULT_PLAYBOOK).toContain("## Rules");
   });
 });

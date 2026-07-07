@@ -83,9 +83,9 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
 
   try {
     const pb = await writePlaybook(valid, opts.home);
-    log(pb ? `playbook updated → ${pb}` : "playbook markers missing — left untouched");
+    log(pb ? `gradient.md updated → ${pb}` : "gradient.md markers missing — left untouched");
   } catch (e) {
-    log(`playbook update failed: ${(e as Error).message}`); // never fails the scan
+    log(`gradient.md update failed: ${(e as Error).message}`); // never fails the scan
   }
 
   return valid;
