@@ -11,6 +11,7 @@ import { detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
 import { gradientDir } from "../core/manifest.js";
 import { writePlaybook } from "../core/playbook.js";
+import { findHusks, findMissingSessions } from "../core/coverage.js";
 import { selectBackend } from "../llm/index.js";
 import { loadConfig } from "../config.js";
 import type { LLMBackend } from "../llm/backend.js";
@@ -31,6 +32,8 @@ export interface ScanDeps {
   config?: Config;
   collectFn?: (o: ScanOptions) => Promise<string[]>;
   parseFn?: (path: string) => Promise<Turn[]>;
+  /** Injectable Claude-Session trailer source for the coverage check. */
+  gitLogFn?: (dir: string, sinceDays: number) => Promise<string>;
   log?: (msg: string) => void;
 }
 
@@ -42,7 +45,33 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const files = await collectFn(opts);
   log(`files: ${files.length} transcripts`);
   const turns: Turn[] = [];
-  for (const f of files) turns.push(...(await parseFn(f)));
+  const userTurnCounts = new Map<string, number>();
+  for (const f of files) {
+    const t = await parseFn(f);
+    userTurnCounts.set(f, t.length);
+    turns.push(...t);
+  }
+
+  const projectDir = opts.projectPath ?? process.cwd();
+
+  // Coverage sanity: a scan over a silently shrunken corpus (bridged sessions whose
+  // prompts live only at claude.ai, transcripts reaped by retention) looks identical to
+  // a complete one — make the gaps loud. Advisory only; never fails the scan.
+  try {
+    const husks = await findHusks(files, userTurnCounts);
+    if (husks.length > 0) {
+      log(`coverage: ${husks.length} bridged transcript(s) contain no minable prompts — those conversations live only at claude.ai`);
+    }
+    const missing = await findMissingSessions(projectDir, files, {
+      sinceDays: opts.sinceDays,
+      gitLogFn: deps.gitLogFn,
+    });
+    if (missing.length > 0) {
+      log(`coverage: ${missing.length} session(s) in recent Claude-Session git trailers have no local transcript (cloud-only, another machine, or cleaned up) — results under-represent them`);
+    }
+  } catch (e) {
+    log(`coverage check failed: ${(e as Error).message}`);
+  }
 
   const prompts = filterPrompts(turns);
   log(`prompts: ${prompts.length} after filtering injected text`);
@@ -75,7 +104,6 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     }
   }
 
-  const projectDir = opts.projectPath ?? process.cwd();
   const gdir = gradientDir(projectDir);
   await mkdir(gdir, { recursive: true });
   await writeFile(join(gdir, "suggestions.json"), JSON.stringify(valid, null, 2));

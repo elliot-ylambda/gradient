@@ -18,6 +18,20 @@ describe("collect helpers", () => {
 });
 
 describe("collect", () => {
+  it("project scope sweeps the project's claude-worktrees sibling dirs", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-"));
+    const root = join(home, ".claude", "projects");
+    const enc = encodeProjectDir("/p/x");
+    await mkdir(join(root, enc), { recursive: true });
+    await mkdir(join(root, `${enc}--claude-worktrees-feat`), { recursive: true });
+    await mkdir(join(root, `${enc}-other`), { recursive: true }); // different project sharing the prefix
+    await writeFile(join(root, enc, "a.jsonl"), "{}");
+    await writeFile(join(root, `${enc}--claude-worktrees-feat`, "wt.jsonl"), "{}");
+    await writeFile(join(root, `${enc}-other`, "n.jsonl"), "{}");
+    const files = await collect({ scope: "project", projectPath: "/p/x", home });
+    expect(files.map(f => f.split("/").pop()).sort()).toEqual(["a.jsonl", "wt.jsonl"]);
+  });
+
   it("finds project jsonl files and skips subagents", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-"));
     const proj = join(home, ".claude", "projects", encodeProjectDir("/p/x"));

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scan } from "./scan.js";
@@ -63,6 +63,26 @@ describe("scan", () => {
     expect(out[0].name).toBe("ship");
     const cached = JSON.parse(await readFile(join(projectDir, ".gradient", "suggestions.json"), "utf8"));
     expect(cached.length).toBe(1);
+  });
+
+  it("reports coverage gaps: husk transcripts and trailer sessions missing locally", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const husk = join(projectDir, "husk.jsonl");
+    await writeFile(husk, '{"type":"bridge-session","bridgeSessionId":"session_01AAA"}\n');
+    const logs: string[] = [];
+    await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        backend: null,
+        collectFn: async () => [husk],
+        parseFn: async () => [],
+        gitLogFn: async () => "https://claude.ai/code/session_01GONE\n",
+        log: (m) => logs.push(m),
+      },
+    );
+    expect(logs.some(l => l.includes("coverage: 1 bridged transcript"))).toBe(true);
+    expect(logs.some(l => l.includes("coverage: 1 session(s)"))).toBe(true);
   });
 
   it("writes the playbook after caching suggestions", async () => {

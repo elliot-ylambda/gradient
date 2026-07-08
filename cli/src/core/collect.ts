@@ -14,6 +14,26 @@ export function encodeProjectDir(cwd: string): string {
   return cwd.replace(/\//g, "-");
 }
 
+// Sessions started in Claude Code git worktrees transcribe into SIBLING directories named
+// <encoded>--claude-worktrees-<branch>, not into the project's own directory, so a
+// project-scoped scan that only reads the exact-match directory silently misses all
+// worktree sessions. Sweep those siblings too.
+async function projectRoots(projectsRoot: string, cwd: string): Promise<string[]> {
+  const encoded = encodeProjectDir(cwd);
+  const exact = join(projectsRoot, encoded);
+  let entries;
+  try {
+    entries = await readdir(projectsRoot, { withFileTypes: true });
+  } catch {
+    return [exact];
+  }
+  const worktreePrefix = `${encoded}--claude-worktrees-`;
+  const roots = entries
+    .filter(e => e.isDirectory() && (e.name === encoded || e.name.startsWith(worktreePrefix)))
+    .map(e => join(projectsRoot, e.name));
+  return roots.length ? roots : [exact];
+}
+
 export function matchesSince(mtimeMs: number, sinceDays: number | undefined, now: number): boolean {
   if (sinceDays === undefined) return true;
   return now - mtimeMs <= sinceDays * 86_400_000;
@@ -48,7 +68,7 @@ export async function collect(opts: CollectOptions): Promise<string[]> {
     roots = [projectsRoot];
   } else {
     const cwd = opts.projectPath ?? process.cwd();
-    roots = [join(projectsRoot, encodeProjectDir(cwd))];
+    roots = await projectRoots(projectsRoot, cwd);
   }
   const files: string[] = [];
   for (const root of roots) files.push(...(await walk(root)));
