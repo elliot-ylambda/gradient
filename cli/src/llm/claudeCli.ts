@@ -37,7 +37,8 @@ export class ClaudeCliBackend implements LLMBackend {
   private runFn: RunFn;
   private whichFn: WhichFn;
   private model?: string;
-  private spawnCwd?: string;
+  /** Readable so callers/tests can assert the child never runs in the project. */
+  readonly spawnCwd?: string;
   private extraEnv?: Record<string, string>;
 
   constructor(
@@ -55,7 +56,12 @@ export class ClaudeCliBackend implements LLMBackend {
   }
 
   async complete(req: LLMRequest): Promise<string> {
-    const args = ["-p", req.prompt, "--output-format", "json", "--append-system-prompt", req.system];
+    // --system-prompt REPLACES Claude Code's default; --append-system-prompt would
+    // leave the coding-agent framing (tools, cwd awareness) in front of ours. Both
+    // callers here — scan's classifier and autopilot's judge — are pure LLM calls,
+    // and the appended framing made the judge answer in prose about its temp cwd
+    // instead of the JSON contract.
+    const args = ["-p", req.prompt, "--output-format", "json", "--system-prompt", req.system];
     if (this.model) args.push("--model", this.model);
     const opts = {
       cwd: this.spawnCwd,
