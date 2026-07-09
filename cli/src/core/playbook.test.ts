@@ -155,11 +155,38 @@ describe("parseProjectPlaybook", () => {
     expect(r.clamps.malformed).toBe(true);
   });
 
-  it("recognized key with trailing text → malformed, never silently ignored", () => {
+  it("trailing YAML comment on max-mode is descriptive, not a value", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: nudge   # ceiling here\n---\nx\n");
+    expect(r.clamps).toEqual({ maxMode: "nudge" });
+  });
+
+  it("trailing YAML comment on budget is descriptive, not a value", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  budget: 5   # per session\n---\nx\n");
+    expect(r.clamps).toEqual({ budget: 5 });
+  });
+
+  it("recognized key with trailing NON-comment text → malformed, never silently ignored", () => {
     // If this were ignored instead, the repo would get MORE authority than
-    // the author intended — the one direction clamps must never fail.
-    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: nudge # weekdays only\n---\nx\n");
+    // the author intended — the one direction clamps must never fail. Only a
+    // `#` comment (whitespace-preceded, per YAML) is strippable; bare trailing
+    // text is an unparseable value.
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: nudge extra\n---\nx\n");
     expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("`#` without preceding whitespace is part of the value, so still fails closed", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  budget: 5#3\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("a value that is only a comment → malformed (empty after stripping)", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode:   # unset\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("a whole-line comment inside the block is ignored, clamps still apply", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  # which ceiling?\n  max-mode: off\n---\nx\n");
+    expect(r.clamps).toEqual({ maxMode: "off" });
   });
 
   it("recognized key with empty value → malformed", () => {

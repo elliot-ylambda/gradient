@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import type { LLMBackend } from "./backend.js";
 import { ClaudeCliBackend } from "./claudeCli.js";
 import { AnthropicBackend } from "./anthropic.js";
@@ -5,10 +6,19 @@ import type { Config } from "../core/types.js";
 
 /** Default backend candidates. Every gradient-spawned claude child carries the
  * autopilot recursion guard: if a project's Stop hook runs `gradient respond`
- * inside this child, respond's gate 1 sees the env var and stands down. */
+ * inside this child, respond's gate 1 sees the env var and stands down.
+ *
+ * The child also runs in a neutral cwd. Otherwise Claude Code records a
+ * transcript for the headless session in the *project's* transcript dir, and the
+ * next `gradient scan` mines gradient's own candidates JSON back as a user
+ * prompt — the analysis engine feeding on its own output. */
 export function defaultCandidates(config?: Config): LLMBackend[] {
   return [
-    new ClaudeCliBackend({ model: config?.model, extraEnv: { GRADIENT_AUTOPILOT_CHILD: "1" } }),
+    new ClaudeCliBackend({
+      model: config?.model,
+      spawnCwd: tmpdir(),
+      extraEnv: { GRADIENT_AUTOPILOT_CHILD: "1" },
+    }),
     new AnthropicBackend({ model: config?.model }),
   ];
 }

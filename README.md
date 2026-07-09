@@ -44,12 +44,15 @@ gradient/
 ## Quickstart (CLI)
 
 ```bash
-npx gradient scan        # this project's history (all of it)
-npx gradient scan --user # all projects, last 7 days — your recent cross-project habits
-npx gradient scan --all  # all projects, no time limit (thorough; can be slow)
-npx gradient review      # inspect the ranked suggestions and their evidence
-npx gradient apply <id>  # generate an approved slash-command / loop / hook
+npx gradient.md scan        # this project's history (all of it)
+npx gradient.md scan --user # all projects, last 7 days — your recent cross-project habits
+npx gradient.md scan --all  # all projects, no time limit (thorough; can be slow)
+npx gradient.md review      # inspect the ranked suggestions and their evidence
+npx gradient.md apply <id>  # generate an approved slash-command / loop / hook
 ```
+
+The npm package is **`gradient.md`**; the command it installs is **`gradient`**.
+So `npx gradient.md scan` and, once installed globally, plain `gradient scan`.
 
 **Scope.** `scan` defaults to the project you're in. `--user` widens to every
 project but bounds it to a recent window (last 7 days, set via `userScopeDays`
@@ -70,10 +73,10 @@ your `gradient.md` (`~/.config/gradient/gradient.md`, yours to edit — `scan`
 refreshes only its marked region).
 
 ```bash
-npx gradient autopilot nudge   # opt in (this project): push unfinished work forward
-npx gradient autopilot full    # also answer routine questions / start your usual next step
-npx gradient autopilot status  # what did it do while I was away?
-npx gradient autopilot off     # remove the hook
+npx gradient.md autopilot nudge   # opt in (this project): push unfinished work forward
+npx gradient.md autopilot full    # also answer routine questions / start your usual next step
+npx gradient.md autopilot status  # what did it do while I was away?
+npx gradient.md autopilot off     # remove the hook
 ```
 
 Bounded by design: a per-session budget (default 10), a progress gate that
@@ -96,8 +99,9 @@ autopilot:
 ```
 
 Everything below the frontmatter is prose the auto-responder reads as context.
-Malformed frontmatter turns autopilot off for that repo; `gradient autopilot
-status` shows the effective mode.
+Trailing `#` comments are descriptive and ignored. Anything else the parser
+can't read — an unclosed block, `max-mode: turbo` — turns autopilot off for that
+repo rather than guessing; `gradient autopilot status` shows the effective mode.
 
 ## Develop
 

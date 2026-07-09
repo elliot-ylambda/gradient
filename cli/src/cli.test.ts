@@ -30,6 +30,26 @@ describe("parseCliArgs", () => {
   });
 });
 
+describe("unknown options", () => {
+  it("returns 2 and names the bad option instead of throwing", async () => {
+    const logs: string[] = [];
+    const code = await main(["scan", "--bogus"], { log: (m) => logs.push(m) });
+    expect(code).toBe(2);
+    expect(logs.join("\n")).toContain("--bogus");
+  });
+
+  it("never leaks a Node parse_args stack trace", async () => {
+    const logs: string[] = [];
+    await main(["review", "--json"], { log: (m) => logs.push(m) });
+    expect(logs.join("\n")).not.toContain("ERR_PARSE_ARGS_UNKNOWN_OPTION");
+    expect(logs.join("\n")).not.toContain("node:internal");
+  });
+
+  it("main rejects nothing — an unknown option resolves to an exit code", async () => {
+    await expect(main(["scan", "--nope"], { log: () => {} })).resolves.toBe(2);
+  });
+});
+
 describe("main", () => {
   it("returns 0 and prints help for no command", async () => {
     const logs: string[] = [];

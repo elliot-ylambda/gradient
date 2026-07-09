@@ -79,7 +79,17 @@ export async function main(
     return 0;
   }
 
-  const { command, positionals, flags } = parseCliArgs(argv);
+  // parseArgs throws on an unrecognized flag. Catch it here: an unknown option
+  // is a usage error like an unknown command, not a crash.
+  let parsed: ReturnType<typeof parseCliArgs>;
+  try {
+    parsed = parseCliArgs(argv);
+  } catch (e) {
+    log(c.coral((e as Error).message.split(".")[0]));
+    log(`\n${HELP}`);
+    return 2;
+  }
+  const { command, positionals, flags } = parsed;
   const projectDir = process.cwd();
 
   try {

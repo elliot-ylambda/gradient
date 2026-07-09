@@ -38,6 +38,38 @@ describe("buildJudgePrompt", () => {
   });
 });
 
+describe("parseJudgeResponse fenced output", () => {
+  // Real claude-cli output: the model wraps its JSON in a markdown fence even
+  // when told "respond ONLY with JSON". A raw JSON.parse throws, respond fails
+  // open, and autopilot silently never fires. Tolerate the fence.
+  it("accepts a ```json fenced object", () => {
+    const raw = '```json\n{\n  "action": "stand_down",\n  "why": "claude asked a question"\n}\n```';
+    expect(parseJudgeResponse(raw)).toEqual({ action: "stand_down", why: "claude asked a question" });
+  });
+
+  it("accepts a bare ``` fenced object", () => {
+    const raw = '```\n{"action":"continue","response":"keep going","why":"todos open"}\n```';
+    expect(parseJudgeResponse(raw)).toEqual({ action: "continue", response: "keep going", why: "todos open" });
+  });
+
+  it("accepts surrounding whitespace around a fence", () => {
+    const raw = '\n  ```json\n{"action":"stand_down","why":"done"}\n```  \n';
+    expect(parseJudgeResponse(raw)).toEqual({ action: "stand_down", why: "done" });
+  });
+
+  it("still throws on genuine non-JSON prose", () => {
+    expect(() => parseJudgeResponse("I think you should keep going!")).toThrow();
+  });
+
+  it("still enforces the action contract inside a fence", () => {
+    expect(() => parseJudgeResponse('```json\n{"action":"maybe","why":"x"}\n```')).toThrow(/invalid judge action/);
+  });
+
+  it("still requires a response for a fenced continue", () => {
+    expect(() => parseJudgeResponse('```json\n{"action":"continue","why":"x"}\n```')).toThrow(/non-empty response/);
+  });
+});
+
 describe("parseJudgeResponse", () => {
   it("accepts a valid continue", () => {
     expect(parseJudgeResponse('{"action":"continue","response":"keep going","why":"todos open"}'))

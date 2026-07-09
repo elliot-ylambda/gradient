@@ -115,15 +115,24 @@ export function projectPlaybookPath(cwd: string): string {
 
 const isMode = (v: string): v is AutopilotMode => v === "off" || v === "nudge" || v === "full";
 
+/** Strip a YAML trailing comment — a `#` at the value's start or preceded by
+ * whitespace. `nudge # ceiling` → `nudge`; `5#3` keeps the `#` and so still
+ * fails closed, as does bare trailing text like `nudge extra`. */
+function stripComment(v: string): string {
+  const m = v.match(/(?:^|\s)#/);
+  return (m === null ? v : v.slice(0, m.index)).trim();
+}
+
 /**
  * Lenient line scanner for the optional frontmatter clamp block. Recognizes
  * `max-mode:` and `budget:` lines anywhere inside the block (the `autopilot:`
  * grouping line is decorative); unknown keys ignored. No frontmatter → all
  * prose, empty clamps. Unclosed block, or a recognized key whose value is
  * anything but a clean valid token → { malformed: true } (caller clamps that
- * repo to off). Key-first, then validate: a recognized key with a bad or
- * decorated value must fail closed, never be silently ignored. Key matching
- * tolerates surrounding whitespace and is case-insensitive.
+ * repo to off). Key-first, then validate: a recognized key with a bad value
+ * must fail closed, never be silently ignored. A trailing `#` comment is
+ * descriptive and stripped before validation (YAML); bare trailing text is
+ * not. Key matching tolerates surrounding whitespace and is case-insensitive.
  */
 export function parseProjectPlaybook(raw: string): ProjectPlaybook {
   const lines = raw.split(/\r?\n/);
@@ -139,14 +148,14 @@ export function parseProjectPlaybook(raw: string): ProjectPlaybook {
   for (let i = 1; i < end; i++) {
     const modeM = lines[i].match(/^\s*max-mode\s*:(.*)$/i);
     if (modeM) {
-      const v = modeM[1].trim();
+      const v = stripComment(modeM[1]);
       if (!isMode(v)) return malformed();
       clamps.maxMode = v;
       continue;
     }
     const budgetM = lines[i].match(/^\s*budget\s*:(.*)$/i);
     if (budgetM) {
-      const v = budgetM[1].trim();
+      const v = stripComment(budgetM[1]);
       const n = Number(v);
       if (v === "" || !Number.isInteger(n) || n < 0) return malformed();
       clamps.budget = n;

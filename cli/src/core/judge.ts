@@ -42,9 +42,19 @@ export function buildJudgePrompt(
   };
 }
 
+/** Models fence their JSON even when told "respond ONLY with JSON". Unwrap a
+ * ```json … ``` block before parsing; everything inside stays strictly checked.
+ * Without this the judge's reply never parses, respond fails open on every
+ * stop, and autopilot silently never fires. */
+function unfence(raw: string): string {
+  const t = raw.trim();
+  const m = t.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i);
+  return (m ? m[1] : t).trim();
+}
+
 /** Strict parse of the judge's reply. Anything off-contract throws (caller fails open). */
 export function parseJudgeResponse(raw: string): JudgeDecision {
-  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  const parsed = JSON.parse(unfence(raw)) as Record<string, unknown>;
   const action = parsed.action;
   if (action !== "continue" && action !== "stand_down") {
     throw new Error(`invalid judge action: ${String(action)}`);
