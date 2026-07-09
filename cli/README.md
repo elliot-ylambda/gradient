@@ -3,10 +3,10 @@
 The `gradient` command-line tool — the v1 **analysis engine**.
 
 ```bash
-npx gradient init      # configure (reuses your `claude` auth — no API key needed)
-npx gradient scan      # read-only: find repeated workflows in your history
-npx gradient review    # approve the ones you want; gradient writes the artifacts
-npx gradient list      # see what it generated · npx gradient remove <name> to undo
+npx gradient.md init      # configure (reuses your `claude` auth — no API key needed)
+npx gradient.md scan      # read-only: find repeated workflows in your history
+npx gradient.md review    # approve the ones you want; gradient writes the artifacts
+npx gradient.md list      # see what it generated · npx gradient.md remove <name> to undo
 ```
 
 ## How it works

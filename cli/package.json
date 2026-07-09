@@ -1,5 +1,5 @@
 {
-  "name": "gradient",
+  "name": "gradient.md",
   "version": "0.1.0",
   "type": "module",
   "bin": { "gradient": "dist/cli.js" },
