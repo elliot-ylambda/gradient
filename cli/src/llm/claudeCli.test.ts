@@ -56,3 +56,29 @@ describe("spawn options", () => {
     expect(captured?.env).toBeUndefined();
   });
 });
+
+describe("system prompt mode", () => {
+  const capture = async (system: string) => {
+    let seen: string[] = [];
+    const b = new ClaudeCliBackend({
+      whichFn: async () => "/usr/bin/claude",
+      runFn: async (_cmd, args) => { seen = args; return { code: 0, stdout: '{"result":"{}"}', stderr: "" }; },
+    });
+    await b.complete({ system, prompt: "p" });
+    return seen;
+  };
+
+  it("replaces the default system prompt rather than appending to it", async () => {
+    // --append-system-prompt leaves Claude Code's coding-agent framing in place:
+    // the child notices its spawnCwd is a temp dir and answers in prose instead
+    // of the JSON contract. Replacing it makes the call a pure LLM judge.
+    const args = await capture("JUDGE INSTRUCTIONS");
+    expect(args).toContain("--system-prompt");
+    expect(args).not.toContain("--append-system-prompt");
+  });
+
+  it("still passes the system text as the flag's value", async () => {
+    const args = await capture("JUDGE INSTRUCTIONS");
+    expect(args[args.indexOf("--system-prompt") + 1]).toBe("JUDGE INSTRUCTIONS");
+  });
+});
