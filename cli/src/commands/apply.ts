@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Suggestion } from "../core/types.js";
 import { gradientDir } from "../core/manifest.js";
@@ -27,6 +27,12 @@ export async function loadSuggestions(
   } catch {
     return [];
   }
+}
+
+export async function saveSuggestions(projectDir: string, suggestions: Suggestion[]): Promise<void> {
+  const dir = gradientDir(projectDir);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "suggestions.json"), JSON.stringify(suggestions, null, 2));
 }
 
 export async function applyByIds(

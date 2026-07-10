@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { basename, relative } from "node:path";
 import { scan } from "./commands/scan.js";
-import { review, readlinePrompter } from "./commands/review.js";
+import { review, readlineClarifier, readlinePrompter } from "./commands/review.js";
 import { applyByIds } from "./commands/apply.js";
 import { list } from "./commands/list.js";
 import { remove } from "./commands/remove.js";
@@ -189,7 +189,7 @@ export async function main(
         const applied = await review(projectDir, readlinePrompter({
           targets: resolveTargets(config),
           cheapModel: resolveCheapModel(config),
-        }), { onSkip: log });
+        }), { onSkip: log, clarifier: readlineClarifier() });
         log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
         for (const a of applied) {
           for (const write of a.writes) {
@@ -226,6 +226,13 @@ export async function main(
           : "";
         log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions${sources}`));
         for (const ex of s.examples ?? []) log(`  ${c.muted("·")} ${ex}`);
+        if (s.clarify) {
+          log(c.dim(`clarify: ${s.clarify.question}`));
+          for (const option of s.clarify.options) {
+            const mark = s.clarify.chosen === option.label ? c.ok("✓") : c.muted("·");
+            log(`  ${mark} ${option.label} — ${c.dim(option.body.slice(0, 100))}`);
+          }
+        }
         return 0;
       }
       case "list": {
