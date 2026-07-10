@@ -24,6 +24,10 @@ describe("CodexCliBackend", () => {
       "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only",
       "--skip-git-repo-check", "--model", "gpt-5.4-mini", "-",
     ]));
+    for (const feature of ["shell_tool", "unified_exec", "browser_use", "computer_use", "apps", "image_generation", "multi_agent"]) {
+      const index = seen?.args.findIndex((arg, position) => arg === "--disable" && seen?.args[position + 1] === feature) ?? -1;
+      expect(index).toBeGreaterThanOrEqual(0);
+    }
     expect(seen?.input).toContain("<SYSTEM_INSTRUCTIONS>\nclassifier");
     expect(seen?.input).toContain("<UNTRUSTED_INPUT>\n[]");
     expect(seen?.cwd).toBe("/tmp/neutral");

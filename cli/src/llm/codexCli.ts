@@ -30,9 +30,19 @@ const defaultWhich: WhichFn = bin => new Promise(resolve => {
   child.on("error", () => resolve(null));
 });
 
+const DISABLED_FEATURES = [
+  "shell_tool",
+  "unified_exec",
+  "browser_use",
+  "computer_use",
+  "apps",
+  "image_generation",
+  "multi_agent",
+];
+
 /** Pure text-to-text backend using the user's existing Codex login. The child
  * is ephemeral, ignores repo/user instructions, runs in a neutral directory,
- * and has only a read-only sandbox. */
+ * has a read-only sandbox, and disables every interactive/tooling feature. */
 export class CodexCliBackend implements LLMBackend {
   name = "codex-cli";
   private runFn: RunFn;
@@ -61,6 +71,7 @@ export class CodexCliBackend implements LLMBackend {
       "--skip-git-repo-check",
       "--color", "never",
     ];
+    for (const feature of DISABLED_FEATURES) args.push("--disable", feature);
     if (this.model) args.push("--model", this.model);
     args.push("-");
     const input = [
