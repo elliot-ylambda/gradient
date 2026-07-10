@@ -7,6 +7,7 @@ import { stats } from "./commands/stats.js";
 import { insights, writeInsightsHtml } from "./commands/insights.js";
 import { continuityStatus, setContinuity } from "./commands/continuity.js";
 import { recap } from "./commands/recap.js";
+import { bundleCommand } from "./commands/bundle.js";
 
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
 vi.mock("./commands/migrate.js", () => ({
@@ -60,6 +61,16 @@ vi.mock("./commands/continuity.js", () => ({
 }));
 vi.mock("./commands/recap.js", () => ({
   recap: vi.fn(async () => null),
+}));
+vi.mock("./commands/bundle.js", () => ({
+  bundleCommand: vi.fn(async () => ({
+    dir: "/repo/.gradient/bundle/team-toolkit",
+    files: [
+      "/repo/.gradient/bundle/team-toolkit/.claude-plugin/plugin.json",
+      "/repo/.gradient/bundle/team-toolkit/skills/ship/SKILL.md",
+    ],
+    skipped: ["a-loop"],
+  })),
 }));
 
 describe("parseCliArgs", () => {
@@ -330,5 +341,30 @@ describe("continuity dispatch", () => {
     const lines: string[] = [];
     expect(await main(["recap"], { log: line => lines.push(line) })).toBe(0);
     expect(lines).toEqual([]);
+  });
+});
+
+describe("bundle dispatch", () => {
+  it("requires a name and lists the command in help", async () => {
+    const missing: string[] = [];
+    expect(await main(["bundle"], { log: line => missing.push(line) })).toBe(2);
+    expect(missing.join("\n")).toContain("bundle needs a name");
+
+    const help: string[] = [];
+    await main([], { log: line => help.push(line) });
+    expect(help.join("\n")).toContain("gradient bundle <name> [--with-hooks]");
+  });
+
+  it("prints the bundle tree and a current-schema marketplace catalog", async () => {
+    vi.mocked(bundleCommand).mockClear();
+    const lines: string[] = [];
+    expect(await main(["bundle", "Team Toolkit!", "--with-hooks"], { log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(bundleCommand)).toHaveBeenCalledWith(expect.any(String), "Team Toolkit!", { withHooks: true });
+    const output = lines.join("\n");
+    expect(output).toContain(".claude-plugin/plugin.json");
+    expect(output).toContain("skipped a-loop");
+    expect(output).toContain('"owner"');
+    expect(output).toContain('"name": "team-toolkit"');
+    expect(output).toContain('"source": "./team-toolkit"');
   });
 });

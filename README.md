@@ -55,6 +55,7 @@ npx gradient.md recall on   # hint when a typed prompt matches an installed arti
 npx gradient.md stats       # coverage plus artifact adoption
 npx gradient.md insights    # local behavior report + concrete next actions
 npx gradient.md continuity on # checkpoint before compaction, recap after resume
+npx gradient.md bundle team-kit # package approved artifacts for teammates
 ```
 
 The npm package is **`gradient.md`**; the command it installs is **`gradient`**.
@@ -190,6 +191,24 @@ scan, and `--html` writes a self-contained `.gradient/insights.html`.
 `compact`. The checkpoint writes redacted recent intent and conversation tail
 to `progress.md`; recap prints that file back into context. `gradient
 continuity off` removes only those two hooks.
+
+## Share with your team
+
+After reviewing and applying the workflows you want, package only those
+manifest-tracked artifacts as a Claude Code plugin:
+
+```bash
+npx gradient.md bundle team-kit              # skills, commands, and project rules
+npx gradient.md bundle team-kit --with-hooks # also approved gradient-backed hooks
+claude --plugin-dir .gradient/bundle/team-kit
+```
+
+The bundle contains no transcript, suggestion cache, evidence counts, or other
+personal telemetry, and unapproved suggestions never enter it. Rules are
+included with an explicit copy instruction because plugins do not auto-load
+project rules. Hooks are opt-in and require teammates to have `gradient`
+installed. The command prints a current-schema marketplace catalog you can add
+to a repository alongside the generated plugin directory.
 
 ## Develop
 

@@ -12,6 +12,7 @@ npx gradient.md recall on # hint when prompts match installed artifacts
 npx gradient.md stats     # coverage and artifact adoption
 npx gradient.md insights  # local behavior report and recommended actions
 npx gradient.md continuity on # preserve context across compact/resume
+npx gradient.md bundle team-kit # package approved artifacts as a plugin
 ```
 
 ## How it works
@@ -41,6 +42,11 @@ signals such as nudges, interrupts, compacts, error pastes, and model churn,
 then routes them to concrete gradient actions. `gradient continuity on`
 installs the paired, reversible checkpoint/recap hooks that preserve a redacted
 `progress.md` across compaction and resumed sessions.
+
+`gradient bundle <name> [--with-hooks]` rebuilds a Claude Code plugin under
+`.gradient/bundle/<name>/` from manifest-tracked artifacts only. It never copies
+the suggestion cache or evidence counts. The generated README explains the
+manual rule-copy step and the optional hooks' `gradient` dependency.
 
 Nothing is written until you approve it in `review`, and everything written is
 tracked in `.gradient/manifest.json` so `remove` cleanly undoes it.
