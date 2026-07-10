@@ -32,6 +32,13 @@ const defaultWhich: WhichFn = (bin) =>
     child.on("error", () => resolveP(null));
   });
 
+/** Every Claude Code tool, denied. Verified against `claude --disallowed-tools`:
+ * unknown names emit a "matches no known tool" warning, so keep this list valid. */
+export const DENIED_TOOLS = [
+  "Bash", "BashOutput", "Edit", "Glob", "Grep", "KillShell",
+  "NotebookEdit", "Read", "Task", "TodoWrite", "WebFetch", "WebSearch", "Write",
+];
+
 export class ClaudeCliBackend implements LLMBackend {
   name = "claude-cli";
   private runFn: RunFn;
@@ -61,7 +68,15 @@ export class ClaudeCliBackend implements LLMBackend {
     // callers here — scan's classifier and autopilot's judge — are pure LLM calls,
     // and the appended framing made the judge answer in prose about its temp cwd
     // instead of the JSON contract.
-    const args = ["-p", req.prompt, "--output-format", "json", "--system-prompt", req.system];
+    const args = [
+      "-p", req.prompt,
+      "--output-format", "json",
+      "--system-prompt", req.system,
+      // Both callers are text->text. Without this the child inherits the full
+      // toolset and will use it — and its input (transcript tails, mined prompts)
+      // is untrusted. An empty --allowed-tools does NOT block; only a deny list does.
+      "--disallowed-tools", ...DENIED_TOOLS,
+    ];
     if (this.model) args.push("--model", this.model);
     const opts = {
       cwd: this.spawnCwd,
