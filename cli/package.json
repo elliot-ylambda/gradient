@@ -1,10 +1,13 @@
 {
   "name": "gradient.md",
-  "version": "0.1.0",
-  "description": "Turn repeated Claude Code workflows into skills, rules, insights, and team plugins.",
+  "version": "0.2.0",
+  "description": "Turn repeated Claude Code and Codex workflows into skills, rules, insights, and team plugins.",
   "keywords": [
     "claude",
     "claude-code",
+    "codex",
+    "openai",
+    "agent-skills",
     "cli",
     "automation",
     "skills",
