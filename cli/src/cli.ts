@@ -79,6 +79,19 @@ export async function main(
     return 0;
   }
 
+  // Handled before parseArgs, which would reject them as unknown options, and
+  // before the command switch, which would call them unknown commands. Asking a
+  // CLI its version or usage is a success, not a usage error — so exit 0. The
+  // version prints bare (no banner, no colour) so `gradient --version` is scriptable.
+  if (argv[0] === "--version" || argv[0] === "-v") {
+    log(VERSION);
+    return 0;
+  }
+  if (argv[0] === "--help" || argv[0] === "-h") {
+    log(`${banner(VERSION)}\n\n${HELP}`);
+    return 0;
+  }
+
   // parseArgs throws on an unrecognized flag. Catch it here: an unknown option
   // is a usage error like an unknown command, not a crash.
   let parsed: ReturnType<typeof parseCliArgs>;
