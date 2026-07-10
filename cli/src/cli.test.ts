@@ -4,6 +4,7 @@ import { spawnDetached } from "./core/spawn.js";
 import { migrate } from "./commands/migrate.js";
 import { recallHook, recallStatus, setRecall } from "./commands/recall.js";
 import { stats } from "./commands/stats.js";
+import { insights } from "./commands/insights.js";
 
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
 vi.mock("./commands/migrate.js", () => ({
@@ -32,6 +33,24 @@ vi.mock("./commands/stats.js", () => ({
     }],
   })),
 }));
+vi.mock("./commands/insights.js", () => ({
+  insights: vi.fn(async () => ({
+    label: "project scope · all history",
+    avoided: 0,
+    metrics: {
+      prompts: 12,
+      nudges: 11,
+      interrupts: 2,
+      continuations: 3,
+      notifications: 0,
+      compacts: 4,
+      modelSwitches: 1,
+      effortSwitches: 2,
+      errorPastes: 5,
+    },
+    recommendations: [{ metric: "nudges", line: "try: gradient autopilot nudge" }],
+  })),
+}));
 
 describe("parseCliArgs", () => {
   it("parses command, flags, and positionals", () => {
@@ -56,6 +75,10 @@ describe("parseCliArgs", () => {
     const r = parseCliArgs(["migrate", "--dry-run"]);
     expect(r.command).toBe("migrate");
     expect(r.flags["dry-run"]).toBe(true);
+  });
+
+  it("parses the insights --html flag", () => {
+    expect(parseCliArgs(["insights", "--html"]).flags.html).toBe(true);
   });
 
   it("returns empty command for empty argv", () => {
@@ -242,5 +265,20 @@ describe("stats adoption rendering", () => {
     expect(output).toContain("adoption:");
     expect(output).toContain("0 use(s) · last never · 0 retype(s) caught");
     expect(output).toContain("gradient remove dead");
+  });
+});
+
+describe("insights dispatch", () => {
+  it("lists and renders the local behavior report", async () => {
+    const help: string[] = [];
+    await main([], { log: line => help.push(line) });
+    expect(help.join("\n")).toContain("gradient insights [--user] [--html]");
+
+    vi.mocked(insights).mockClear();
+    const lines: string[] = [];
+    expect(await main(["insights", "--user"], { log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(insights)).toHaveBeenCalledWith({ projectDir: expect.any(String), user: true });
+    expect(lines.join("\n")).toContain("prompts");
+    expect(lines.join("\n")).toContain("gradient autopilot nudge");
   });
 });

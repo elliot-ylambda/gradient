@@ -19,6 +19,7 @@ import { resolveScanScope } from "./core/scope.js";
 import { isNudge } from "./core/playbook.js";
 import { loadConfig } from "./config.js";
 import { VERSION } from "./version.js";
+import { insights } from "./commands/insights.js";
 
 const HELP = `gradient — turn repeated Claude Code workflows into artifacts
 
@@ -38,6 +39,8 @@ Usage:
   gradient recall <on|off|status>
                                 hint when a prompt matches an artifact
   gradient stats                show pattern coverage + artifact adoption
+  gradient insights [--user] [--html]
+                                behavior report + what to automate next
   gradient autopilot <off|nudge|full>
                                 auto-respond when Claude stops (opt-in)
   gradient autopilot status     mode, budget, and recent auto-responses
@@ -62,6 +65,7 @@ export function parseCliArgs(argv: string[]): {
       "session-scan": { type: "boolean" },
       detach: { type: "boolean" },
       "dry-run": { type: "boolean" },
+      html: { type: "boolean" },
     },
   });
   return { command, positionals, flags: values as Record<string, string | boolean> };
@@ -268,6 +272,18 @@ export async function main(
             );
           }
         }
+        return 0;
+      }
+      case "insights": {
+        log(banner(VERSION));
+        const report = await insights({ projectDir, user: !!flags.user });
+        const metrics = report.metrics;
+        log(c.dim(report.label));
+        log(`  ${c.bold("prompts")} ${metrics.prompts}   ${c.bold("nudges")} ${metrics.nudges}   ${c.bold("interrupts")} ${metrics.interrupts}`);
+        log(`  ${c.bold("context deaths")} ${metrics.continuations}   ${c.bold("compacts")} ${metrics.compacts}   ${c.bold("error pastes")} ${metrics.errorPastes}`);
+        log(`  ${c.bold("model switches")} ${metrics.modelSwitches}   ${c.bold("effort switches")} ${metrics.effortSwitches}`);
+        log("");
+        for (const recommendation of report.recommendations) log(`  ${c.violet("→")} ${recommendation.line}`);
         return 0;
       }
       case "checkpoint": {
