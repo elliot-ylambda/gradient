@@ -211,9 +211,13 @@ generating a workflow and actually using it. Phase C detects repeated pasted
 failures and repeated short answers, turning them into self-service skills and
 standing project rules without retaining pasted error bodies.
 
-The opt-in `gradient autopilot` Stop-hook responder also ships today. The next
-v2 phases surface local behavior insights and package approved artifacts for
-teams.
+Phase D adds the LLM-free behavior report and the opt-in continuity pack:
+`gradient insights` turns local work signals into concrete next actions, while
+`gradient continuity on` preserves a redacted checkpoint across compaction and
+resumed sessions.
+
+The opt-in `gradient autopilot` Stop-hook responder also ships today. The final
+v2 phase packages approved artifacts for teams.
 
 - Design spec: [`docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md`](docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md)
 - Implementation plan: [`docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md`](docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md)
@@ -222,6 +226,8 @@ teams.
 - v2 funnel design: [`docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md`](docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md)
 - Phase A implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md)
 - Phase B implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md)
+- Phase C implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md)
+- Phase D implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md)
 
 ## License
 

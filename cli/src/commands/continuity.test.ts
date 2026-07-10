@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setContinuity, continuityStatus } from "./continuity.js";
 import { recap } from "./recap.js";
+import { installHook } from "../core/settings.js";
 
 let dir: string;
 
@@ -18,8 +19,10 @@ describe("continuity", () => {
     expect(JSON.stringify(settings.hooks.PreCompact)).toContain("gradient checkpoint");
     expect(settings.hooks.SessionStart[0]).toMatchObject({ matcher: "resume|compact" });
     expect(await continuityStatus(dir)).toEqual({ checkpoint: true, recap: true });
+    await installHook(dir, "SessionStart", "other startup", { matcher: "startup" });
     await setContinuity(false, dir);
     expect(await continuityStatus(dir)).toEqual({ checkpoint: false, recap: false });
+    expect(await readFile(join(dir, ".claude", "settings.json"), "utf8")).toContain("other startup");
   });
 
   it("on is idempotent and repairs a missing matcher", async () => {

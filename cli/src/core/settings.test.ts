@@ -63,6 +63,29 @@ describe("hook matcher option", () => {
     expect(upgraded.hooks.SessionStart).toHaveLength(1);
     expect(upgraded.hooks.SessionStart[0].matcher).toBe("resume|compact");
   });
+
+  it("does not change an unrelated hook that shared the old group", () => {
+    const existing = {
+      hooks: {
+        SessionStart: [{
+          matcher: "startup",
+          hooks: [
+            { type: "command", command: "other startup" },
+            { type: "command", command: "gradient recap" },
+          ],
+        }],
+      },
+    };
+    const upgraded = mergeHookIntoSettings(existing, "SessionStart", "gradient recap", { matcher: "resume|compact" });
+    const other = upgraded.hooks.SessionStart.find((group: any) =>
+      group.hooks.some((hook: any) => hook.command === "other startup"),
+    );
+    const recap = upgraded.hooks.SessionStart.find((group: any) =>
+      group.hooks.some((hook: any) => hook.command === "gradient recap"),
+    );
+    expect(other.matcher).toBe("startup");
+    expect(recap.matcher).toBe("resume|compact");
+  });
 });
 
 describe("removeHookFromSettings", () => {

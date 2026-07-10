@@ -747,3 +747,38 @@ Expected: PASS.
 git add cli/src/core/settings.ts cli/src/core/settings.test.ts cli/src/commands/recap.ts cli/src/commands/checkpoint.ts cli/src/commands/checkpoint.test.ts cli/src/commands/continuity.ts cli/src/commands/continuity.test.ts cli/src/core/validate.ts cli/src/cli.ts README.md
 git commit -m "feat(cli): continuity pack — checkpoint+recap hooks behind gradient continuity"
 ```
+
+---
+
+## Execution notes (2026-07-09)
+
+- **D2 seven-day accounting:** `sumAutopilotAvoided` explicitly runs stale
+  state cleanup before summing; it does not assume another autopilot command
+  happened to clean the directory recently. Model *or effort* churn can trigger
+  the settings recommendation, matching the combined metric in the spec.
+- **D3 one-pass contract:** the plan called `stats()`, which would collect and
+  parse the transcript corpus a second time. Adoption-row construction is now
+  reusable over the already-parsed turns, so project insights collect and parse
+  exactly once. Bounded `--user` reports omit 30-day removal claims because a
+  seven-day corpus cannot prove an artifact was unused for 30 days.
+- **D4 HTML:** core and command-level tests cover escaping, inline-only CSS,
+  no scripts or external URLs, and the `.gradient/insights.html` write path.
+- **D5 matcher contract:** verified against the current official Claude Code
+  hooks reference: `SessionStart` sources include `resume` and `compact`, and a
+  pipe-separated exact matcher is supported. Re-running `continuity on` repairs
+  a missing matcher. Matcher upgrades isolate the target command so unrelated
+  hooks in a shared group retain their original matcher.
+- **D5 checkpoint privacy:** the planned tail-only redaction still left the
+  existing recent-intents section raw. Both recent intents and transcript lines
+  are now redacted before persistence, preventing an inline credential from
+  entering `progress.md`.
+- **D5 manager UX:** unknown continuity actions return usage error 2 instead of
+  silently showing status; status requires the correct recap matcher, not just
+  a command with the same name.
+- **Dogfood:** a real seven-day local report completed without an LLM (529 human
+  prompts; 50 nudges; 18 continuations; 23 compacts; 39 interrupts; 19 model
+  switches). In a clean temp project, continuity on/status, checkpoint, redacted
+  recap, continuity off/status, and `insights --html` all passed. The HTML was
+  1,494 bytes with inline CSS, no script, and no external URL.
+- **Validation:** 427 tests pass; typecheck, build, and package dry-run are
+  clean.
