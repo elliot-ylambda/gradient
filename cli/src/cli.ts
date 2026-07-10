@@ -387,6 +387,17 @@ export async function main(
             description: "Workflows mined from real usage by gradient",
           }],
         }, null, 2));
+        log(c.dim("Codex marketplace entry (place this bundle at ./plugins/<name> relative to marketplace.json):"));
+        log(JSON.stringify({
+          name: `${pluginName}-marketplace`,
+          interface: { displayName: `${pluginName} workflows` },
+          plugins: [{
+            name: pluginName,
+            source: { source: "local", path: `./plugins/${pluginName}` },
+            policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
+            category: "Productivity",
+          }],
+        }, null, 2));
         return 0;
       }
       case "checkpoint": {

@@ -4,6 +4,7 @@ import { gradientDir, loadManifest } from "./manifest.js";
 import { assertInside, sanitizeName } from "./security.js";
 import { loadSuggestions } from "../commands/apply.js";
 import { emitHook } from "./emit/hook.js";
+import type { ManifestEntry } from "./types.js";
 
 export interface BundleResult {
   dir: string;
@@ -21,11 +22,11 @@ async function put(root: string, relativePath: string, content: string, files: s
   files.push(path);
 }
 
-async function readApprovedArtifact(projectDir: string, path: string): Promise<string> {
-  const claudeRoot = await realpath(join(projectDir, ".claude"));
-  const source = isAbsolute(path) ? path : join(projectDir, path);
+async function readApprovedArtifact(projectDir: string, entry: ManifestEntry): Promise<string> {
+  const assistantRoot = await realpath(join(projectDir, entry.target === "codex" ? ".agents" : ".claude"));
+  const source = isAbsolute(entry.path) ? entry.path : join(projectDir, entry.path);
   const resolvedSource = await realpath(source);
-  assertInside(claudeRoot, resolvedSource);
+  assertInside(assistantRoot, resolvedSource);
   return readFile(resolvedSource, "utf8");
 }
 
@@ -37,13 +38,14 @@ function bundleReadme(name: string, hasRules: boolean, hasHooks: boolean): strin
     "Evidence counts are personal telemetry and are deliberately not included.",
     "",
     "Try locally: `claude --plugin-dir <path-to-this-directory>`.",
+    "Codex: add this plugin through a local marketplace; `.codex-plugin/plugin.json` is included.",
     ...(hasRules ? [
       "",
-      "`rules/`: Claude Code plugins do not auto-load rules. Copy these files into a project's `.claude/rules/`.",
+      "`rules/`: Claude Code plugins do not auto-load rules. Copy these files into a project's `.claude/rules/`. Codex users should copy equivalent standing guidance into AGENTS.md manually.",
     ] : []),
     ...(hasHooks ? [
       "",
-      "`hooks/hooks.json`: these hooks call `gradient` subcommands. Teammates need gradient installed (`npx gradient.md`).",
+      "`hooks/hooks.json`: these Claude Code hooks call `gradient` subcommands. Teammates need gradient installed (`npx gradient.md`). They are not declared in the Codex manifest.",
     ] : []),
     "",
   ].join("\n");
@@ -68,15 +70,24 @@ export async function buildBundle(
   let hasRules = false;
   const entries = await loadManifest(projectDir);
 
+  // A dual-target apply records one entry per assistant. Bundle each logical
+  // artifact once, preferring the portable Codex skill copy when both exist.
+  const artifacts = new Map<string, ManifestEntry>();
   for (const entry of entries) {
     if (entry.type === "hook") continue;
+    const key = `${entry.type}\u0000${entry.name}`;
+    const existing = artifacts.get(key);
+    if (!existing || entry.target === "codex") artifacts.set(key, entry);
+  }
+
+  for (const entry of artifacts.values()) {
     if (!entry.path) {
       skipped.push(entry.name);
       continue;
     }
     let content: string;
     try {
-      content = await readApprovedArtifact(projectDir, entry.path);
+      content = await readApprovedArtifact(projectDir, entry);
     } catch {
       skipped.push(entry.name);
       continue;
@@ -87,6 +98,12 @@ export async function buildBundle(
       await put(root, join("skills", artifactName, "SKILL.md"), content, files);
     } else if (entry.type === "command") {
       await put(root, join("commands", `${artifactName}.md`), content, files);
+      // Codex plugins consume Agent Skills, not legacy Claude commands. The
+      // markdown format is compatible, so expose the same approved body as a
+      // skill unless an applied skill with that name already won above.
+      if (!artifacts.has(`skill\u0000${entry.name}`)) {
+        await put(root, join("skills", artifactName, "SKILL.md"), content, files);
+      }
     } else if (entry.type === "rule") {
       hasRules = true;
       await put(root, join("rules", basename(entry.path)), content, files);
@@ -135,6 +152,32 @@ export async function buildBundle(
     root,
     join(".claude-plugin", "plugin.json"),
     `${JSON.stringify({ name: safeName, description: BUNDLE_DESCRIPTION, version: "0.1.0" }, null, 2)}\n`,
+    files,
+  );
+  await put(
+    root,
+    join(".codex-plugin", "plugin.json"),
+    `${JSON.stringify({
+      name: safeName,
+      version: "0.1.0",
+      description: BUNDLE_DESCRIPTION,
+      author: { name: "gradient" },
+      homepage: "https://gradient.md",
+      repository: "https://github.com/elliot-ylambda/gradient",
+      license: "MIT",
+      keywords: ["developer-tools", "workflows", "skills"],
+      skills: "./skills/",
+      interface: {
+        displayName: safeName,
+        shortDescription: "Approved workflows mined by gradient",
+        longDescription: "Reusable team workflows selected from local coding-assistant usage with personal evidence removed.",
+        developerName: "gradient",
+        category: "Productivity",
+        capabilities: ["Interactive"],
+        websiteURL: "https://gradient.md",
+        defaultPrompt: ["Use the bundled workflow skills for this project."],
+      },
+    }, null, 2)}\n`,
     files,
   );
   await put(root, "README.md", bundleReadme(safeName, hasRules, hasHooks), files);

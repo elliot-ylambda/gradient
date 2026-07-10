@@ -35,8 +35,47 @@ describe("buildBundle", () => {
       description: "Workflows mined from real usage by gradient",
       version: "0.1.0",
     });
+    const codexManifest = JSON.parse(await readFile(join(result.dir, ".codex-plugin", "plugin.json"), "utf8"));
+    expect(codexManifest).toMatchObject({
+      name: "team-toolkit",
+      version: "0.1.0",
+      author: { name: "gradient" },
+      skills: "./skills/",
+      interface: {
+        displayName: "team-toolkit",
+        category: "Productivity",
+      },
+    });
     expect(await readFile(join(result.dir, "skills", "ship", "SKILL.md"), "utf8")).toContain("body");
     expect(await readFile(join(result.dir, "README.md"), "utf8")).toContain("gradient");
+  });
+
+  it("deduplicates dual-target skills and prefers the portable Codex copy", async () => {
+    await seedSkill("ship");
+    const codexPath = join(dir, ".agents", "skills", "ship", "SKILL.md");
+    await mkdir(join(dir, ".agents", "skills", "ship"), { recursive: true });
+    await writeFile(codexPath, '---\nname: "ship"\ndescription: "portable"\n---\nportable body\n');
+    await addEntry(dir, {
+      name: "ship",
+      type: "skill",
+      target: "codex",
+      path: codexPath,
+      createdAt: "2026-07-01",
+      suggestionId: "sig-ship",
+    });
+    const result = await buildBundle(dir, "kit");
+    expect(await readFile(join(result.dir, "skills", "ship", "SKILL.md"), "utf8")).toContain("portable body");
+    expect(result.skipped).toEqual([]);
+  });
+
+  it("exposes legacy commands as Codex-compatible skills too", async () => {
+    const command = join(dir, ".claude", "commands", "ship.md");
+    await mkdir(join(dir, ".claude", "commands"), { recursive: true });
+    await writeFile(command, '---\nname: "ship"\ndescription: "ship"\n---\nship body\n');
+    await addEntry(dir, { name: "ship", type: "command", path: command, createdAt: "2026-07-01", suggestionId: "c1" });
+    const result = await buildBundle(dir, "kit");
+    expect(await readFile(join(result.dir, "commands", "ship.md"), "utf8")).toContain("ship body");
+    expect(await readFile(join(result.dir, "skills", "ship", "SKILL.md"), "utf8")).toContain("ship body");
   });
 
   it("copies legacy commands and project rules to their plugin locations", async () => {

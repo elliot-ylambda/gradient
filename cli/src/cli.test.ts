@@ -372,5 +372,8 @@ describe("bundle dispatch", () => {
     expect(output).toContain('"description": "Team workflows packaged by gradient"');
     expect(output).toContain('"name": "team-toolkit"');
     expect(output).toContain('"source": "./team-toolkit"');
+    expect(output).toContain("Codex marketplace entry");
+    expect(output).toContain('"path": "./plugins/team-toolkit"');
+    expect(output).toContain('"installation": "AVAILABLE"');
   });
 });
