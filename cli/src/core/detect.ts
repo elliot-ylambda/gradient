@@ -10,12 +10,13 @@ function idFor(signature: string): string {
 }
 
 export function candidateToCommand(c: Candidate): Suggestion {
-  const words = c.signature.split(" ").slice(0, 3).join(" ");
+  const safeSignature = redact(c.signature);
+  const words = safeSignature.split(" ").slice(0, 3).join(" ");
   const commandName = sanitizeName(words);
   return {
     id: idFor(c.signature),
     name: commandName,
-    title: `Reusable command for "${c.signature}"`,
+    title: `Reusable command for "${safeSignature}"`,
     rationale: `Repeated ${c.count}× across ${c.sessions} sessions.`,
     evidence: { count: c.count, sessions: c.sessions },
     confidence: c.confidence,
@@ -23,14 +24,18 @@ export function candidateToCommand(c: Candidate): Suggestion {
     payload: {
       type: "command",
       commandName,
-      body: c.examples[0] ?? c.signature,
-      triggers: [c.signature],
+      body: c.kind === "paste"
+        ? `Run \`${safeSignature}\` yourself, read the failures, and fix them. Do not ask the user to paste output.`
+        : redact(c.examples[0] ?? c.signature),
+      triggers: [safeSignature],
     },
   };
 }
 
 function degradeToCommands(cands: Candidate[]): Suggestion[] {
-  return cands.filter(c => c.confidence === "high").map(candidateToCommand);
+  return cands
+    .filter(c => c.kind !== "answer" && c.confidence === "high")
+    .map(candidateToCommand);
 }
 
 export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt: string } {
@@ -42,12 +47,16 @@ export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt:
     "Merge clusters that mean the same thing (e.g. 'lgtm' and 'looks good') into ONE suggestion. " +
     "Echo back EVERY merged cluster's exact 'signature' in a 'sourceSignatures' string array so evidence can be summed. " +
     "For command payloads include triggers: the distinct short phrasings the user actually typed, taken from every merged cluster's signature (e.g. [\"lgtm\",\"looks good\"]). " +
+    "Clusters with kind 'paste' are the user repeatedly pasting failing output of one command; the signature is that command's head line. " +
+    "For those, emit a command payload whose body tells Claude to run that command itself and fix what fails — never ask the user to paste output again. " +
+    "Clusters with kind 'answer' are the same short answer repeatedly given to similar questions; emit a rule payload — a standing instruction that removes the need to ask. " +
     "Respond ONLY with JSON: {\"suggestions\":[{sourceSignatures,name,title,rationale,confidence,payload}]} where payload is one of " +
-    "{type:'command',commandName,body,triggers?} | {type:'loop',instruction,cadence?} | {type:'hook',event:'PreCompact',subcommand:'checkpoint',description}. " +
+    "{type:'command',commandName,body,triggers?} | {type:'loop',instruction,cadence?} | {type:'hook',event:'PreCompact',subcommand:'checkpoint',description} | {type:'rule',target:'project'|'user',ruleName,text}. " +
     "confidence must be exactly one of \"high\", \"inferred\", or \"flagged\".";
   // Redact secrets from examples/signatures before they ever leave the machine (spec §7).
   const prompt = JSON.stringify(
     cands.map(c => ({
+      kind: c.kind,
       signature: redact(c.signature),
       count: c.count,
       sessions: c.sessions,

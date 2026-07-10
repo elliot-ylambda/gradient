@@ -4,8 +4,9 @@
 
 **The prompts you keep retyping into Claude Code, compiled into skills.**
 
-`gradient` reads your own Claude Code history, finds the workflows you repeat,
-and generates the automations to stop — **skills, loops, and hooks** —
+`gradient` reads your own Claude Code history, finds repeated prompts, error
+pastes, and answers, then generates the automations to stop — **skills, rules,
+loops, and hooks** —
 through a read-only **scan** → approve **review** → reversible **apply** flow.
 It only ever suggests: nothing runs without you turning it on.
 
@@ -44,7 +45,7 @@ gradient/
 ## Quickstart (CLI)
 
 ```bash
-npx gradient.md scan        # this project's history (all of it)
+npx gradient.md scan        # repeated prompts, error pastes, and answers in this project
 npx gradient.md scan --user # all projects, last 7 days — your recent cross-project habits
 npx gradient.md scan --all  # all projects, no time limit (thorough; can be slow)
 npx gradient.md review      # inspect the ranked suggestions and their evidence
@@ -189,11 +190,13 @@ gradient-generated commands can be converted safely with `gradient migrate`
 (`--dry-run` previews the change). Set `emitTarget` to `"command"` in the
 gradient config only when legacy `.claude/commands/` output is required. Phase B
 adds local recall hints and artifact adoption reporting, closing the gap between
-generating a workflow and actually using it.
+generating a workflow and actually using it. Phase C detects repeated pasted
+failures and repeated short answers, turning them into self-service skills and
+standing project rules without retaining pasted error bodies.
 
 The opt-in `gradient autopilot` Stop-hook responder also ships today. The next
-v2 phases add non-lexical detectors, surface local behavior insights, and
-package approved artifacts for teams.
+v2 phases surface local behavior insights and package approved artifacts for
+teams.
 
 - Design spec: [`docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md`](docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md)
 - Implementation plan: [`docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md`](docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md)

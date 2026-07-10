@@ -1,7 +1,7 @@
 import type { Suggestion } from "./types.js";
 
 export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan"]);
-const TYPES = new Set(["command", "loop", "hook"]);
+const TYPES = new Set(["command", "loop", "hook", "rule"]);
 const CONFIDENCES = new Set(["high", "inferred", "flagged"]);
 
 export function validateSuggestion(x: unknown): asserts x is Suggestion {
@@ -32,6 +32,13 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
     if (typeof payload.event !== "string" || typeof payload.subcommand !== "string") {
       throw new Error("hook payload needs event + subcommand");
     }
+  }
+  if (payload.type === "rule") {
+    if (payload.target !== "project" && payload.target !== "user") {
+      throw new Error("rule payload target must be project|user");
+    }
+    if (typeof payload.ruleName !== "string") throw new Error("rule payload needs ruleName");
+    if (typeof payload.text !== "string") throw new Error("rule payload needs text");
   }
 }
 

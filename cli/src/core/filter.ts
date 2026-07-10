@@ -59,10 +59,14 @@ export function filterPrompts(turns: Turn[], ignore: RegExp[] = []): Turn[] {
 export const TEMPLATE_MIN_CHARS = 240;
 export const TEMPLATE_MIN_COUNT = 25;
 
+/** Count/session shape shared by lexical floods and long paste-key groups. */
+export function hasTemplateFloodSupport(c: Candidate): boolean {
+  return c.count >= TEMPLATE_MIN_COUNT && c.sessions >= Math.ceil(c.count * 0.9);
+}
+
 export function isTemplateFlood(c: Candidate): boolean {
   return (
     c.signature.length > TEMPLATE_MIN_CHARS &&
-    c.count >= TEMPLATE_MIN_COUNT &&
-    c.sessions >= Math.ceil(c.count * 0.9)
+    hasTemplateFloodSupport(c)
   );
 }

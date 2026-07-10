@@ -1,6 +1,6 @@
 export type Role = "user" | "assistant";
 export type Confidence = "high" | "inferred" | "flagged";
-export type ArtifactType = "command" | "loop" | "hook" | "skill";
+export type ArtifactType = "command" | "loop" | "hook" | "skill" | "rule";
 
 /** One genuine user prompt after parse + filter. (The mining pipeline consumes
  * only user text; assistant turns are rendered by core/tail.ts for autopilot.) */
@@ -15,7 +15,7 @@ export interface Turn {
 
 /** Pre-LLM grouping produced by cluster.ts (no model involved). */
 export interface Candidate {
-  kind: ArtifactType | "unknown";
+  kind: ArtifactType | "unknown" | "paste" | "answer";
   signature: string;     // normalized key the cluster grouped on
   examples: string[];    // representative raw prompts
   count: number;
@@ -28,7 +28,8 @@ export interface Candidate {
 export type SuggestionPayload =
   | { type: "command"; commandName: string; body: string; triggers?: string[] }
   | { type: "loop"; instruction: string; cadence?: string }
-  | { type: "hook"; event: string; subcommand: string; description: string };
+  | { type: "hook"; event: string; subcommand: string; description: string }
+  | { type: "rule"; target: "project" | "user"; ruleName: string; text: string };
 
 /** Post-LLM (or post-degradation), ready to present/emit. */
 export interface Suggestion {

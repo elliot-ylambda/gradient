@@ -55,3 +55,25 @@ describe("triggers validation", () => {
     expect(() => validateSuggestion({ ...base, payload: { ...base.payload, triggers: ["x"] } })).not.toThrow();
   });
 });
+
+describe("rule validation", () => {
+  const base = { id: "1", name: "n", title: "t", rationale: "r", confidence: "high" };
+
+  it("accepts a complete rule payload", () => {
+    expect(() => validateSuggestion({
+      ...base,
+      payload: { type: "rule", target: "project", ruleName: "n", text: "t" },
+    })).not.toThrow();
+  });
+
+  it("rejects invalid targets and missing text", () => {
+    expect(() => validateSuggestion({
+      ...base,
+      payload: { type: "rule", target: "everyone", ruleName: "n", text: "t" },
+    })).toThrow(/target/);
+    expect(() => validateSuggestion({
+      ...base,
+      payload: { type: "rule", target: "project", ruleName: "n" },
+    })).toThrow(/text/);
+  });
+});

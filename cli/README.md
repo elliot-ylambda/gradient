@@ -4,7 +4,7 @@ The local-first `gradient` command-line tool.
 
 ```bash
 npx gradient.md init      # configure (reuses your `claude` auth — no API key needed)
-npx gradient.md scan      # read-only: find repeated workflows in your history
+npx gradient.md scan      # read-only: find repeated prompts, error pastes, and answers
 npx gradient.md review    # approve the ones you want; gradient writes the artifacts
 npx gradient.md list      # see what it generated · npx gradient.md remove <name> to undo
 npx gradient.md migrate   # convert older generated commands into skills
@@ -15,11 +15,13 @@ npx gradient.md stats     # coverage and artifact adoption
 ## How it works
 
 1. Reads your Claude Code transcripts (`~/.claude/projects/**/*.jsonl`).
-2. Clusters repeated prompts locally (no LLM) into candidate patterns.
+2. Clusters repeated prompts, failing-command pastes, and short Q→A preferences
+   locally (no LLM) into candidate patterns. Pasted bodies are discarded.
 3. Sends only the top candidates to an LLM (the `claude` CLI by default, with an
    Anthropic API-key fallback) to name and type them.
-4. You approve; it writes `.claude/skills/<name>/SKILL.md`, prints `/loop`
-   lines, or proposes `settings.json` hooks that call `gradient` subcommands.
+4. You approve; it writes `.claude/skills/<name>/SKILL.md` and project rules
+   under `.claude/rules/`, prints `/loop` or user-rule instructions, or proposes
+   `settings.json` hooks that call `gradient` subcommands.
 
 Skills are the default because Claude Code can invoke them from their mined
 trigger descriptions. Set `emitTarget` to `"command"` in the gradient config
