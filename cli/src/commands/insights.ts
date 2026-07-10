@@ -1,10 +1,13 @@
 import type { Config, Turn } from "../core/types.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { collect, type CollectOptions } from "../core/collect.js";
 import { parseFile } from "../core/parse.js";
 import { compileIgnorePatterns } from "../core/filter.js";
 import {
   buildRecommendations,
   computeMetrics,
+  renderInsightsHtml,
   sumAutopilotAvoided,
   type InsightsMetrics,
   type Recommendation,
@@ -13,6 +16,7 @@ import { hookInstalled } from "../core/settings.js";
 import { DEFAULT_USER_SCOPE_DAYS } from "../core/scope.js";
 import { loadConfig } from "../config.js";
 import { adoptionFromTurns } from "./stats.js";
+import { gradientDir } from "../core/manifest.js";
 
 export interface InsightsReport {
   label: string;
@@ -68,4 +72,12 @@ export async function insights(
       unusedArtifacts,
     }),
   };
+}
+
+export async function writeInsightsHtml(projectDir: string, report: InsightsReport): Promise<string> {
+  const dir = gradientDir(projectDir);
+  const path = join(dir, "insights.html");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path, renderInsightsHtml(report));
+  return path;
 }

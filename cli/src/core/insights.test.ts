@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { isNudgeText, computeMetrics, sumAutopilotAvoided, buildRecommendations } from "./insights.js";
+import {
+  isNudgeText,
+  computeMetrics,
+  sumAutopilotAvoided,
+  buildRecommendations,
+  renderInsightsHtml,
+} from "./insights.js";
 import type { Turn } from "./types.js";
 import { saveState, stateDir } from "./state.js";
 import { mkdtemp, utimes } from "node:fs/promises";
@@ -120,5 +126,33 @@ describe("buildRecommendations", () => {
       { autopilotMode: "off", avoided: 0, recallInstalled: true, unusedArtifacts: [] },
     );
     expect(recommendations.map(recommendation => recommendation.line).join("\n")).toContain("defaultModel");
+  });
+});
+
+describe("renderInsightsHtml", () => {
+  const report = {
+    label: "project scope",
+    avoided: 2,
+    metrics: {
+      prompts: 10,
+      nudges: 3,
+      interrupts: 1,
+      continuations: 2,
+      notifications: 0,
+      compacts: 4,
+      modelSwitches: 0,
+      effortSwitches: 0,
+      errorPastes: 1,
+    },
+    recommendations: [{ metric: "nudges", line: "try <gradient autopilot nudge> & friends" }],
+  };
+
+  it("is self-contained and escapes dynamic content", () => {
+    const html = renderInsightsHtml(report);
+    expect(html).toContain("<style>");
+    expect(html).not.toContain("<script");
+    expect(html).not.toMatch(/https?:\/\//);
+    expect(html).toContain("&lt;gradient autopilot nudge&gt; &amp; friends");
+    expect(html).toContain("project scope");
   });
 });

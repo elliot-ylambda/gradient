@@ -19,7 +19,7 @@ import { resolveScanScope } from "./core/scope.js";
 import { isNudge } from "./core/playbook.js";
 import { loadConfig } from "./config.js";
 import { VERSION } from "./version.js";
-import { insights } from "./commands/insights.js";
+import { insights, writeInsightsHtml } from "./commands/insights.js";
 
 const HELP = `gradient — turn repeated Claude Code workflows into artifacts
 
@@ -284,6 +284,7 @@ export async function main(
         log(`  ${c.bold("model switches")} ${metrics.modelSwitches}   ${c.bold("effort switches")} ${metrics.effortSwitches}`);
         log("");
         for (const recommendation of report.recommendations) log(`  ${c.violet("→")} ${recommendation.line}`);
+        if (flags.html) log(`${c.ok("wrote")} ${c.muted(await writeInsightsHtml(projectDir, report))}`);
         return 0;
       }
       case "checkpoint": {

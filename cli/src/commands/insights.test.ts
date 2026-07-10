@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { insights } from "./insights.js";
+import { insights, writeInsightsHtml } from "./insights.js";
 import type { Turn } from "../core/types.js";
 
 let dir: string;
@@ -82,5 +82,15 @@ describe("insights", () => {
     );
     expect({ collects, parses }).toEqual({ collects: 1, parses: 1 });
     expect(report.recommendations.map(item => item.line)).toContain("unused 30d+: gradient remove dead");
+  });
+
+  it("writes the HTML report inside .gradient", async () => {
+    const report = await insights(
+      { projectDir: dir, home },
+      { collectFn: async () => [], parseFn: async () => [] },
+    );
+    const path = await writeInsightsHtml(dir, report);
+    expect(path).toBe(join(dir, ".gradient", "insights.html"));
+    expect(await readFile(path, "utf8")).toContain("gradient insights");
   });
 });

@@ -4,7 +4,7 @@ import { spawnDetached } from "./core/spawn.js";
 import { migrate } from "./commands/migrate.js";
 import { recallHook, recallStatus, setRecall } from "./commands/recall.js";
 import { stats } from "./commands/stats.js";
-import { insights } from "./commands/insights.js";
+import { insights, writeInsightsHtml } from "./commands/insights.js";
 
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
 vi.mock("./commands/migrate.js", () => ({
@@ -50,6 +50,7 @@ vi.mock("./commands/insights.js", () => ({
     },
     recommendations: [{ metric: "nudges", line: "try: gradient autopilot nudge" }],
   })),
+  writeInsightsHtml: vi.fn(async () => "/repo/.gradient/insights.html"),
 }));
 
 describe("parseCliArgs", () => {
@@ -280,5 +281,13 @@ describe("insights dispatch", () => {
     expect(vi.mocked(insights)).toHaveBeenCalledWith({ projectDir: expect.any(String), user: true });
     expect(lines.join("\n")).toContain("prompts");
     expect(lines.join("\n")).toContain("gradient autopilot nudge");
+  });
+
+  it("writes and reports the self-contained HTML view when requested", async () => {
+    vi.mocked(writeInsightsHtml).mockClear();
+    const lines: string[] = [];
+    expect(await main(["insights", "--html"], { log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(writeInsightsHtml)).toHaveBeenCalledWith(expect.any(String), expect.any(Object));
+    expect(lines.join("\n")).toContain(".gradient/insights.html");
   });
 });
