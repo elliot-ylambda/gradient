@@ -1,7 +1,7 @@
 # gradient v2 — Close the Funnel — Design
 
 **Date:** 2026-07-06
-**Status:** Draft (brainstorming complete; awaiting user review)
+**Status:** Implementation in progress (Phase A complete; Phases B–E planned)
 **Scope:** Spec 4. The v2 feature set: five sequenced phases (A–E), each of
 which becomes its own implementation plan. Builds on the shipped analysis
 engine (Spec 1), autopilot (Spec 2), and the approved `gradient.md` layering
@@ -71,14 +71,16 @@ export type PromptClass =
   | "human"            // mine this
   | "injected"         // existing INJECTED_PATTERNS (unchanged)
   | "continuation"     // "This session is being continued from a previous…"
-  | "notification"     // "<task-notification>…"
-  | "ci-template";     // template-flood heuristic below
+  | "notification";    // "<task-notification>…"
 
 export function classifyPrompt(text: string): PromptClass;
 ```
 
 - `filterPrompts` keeps its signature and now returns only `"human"` turns;
   a new `classifyPrompts(turns)` returns per-class buckets for Phase D.
+- `ci-template` is a post-cluster classification rather than a `PromptClass`:
+  it needs occurrence and session counts that do not exist on an individual
+  turn. `isTemplateFlood(candidate)` supplies that signal to `scan` and Phase D.
 - **Template-flood heuristic** (numbers pinned by fixtures in the plan): a
   cluster is `ci-template` when its normalized signature exceeds ~240 chars
   **and** occurrences-to-sessions ratio is ≈1 **and** count ≥ ~25 — human
@@ -114,8 +116,9 @@ export function classifyPrompt(text: string): PromptClass;
   config-free and testable.
 - `core/apply.ts`: skill writes go through `assertInside(join(projectDir,
   ".claude"))` unchanged; manifest entry `type: "skill"`, `path` = the
-  SKILL.md file. `remove` deletes the skill *directory* when it becomes
-  empty.
+  SKILL.md file. Apply refuses to overwrite a same-named untracked artifact,
+  while reapplying the same manifest-owned artifact remains supported.
+  `remove` deletes the skill *directory* when it becomes empty.
 - `core/detect.ts` prompt changes: (1) instruct the model to **merge
   same-intent clusters** before typing them (the `lgtm` / `looks-good`
   duplicate becomes one suggestion with both `triggers`); (2) return
@@ -124,8 +127,9 @@ export function classifyPrompt(text: string): PromptClass;
 - `gradient migrate` (new command): converts manifest-tracked
   `.claude/commands/*.md` entries to skills — writes the skill, updates the
   manifest entry, deletes the old command file. Only touches
-  gradient-authored files (manifest is the source of truth). Prints a
-  summary; `--dry-run` supported.
+  gradient-authored files (manifest is the source of truth), and skips unsafe
+  source paths or collisions with untracked skills. Prints a summary;
+  `--dry-run` supported.
 
 ### Testing (A)
 

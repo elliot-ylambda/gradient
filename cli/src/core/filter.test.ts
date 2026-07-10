@@ -95,4 +95,9 @@ describe("isTemplateFlood", () => {
   it("spares within-session repetition (occurrences ≫ sessions = a human habit)", () => {
     expect(isTemplateFlood(cand({ count: 60, sessions: 10 }))).toBe(false);
   });
+  it("pins the length, count, and 90%-of-sessions boundaries", () => {
+    expect(isTemplateFlood(cand({ signature: "x".repeat(TEMPLATE_MIN_CHARS), count: 25, sessions: 25 }))).toBe(false);
+    expect(isTemplateFlood(cand({ count: TEMPLATE_MIN_COUNT, sessions: 23 }))).toBe(true);
+    expect(isTemplateFlood(cand({ count: TEMPLATE_MIN_COUNT, sessions: 22 }))).toBe(false);
+  });
 });

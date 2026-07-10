@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applySuggestion } from "./apply.js";
@@ -30,6 +30,35 @@ describe("applySuggestion", () => {
     expect(await readFile(r.written!, "utf8")).toContain("do it");
     expect((await loadManifest(dir))[0]).toMatchObject({ name: "ship", type: "command" });
   });
+
+  it("refuses to overwrite an untracked hand-written skill", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const path = join(dir, ".claude", "skills", "ship", "SKILL.md");
+    await mkdir(join(dir, ".claude", "skills", "ship"), { recursive: true });
+    await writeFile(path, "hand-written skill\n");
+    const s: Suggestion = {
+      ...base,
+      name: "ship",
+      payload: { type: "command", commandName: "ship", body: "generated body" },
+    };
+
+    await expect(applySuggestion(s, dir)).rejects.toThrow(/untracked artifact/);
+    expect(await readFile(path, "utf8")).toBe("hand-written skill\n");
+    expect(await loadManifest(dir)).toEqual([]);
+  });
+
+  it("can update a skill already tracked under the same manifest name", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const first: Suggestion = {
+      ...base,
+      name: "ship",
+      payload: { type: "command", commandName: "ship", body: "first body" },
+    };
+    await applySuggestion(first, dir);
+    await applySuggestion({ ...first, payload: { ...first.payload, body: "updated body" } }, dir);
+    expect(await readFile(join(dir, ".claude", "skills", "ship", "SKILL.md"), "utf8")).toContain("updated body");
+  });
+
   it("prints (does not write) a loop suggestion but still records it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
     const s: Suggestion = { ...base, name: "cont", payload: { type: "loop", instruction: "continue until done" } };
