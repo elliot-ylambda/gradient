@@ -1,6 +1,7 @@
 export type Role = "user" | "assistant";
 export type Confidence = "high" | "inferred" | "flagged";
 export type ArtifactType = "command" | "loop" | "hook" | "skill" | "rule";
+export type Assistant = "claude-code" | "codex";
 
 /** One genuine user prompt after parse + filter. (The mining pipeline consumes
  * only user text; assistant turns are rendered by core/tail.ts for autopilot.) */
@@ -26,7 +27,7 @@ export interface Candidate {
 
 /** Semantic content of a suggestion; emit/* formats it into an artifact. */
 export type SuggestionPayload =
-  | { type: "command"; commandName: string; body: string; triggers?: string[] }
+  | { type: "command"; commandName: string; body: string; triggers?: string[]; mechanical?: boolean }
   | { type: "loop"; instruction: string; cadence?: string }
   | { type: "hook"; event: string; subcommand: string; description: string }
   | { type: "rule"; target: "project" | "user"; ruleName: string; text: string };
@@ -49,6 +50,8 @@ export interface ManifestEntry {
   path: string;          // written file path; "" for loop (printed only)
   createdAt: string;
   suggestionId: string;
+  /** Absent means claude-code for manifests written before multi-assistant support. */
+  target?: Assistant;
 }
 
 export interface Config {
@@ -70,6 +73,10 @@ export interface Config {
   ignorePatterns?: string[];
   /** Artifact format for command-type suggestions. Default "skill". */
   emitTarget?: "skill" | "command";
+  /** Assistants that receive approved skills. Defaults to ["claude-code"]. */
+  targets?: Assistant[];
+  /** Claude model frontmatter for mechanical skills. Empty disables it. Default "haiku". */
+  cheapSkillModel?: string;
 }
 
 /** Autopilot authority ladder (spec §2 #1). */

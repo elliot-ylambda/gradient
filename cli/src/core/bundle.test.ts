@@ -3,7 +3,7 @@ import { access, mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBundle } from "./bundle.js";
-import { addEntry, removeEntry } from "./manifest.js";
+import { addEntry, removeEntries } from "./manifest.js";
 
 let dir: string;
 
@@ -88,7 +88,7 @@ describe("buildBundle", () => {
     const first = await buildBundle(dir, "kit");
     const bundledSkill = join(first.dir, "skills", "ship", "SKILL.md");
     await expect(access(bundledSkill)).resolves.toBeUndefined();
-    await removeEntry(dir, "ship");
+    await removeEntries(dir, "ship");
     await buildBundle(dir, "kit");
     await expect(access(bundledSkill)).rejects.toThrow();
   });
