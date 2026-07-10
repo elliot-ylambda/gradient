@@ -98,4 +98,64 @@ describe("buildBundle", () => {
     expect(result.files.some(file => file.endsWith("plugin.json"))).toBe(true);
     expect(result.skipped).toEqual([]);
   });
+
+  it("emits hooks.json for resolvable approved hook suggestions only when opted in", async () => {
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "suggestions.json"), JSON.stringify([{
+      id: "h1",
+      name: "pre-compact-checkpoint",
+      title: "Checkpoint",
+      rationale: "",
+      confidence: "high",
+      evidence: { count: 100, sessions: 90 },
+      payload: { type: "hook", event: "PreCompact", subcommand: "checkpoint", description: "d" },
+    }]));
+    await addEntry(dir, {
+      name: "pre-compact-checkpoint",
+      type: "hook",
+      path: "",
+      createdAt: "2026-07-01",
+      suggestionId: "h1",
+    });
+    const result = await buildBundle(dir, "kit", { withHooks: true });
+    const hooks = JSON.parse(await readFile(join(result.dir, "hooks", "hooks.json"), "utf8"));
+    expect(hooks.hooks.PreCompact[0].hooks[0]).toEqual({ type: "command", command: "gradient checkpoint" });
+    expect(await readFile(join(result.dir, "README.md"), "utf8")).toContain("need gradient installed");
+  });
+
+  it("skips unresolvable or unsafe hooks and ignores hooks without the flag", async () => {
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "suggestions.json"), JSON.stringify([{
+      id: "unsafe",
+      name: "unsafe-hook",
+      title: "Unsafe",
+      rationale: "",
+      confidence: "high",
+      evidence: { count: 3, sessions: 2 },
+      payload: { type: "hook", event: "PreCompact", subcommand: "rm-rf", description: "d" },
+    }]));
+    await addEntry(dir, { name: "mystery-hook", type: "hook", path: "", createdAt: "2026-07-01", suggestionId: "gone" });
+    await addEntry(dir, { name: "unsafe-hook", type: "hook", path: "", createdAt: "2026-07-01", suggestionId: "unsafe" });
+    expect((await buildBundle(dir, "kit", { withHooks: true })).skipped.sort()).toEqual(["mystery-hook", "unsafe-hook"]);
+    expect((await buildBundle(dir, "kit2")).skipped).not.toContain("mystery-hook");
+  });
+
+  it("removes a previous hooks.json when rebuilt without --with-hooks", async () => {
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "suggestions.json"), JSON.stringify([{
+      id: "h1",
+      name: "checkpoint",
+      title: "Checkpoint",
+      rationale: "",
+      confidence: "high",
+      evidence: { count: 3, sessions: 2 },
+      payload: { type: "hook", event: "PreCompact", subcommand: "checkpoint", description: "d" },
+    }]));
+    await addEntry(dir, { name: "checkpoint", type: "hook", path: "", createdAt: "2026-07-01", suggestionId: "h1" });
+    const first = await buildBundle(dir, "kit", { withHooks: true });
+    const hooksPath = join(first.dir, "hooks", "hooks.json");
+    await expect(access(hooksPath)).resolves.toBeUndefined();
+    await buildBundle(dir, "kit");
+    await expect(access(hooksPath)).rejects.toThrow();
+  });
 });

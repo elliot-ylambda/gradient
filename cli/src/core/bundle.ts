@@ -2,6 +2,8 @@ import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { gradientDir, loadManifest } from "./manifest.js";
 import { assertInside, sanitizeName } from "./security.js";
+import { loadSuggestions } from "../commands/apply.js";
+import { emitHook } from "./emit/hook.js";
 
 export interface BundleResult {
   dir: string;
@@ -67,8 +69,9 @@ export async function buildBundle(
   const entries = await loadManifest(projectDir);
 
   for (const entry of entries) {
+    if (entry.type === "hook") continue;
     if (!entry.path) {
-      if (entry.type !== "hook") skipped.push(entry.name);
+      skipped.push(entry.name);
       continue;
     }
     let content: string;
@@ -92,7 +95,42 @@ export async function buildBundle(
     }
   }
 
-  const hasHooks = false;
+  let hasHooks = false;
+  if (opts.withHooks) {
+    const suggestions = await loadSuggestions(projectDir);
+    const byId = new Map(suggestions.map(suggestion => [suggestion.id, suggestion]));
+    const hookEvents: Record<string, Array<{ hooks: Array<{ type: string; command: string }> }>> =
+      Object.create(null) as Record<string, Array<{ hooks: Array<{ type: string; command: string }> }>>;
+
+    for (const entry of entries) {
+      if (entry.type !== "hook") continue;
+      const suggestion = byId.get(entry.suggestionId);
+      try {
+        if (!suggestion || suggestion.payload.type !== "hook") throw new Error("missing hook suggestion");
+        // Reuse the applied-hook emitter as the trust boundary: it rejects
+        // unknown lifecycle events and non-gradient subcommands.
+        const emitted = JSON.parse(emitHook(suggestion).settingsPatch) as {
+          hooks?: Record<string, Array<{ hooks: Array<{ type: string; command: string }> }>>;
+        };
+        const event = Object.entries(emitted.hooks ?? {})[0];
+        if (!event) throw new Error("empty hook patch");
+        const [eventName, groups] = event;
+        const target = hookEvents[eventName] ?? (hookEvents[eventName] = []);
+        for (const group of groups) {
+          const command = group.hooks?.[0]?.command;
+          if (!command || target.some(existing => existing.hooks[0]?.command === command)) continue;
+          target.push({ hooks: [{ type: "command", command }] });
+        }
+      } catch {
+        skipped.push(entry.name);
+      }
+    }
+
+    if (Object.keys(hookEvents).length > 0) {
+      hasHooks = true;
+      await put(root, join("hooks", "hooks.json"), `${JSON.stringify({ hooks: hookEvents }, null, 2)}\n`, files);
+    }
+  }
   await put(
     root,
     join(".claude-plugin", "plugin.json"),
@@ -101,7 +139,5 @@ export async function buildBundle(
   );
   await put(root, "README.md", bundleReadme(safeName, hasRules, hasHooks), files);
 
-  // Keep the option in the E1 contract; E2 uses it for hook resolution.
-  void opts.withHooks;
   return { dir: root, files, skipped };
 }
