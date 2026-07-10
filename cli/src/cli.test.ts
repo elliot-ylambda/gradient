@@ -11,6 +11,7 @@ import { insights, writeInsightsHtml } from "./commands/insights.js";
 import { continuityStatus, setContinuity } from "./commands/continuity.js";
 import { recap } from "./commands/recap.js";
 import { bundleCommand } from "./commands/bundle.js";
+import { notify } from "./commands/notify.js";
 
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
 vi.mock("./commands/migrate.js", () => ({
@@ -75,6 +76,9 @@ vi.mock("./commands/bundle.js", () => ({
     ],
     skipped: ["a-loop"],
   })),
+}));
+vi.mock("./commands/notify.js", () => ({
+  notify: vi.fn(async () => {}),
 }));
 
 describe("parseCliArgs", () => {
@@ -265,6 +269,29 @@ describe("respond dispatch", () => {
     const code = await main(["respond"], { log: s => lines.push(s), readStdin: async () => ({}) });
     expect(code).toBe(0);
     expect(lines).toEqual([]);
+  });
+});
+
+describe("notify dispatch", () => {
+  it("lists the hook target, drains stdin, stays silent, and exits zero", async () => {
+    const help: string[] = [];
+    await main([], { log: line => help.push(line) });
+    expect(help.join("\n")).toContain("gradient notify");
+
+    vi.mocked(notify).mockClear();
+    let drained = false;
+    const logs: string[] = [];
+    const code = await main(["notify"], {
+      log: line => logs.push(line),
+      readStdin: async () => {
+        drained = true;
+        return { ignored: "transcript text" };
+      },
+    });
+    expect(code).toBe(0);
+    expect(drained).toBe(true);
+    expect(vi.mocked(notify)).toHaveBeenCalledOnce();
+    expect(logs).toEqual([]);
   });
 });
 

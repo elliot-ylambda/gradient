@@ -6,6 +6,65 @@ import { scan } from "./scan.js";
 import { playbookPath, MINED_START } from "../core/playbook.js";
 
 describe("scan", () => {
+  it("suggests a matched Notification hook when attention gaps cross the session floor", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-attention-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const assistant = JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-07-09T10:00:00Z",
+      message: { role: "assistant", content: [{ type: "text", text: "Proceed?" }] },
+    });
+    const user = JSON.stringify({
+      type: "user",
+      timestamp: "2026-07-09T10:10:00Z",
+      message: { role: "user", content: "yes" },
+    });
+    const files = await Promise.all(Array.from({ length: 5 }, async (_, index) => {
+      const path = join(projectDir, `session-${index}.jsonl`);
+      await writeFile(path, `${assistant}\n${user}\n`);
+      return path;
+    }));
+    const logs: string[] = [];
+
+    const suggestions = await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        config: {},
+        backend: null,
+        collectFn: async () => files,
+        parseFn: async () => [],
+        log: message => logs.push(message),
+      },
+    );
+
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0].payload).toMatchObject({
+      type: "hook",
+      event: "Notification",
+      matcher: "permission_prompt|idle_prompt",
+      subcommand: "notify",
+    });
+    expect(logs.join("\n")).toContain("notification hook suggested");
+    const cached = JSON.parse(await readFile(join(projectDir, ".gradient", "suggestions.json"), "utf8"));
+    expect(cached[0].id).toBe(suggestions[0].id);
+  });
+
+  it("does not suggest a Claude Notification hook from Codex-only history", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-attention-codex-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const suggestions = await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        config: { targets: ["codex"] },
+        backend: null,
+        collectCodexFn: async () => ["codex-session.jsonl"],
+        parseCodexFn: async () => [],
+        parseCodexDialogueFn: async () => [],
+      },
+    );
+    expect(suggestions).toEqual([]);
+  });
+
   it("sends up to DEFAULT_DETECT_WINDOW candidates to the llm", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const logs: string[] = [];

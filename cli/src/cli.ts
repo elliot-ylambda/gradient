@@ -24,6 +24,7 @@ import { insights, writeInsightsHtml } from "./commands/insights.js";
 import { continuityStatus, setContinuity } from "./commands/continuity.js";
 import { recap } from "./commands/recap.js";
 import { bundleCommand } from "./commands/bundle.js";
+import { notify } from "./commands/notify.js";
 import type { Assistant } from "./core/types.js";
 
 const HELP = `gradient — turn repeated Claude Code and Codex workflows into artifacts
@@ -39,6 +40,7 @@ Usage:
   gradient review               approve cached suggestions
   gradient apply <id|name>...   generate specific suggestions
   gradient explain <id|name>    show the evidence behind a suggestion
+  gradient notify               (hook target) desktop ping when Claude needs input
   gradient list                 show generated artifacts
   gradient remove <name>        delete a generated artifact
   gradient migrate [--dry-run]  convert generated commands to skills
@@ -411,6 +413,16 @@ export async function main(
         const input = await readStdin();
         const path = await checkpoint(input as { transcript_path?: string }, projectDir);
         log(`checkpoint written: ${path}`);
+        return 0;
+      }
+      case "notify": {
+        // Notification-hook target: static text only, silent and fail-open.
+        try {
+          await readStdin();
+          await notify();
+        } catch {
+          // The host assistant must never observe notification failures.
+        }
         return 0;
       }
       case "autopilot": {

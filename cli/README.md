@@ -20,7 +20,8 @@ npx gradient.md bundle team-kit # package approved artifacts as a plugin
 1. Reads enabled local histories: Claude Code (`~/.claude/projects/**/*.jsonl`)
    and Codex (`~/.codex/sessions/**/*.jsonl`). Spawned subagent logs are excluded.
 2. Clusters repeated prompts, failing-command pastes, and short Q→A preferences
-   locally (no LLM) into candidate patterns. Pasted bodies are discarded.
+   locally (no LLM) into candidate patterns. It also measures long
+   question→answer waits; pasted bodies are discarded.
 3. Sends only the top candidates to an LLM (`claude` by default, `codex exec`
    for a Codex-only target, with an Anthropic API-key fallback) to name and type them.
 4. You approve; it writes `.claude/skills/<name>/SKILL.md`, portable Codex
@@ -44,6 +45,18 @@ Skills `name` and `description` metadata.
 index covers project and user-level commands and skills; its adoption log stores
 only artifact names and match scores, never prompt text. `gradient stats` shows
 uses, last use, retypes caught, and stale-artifact removal suggestions.
+
+Flagged suggestions may include one 2–3 choice clarification. `gradient review`
+resolves that choice locally, persists the selected full body, and shows the
+decision later in `gradient explain`; deciding later leaves the suggestion
+flagged and unapplied.
+
+Five or more Claude Code sessions with waits of at least five minutes produce a
+suggested `Notification` hook matched to `permission_prompt|idle_prompt`.
+Approved hook output calls the silent `gradient notify` target, which uses only
+the static message “Claude Code is waiting on you” via macOS `osascript` or
+Linux `notify-send`. Notification failures are ignored, and transcript text is
+never passed to the OS. Codex history does not produce this Claude-only hook.
 
 `gradient insights [--user] [--html]` is also LLM-free. It counts behavior
 signals such as nudges, interrupts, compacts, error pastes, and model churn,

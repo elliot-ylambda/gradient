@@ -1,7 +1,7 @@
 # gradient — Review Disambiguation & Attention Hooks — Design
 
 **Date:** 2026-07-09
-**Status:** Draft (proposed; awaiting user review)
+**Status:** Implemented (2026-07-10)
 **Scope:** Spec 9. Two independently shippable components that close the
 funnel where Tier 2 gaps remain: (1) **flagged-suggestion disambiguation**
 in `review` — the judge's identified ambiguity becomes one question the

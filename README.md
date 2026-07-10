@@ -88,6 +88,11 @@ No API key is required for local use.
 Clustering is local and LLM-free; only short candidate snippets ever reach a model
 — never whole transcripts — and a redaction pass strips secrets first.
 
+When a frequent pattern is genuinely ambiguous, `review` asks one judge-authored
+multiple-choice question. Choosing an interpretation replaces the complete
+artifact body, promotes the suggestion to high confidence, and keeps the choice
+in `explain`; declining leaves it flagged and unapplied.
+
 ## Model use and billing
 
 gradient uses the selected assistant's non-interactive CLI for short text-only
@@ -192,6 +197,17 @@ whether a hint was shown. Prompt text is never logged. `gradient stats` reports
 uses, last use, and retypes caught for each approved artifact, and suggests
 removing artifacts that remain unused for at least 30 days.
 
+## Attention hooks
+
+If Claude asked a question and waited at least five minutes for an answer in five
+or more sessions, `scan` adds one high-confidence Notification-hook suggestion.
+Approve it through the normal review flow to get a desktop ping for
+`permission_prompt` and `idle_prompt` notifications. `gradient notify` uses
+static text only—never transcript content—and fails open through macOS
+`osascript` or Linux `notify-send`. This hook is Claude Code-specific; Codex
+history remains part of shared habit mining but cannot produce a Claude
+lifecycle hook.
+
 ## Insights & continuity
 
 `gradient insights` is a local-only report card for the way you work: typed
@@ -258,6 +274,10 @@ target, tracks/removes each copy independently, mines both assistants into one
 shared evidence pool, and reports the approximate token cost of unautomated
 nudges, context re-explains, and repeated error pastes.
 
+Flagged-suggestion clarification and attention hooks complete the remaining
+Tier 2 review gaps: ambiguous intent is resolved offline during `review`, and
+repeated waiting-on-you gaps can become a narrowly matched desktop ping.
+
 The opt-in `gradient autopilot` Stop-hook responder also ships today. All five
 v2 phases are implemented.
 
@@ -273,6 +293,8 @@ v2 phases are implemented.
 - Phase E implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md)
 - Codex and cost design: [`docs/superpowers/specs/2026-07-09-gradient-codex-and-cost-design.md`](docs/superpowers/specs/2026-07-09-gradient-codex-and-cost-design.md)
 - Codex Stage 2 and cost plan: [`docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md`](docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md)
+- Review clarification and attention design: [`docs/superpowers/specs/2026-07-09-gradient-review-clarify-design.md`](docs/superpowers/specs/2026-07-09-gradient-review-clarify-design.md)
+- Review clarification and attention plan: [`docs/superpowers/plans/2026-07-09-gradient-review-clarify.md`](docs/superpowers/plans/2026-07-09-gradient-review-clarify.md)
 
 ## License
 
