@@ -4,6 +4,13 @@ import { addEntry, artifactHasMarker, artifactMarker, loadManifest } from "../co
 import { assertInside, sanitizeName } from "../core/security.js";
 import { refreshRecallIndex } from "./recall.js";
 import { safeReadFile, safeUnlink, safeWriteFile } from "../core/safeFs.js";
+import {
+  approvalMatches,
+  loadArtifactApprovals,
+  recordArtifactApproval,
+} from "../core/approvals.js";
+
+const MIGRATION_ARTIFACT_MAX_BYTES = 1_000_000;
 
 export interface MigrateResult {
   migrated: string[];
@@ -48,6 +55,7 @@ export async function migrate(
   const migrated: string[] = [];
   const skipped: string[] = [];
   const claudeDir = join(projectDir, ".claude");
+  const approvals = await loadArtifactApprovals(projectDir, opts.home);
 
   for (const entry of await loadManifest(projectDir)) {
     if (entry.type !== "command" || !entry.path) continue;
@@ -62,12 +70,19 @@ export async function migrate(
 
     let raw: string;
     try {
-      raw = await safeReadFile(projectDir, oldPath);
+      raw = await safeReadFile(projectDir, oldPath, { maxBytes: MIGRATION_ARTIFACT_MAX_BYTES });
     } catch {
       skipped.push(entry.name);
       continue;
     }
     if (!artifactHasMarker(raw, entry)) {
+      skipped.push(entry.name);
+      continue;
+    }
+    // A 0.1.0 marker did not imply that the exact body was reviewed under the
+    // hardened generator. Refuse to turn legacy/unapproved commands into
+    // model-invokable skills; users can re-scan and re-apply them explicitly.
+    if (!approvalMatches(approvals, entry, raw)) {
       skipped.push(entry.name);
       continue;
     }
@@ -103,9 +118,12 @@ export async function migrate(
       throw error;
     }
 
+    const migratedEntry = { ...entry, type: "skill" as const, path: skillPath };
     try {
-      await addEntry(projectDir, { ...entry, type: "skill", path: skillPath });
+      await addEntry(projectDir, migratedEntry);
+      await recordArtifactApproval(projectDir, migratedEntry, markedContent, opts.home);
     } catch (error) {
+      await addEntry(projectDir, entry).catch(() => undefined);
       await safeUnlink(projectDir, skillPath).catch(() => undefined);
       throw error;
     }

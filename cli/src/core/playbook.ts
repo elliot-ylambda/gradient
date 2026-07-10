@@ -8,6 +8,7 @@ import { redact } from "./security.js";
 export const MINED_START = "<!-- gradient:mined:start -->";
 export const MINED_END = "<!-- gradient:mined:end -->";
 export const PLAYBOOK_MAX_CHAINS = 5;
+const PLAYBOOK_FILE_MAX_BYTES = 256_000;
 
 export const DEFAULT_PLAYBOOK = `# gradient.md — autopilot playbook
 
@@ -92,7 +93,7 @@ export async function writePlaybook(suggestions: Suggestion[], home?: string, ch
   const path = playbookPath(home);
   let existing: string | undefined;
   try {
-    existing = await safeReadFile(userHome, path);
+    existing = await safeReadFile(userHome, path, { maxBytes: PLAYBOOK_FILE_MAX_BYTES });
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") return null; // unreadable — leave it alone
     existing = undefined; // ENOENT → first run
@@ -107,7 +108,7 @@ export async function writePlaybook(suggestions: Suggestion[], home?: string, ch
 export async function loadPlaybook(home?: string): Promise<string> {
   const userHome = home ?? homedir();
   try {
-    return await safeReadFile(userHome, playbookPath(userHome));
+    return await safeReadFile(userHome, playbookPath(userHome), { maxBytes: PLAYBOOK_FILE_MAX_BYTES });
   } catch {
     return DEFAULT_PLAYBOOK;
   }
@@ -195,7 +196,11 @@ function bodyAfter(lines: string[], end: number): string {
  * (a present-but-unreadable gradient.md must not grant authority). */
 export async function loadProjectPlaybook(cwd: string): Promise<ProjectPlaybook | null> {
   try {
-    return parseProjectPlaybook(await safeReadFile(cwd, projectPlaybookPath(cwd)));
+    return parseProjectPlaybook(await safeReadFile(
+      cwd,
+      projectPlaybookPath(cwd),
+      { maxBytes: PLAYBOOK_FILE_MAX_BYTES },
+    ));
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
     if (err.code === "ENOENT") return null; // no file → no clamp, no prose

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, saveConfig } from "./config.js";
+import { boundedAutopilotBudget, loadConfig, MAX_AUTOPILOT_BUDGET, saveConfig } from "./config.js";
 
 describe("config", () => {
   it("round-trips config under a fake home", async () => {
@@ -17,5 +17,10 @@ describe("config", () => {
     await mkdir(join(home, ".config", "gradient"), { recursive: true });
     await writeFile(join(home, ".config", "gradient", "config.json"), "{broken");
     await expect(loadConfig(home)).rejects.toThrow(/unreadable gradient config/);
+  });
+  it("bounds malformed and excessive paid autopilot budgets", () => {
+    expect(boundedAutopilotBudget(Number.POSITIVE_INFINITY)).toBe(10);
+    expect(boundedAutopilotBudget(1_000_000)).toBe(MAX_AUTOPILOT_BUDGET);
+    expect(boundedAutopilotBudget(0)).toBe(0);
   });
 });

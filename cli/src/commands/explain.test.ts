@@ -23,16 +23,16 @@ async function seed(): Promise<{ dir: string; home: string }> {
 describe("explain", () => {
   it("finds a suggestion by name", async () => {
     const { dir, home } = await seed();
-    const s = await explain(dir, "ship", home);
+    const s = await explain(dir, "ship", { home });
     expect(s?.evidence.count).toBe(9);
     expect(s?.examples?.length).toBe(2);
   });
   it("finds a suggestion by id", async () => {
     const { dir, home } = await seed();
-    expect((await explain(dir, "aaa", home))?.name).toBe("ship");
+    expect((await explain(dir, "aaa", { home }))?.name).toBe("ship");
   });
   it("returns undefined when not found", async () => {
     const { dir, home } = await seed();
-    expect(await explain(dir, "nope", home)).toBeUndefined();
+    expect(await explain(dir, "nope", { home })).toBeUndefined();
   });
 });

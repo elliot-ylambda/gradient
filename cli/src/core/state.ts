@@ -6,6 +6,7 @@ import { safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
 
 const LOG_CAP = 20;
 const STALE_MS = 7 * 24 * 3600 * 1000;
+const STATE_FILE_MAX_BYTES = 128_000;
 
 export function stateDir(home?: string): string {
   return join(home ?? homedir(), ".config", "gradient", "state");
@@ -25,7 +26,11 @@ function fileFor(sessionId: string, home?: string): string {
 export async function loadState(sessionId: string, home?: string): Promise<SessionState> {
   const userHome = home ?? homedir();
   try {
-    const raw = JSON.parse(await safeReadFile(userHome, fileFor(sessionId, userHome))) as SessionState;
+    const raw = JSON.parse(await safeReadFile(
+      userHome,
+      fileFor(sessionId, userHome),
+      { maxBytes: STATE_FILE_MAX_BYTES },
+    )) as SessionState;
     if (typeof raw?.count !== "number" || !Array.isArray(raw.log)) return freshState();
     return { ...freshState(), ...raw, attempts: typeof raw.attempts === "number" ? raw.attempts : 0 };
   } catch {

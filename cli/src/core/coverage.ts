@@ -1,7 +1,7 @@
-import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { readTranscriptLines } from "./tail.js";
 
 const execFileP = promisify(execFile);
 
@@ -25,7 +25,7 @@ export async function findHusks(
     if ((userTurnCounts.get(f) ?? 0) > 0) continue;
     let content: string;
     try {
-      content = await readFile(f, "utf8");
+      content = (await readTranscriptLines(f)).join("\n");
     } catch {
       continue;
     }
@@ -92,7 +92,7 @@ export async function findMissingSessions(
     for (const f of files) {
       let content: string;
       try {
-        content = await readFile(f, "utf8");
+        content = (await readTranscriptLines(f)).join("\n");
       } catch {
         continue;
       }

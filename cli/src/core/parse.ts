@@ -1,4 +1,5 @@
 import { open } from "node:fs/promises";
+import { constants } from "node:fs";
 import type { Turn, Role } from "./types.js";
 
 export const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
@@ -9,9 +10,10 @@ export const MAX_DIALOGUE_TEXT_CHARS = 2_000;
 /** Read only the newest bounded portion of a transcript. Starting mid-line is
  * harmless because the incomplete JSON record is discarded. */
 async function readTranscriptTail(path: string): Promise<string> {
-  const handle = await open(path, "r");
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error("refusing non-regular transcript");
     const length = Math.min(stat.size, MAX_TRANSCRIPT_BYTES);
     const start = Math.max(0, stat.size - length);
     const buffer = Buffer.alloc(length);

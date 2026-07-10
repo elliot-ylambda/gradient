@@ -25,8 +25,22 @@ export function isInjected(text: string): boolean {
 }
 
 export function compileIgnorePatterns(raw?: string[]): RegExp[] {
+  if (!Array.isArray(raw)) return [];
   const out: RegExp[] = [];
-  for (const src of raw ?? []) {
+  for (const src of raw.slice(0, 20)) {
+    if (
+      typeof src !== "string" ||
+      src.length === 0 ||
+      src.length > 200 ||
+      /[\u0000-\u001f\u007f-\u009f]/.test(src) ||
+      // Keep user-supplied patterns in a deliberately small, linear-looking
+      // subset. Grouping, alternation, lookarounds, backreferences, and general
+      // quantifiers can trigger catastrophic backtracking in JavaScript's
+      // RegExp engine on transcript-sized strings.
+      /[(){}+?|]/.test(src) ||
+      /(^|[^.])\*/.test(src) ||
+      (src.match(/\.\*/g)?.length ?? 0) > 1
+    ) continue;
     try { out.push(new RegExp(src, "i")); } catch { /* invalid pattern — skip */ }
   }
   return out;

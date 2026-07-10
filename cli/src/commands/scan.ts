@@ -4,11 +4,11 @@ import { collect } from "../core/collect.js";
 import { parseFile } from "../core/parse.js";
 import { parseDialogueFile, type DialogueTurn } from "../core/parse.js";
 import { filterPrompts, compileIgnorePatterns, hasTemplateFloodSupport, isTemplateFlood } from "../core/filter.js";
-import { capByRecency } from "../core/cap.js";
+import { boundedPromptLimit, capByRecency, MAX_PROMPTS_HARD_CAP } from "../core/cap.js";
 import { DEFAULT_MAX_PROMPTS, DEFAULT_DETECT_WINDOW } from "../core/scope.js";
 import { cluster, normalize } from "../core/cluster.js";
 import { mineSequences, SEQ_MAX_BIGRAMS } from "../core/sequence.js";
-import { detect } from "../core/detect.js";
+import { boundedDetectLimit, detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
 import { findHusks, findMissingSessions } from "../core/coverage.js";
 import { selectBackend } from "../llm/index.js";
@@ -50,10 +50,14 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const log = deps.log ?? (() => {});
   const collectFn = deps.collectFn ?? ((o: ScanOptions) => collect(o));
   const parseFn = deps.parseFn ?? parseFile;
+  const config = deps.config ?? (await loadConfig(opts.home));
+  const requestedMax = opts.maxPrompts ?? config.maxPrompts ?? DEFAULT_MAX_PROMPTS;
+  const max = boundedPromptLimit(requestedMax);
+  if (max !== requestedMax) log(`max-prompts safety-capped to ${max}`);
 
   const files = await collectFn(opts);
   log(`files: ${files.length} transcripts`);
-  const turns: Turn[] = [];
+  let turns: Turn[] = [];
   const userTurnCounts = new Map<string, number>();
   for (const f of files) {
     const t = await parseFn(f);
@@ -66,6 +70,9 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
         const ts = Date.parse(turn.ts);
         return Number.isFinite(ts) && ts >= cutoff;
       }));
+    }
+    if (turns.length > MAX_PROMPTS_HARD_CAP) {
+      turns = capByRecency(turns, MAX_PROMPTS_HARD_CAP).kept;
     }
   }
 
@@ -90,11 +97,9 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     log(`coverage check failed: ${(e as Error).message}`);
   }
 
-  const config = deps.config ?? (await loadConfig(opts.home));
   const ignore = compileIgnorePatterns(config.ignorePatterns);
   const prompts = filterPrompts(turns, ignore);
   log(`prompts: ${prompts.length} after filtering injected text`);
-  const max = opts.maxPrompts ?? config.maxPrompts ?? DEFAULT_MAX_PROMPTS;
   const { kept, dropped } = capByRecency(prompts, max);
   if (dropped > 0) {
     log(`capped to most recent ${max} prompts; ${dropped} older dropped (raise with --max-prompts)`);
@@ -140,7 +145,9 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const answers = mineAnswerCandidates(answerPairs);
   if (answers.length > 0) log(`${answers.length} repeated-answer pattern(s) detected`);
   const nonSequenceCandidates = [...candidates, ...pastes, ...answers];
-  const window = opts.limit ?? DEFAULT_DETECT_WINDOW;
+  const requestedWindow = opts.limit ?? DEFAULT_DETECT_WINDOW;
+  const window = boundedDetectLimit(requestedWindow, DEFAULT_DETECT_WINDOW);
+  if (window !== requestedWindow) log(`candidate limit safety-capped to ${window}`);
 
   // Sequence sink 1: chains join the detect window as candidates (spec §4).
   const sigSet = new Set(candidates.map(c => c.signature));

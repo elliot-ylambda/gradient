@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { capByRecency } from "./cap.js";
+import { capByRecency, MAX_PROMPTS_HARD_CAP } from "./cap.js";
 import type { Turn } from "./types.js";
 
 function turn(ts: string, text: string): Turn {
@@ -19,8 +19,16 @@ describe("capByRecency", () => {
     expect(kept.map(t => t.text)).toEqual(["new", "mid"]); // newest first, oldest dropped
   });
 
-  it("treats max <= 0 as no cap", () => {
+  it("treats max <= 0 as the absolute safety cap", () => {
     const ps = [turn("2026-01-01", "a")];
     expect(capByRecency(ps, 0)).toEqual({ kept: ps, dropped: 0 });
+  });
+
+  it("never exceeds the absolute safety cap", () => {
+    const ps = Array.from({ length: MAX_PROMPTS_HARD_CAP + 1 }, (_, i) =>
+      turn(new Date(1_700_000_000_000 + i).toISOString(), String(i)));
+    const result = capByRecency(ps, Number.MAX_SAFE_INTEGER);
+    expect(result.kept).toHaveLength(MAX_PROMPTS_HARD_CAP);
+    expect(result.dropped).toBe(1);
   });
 });

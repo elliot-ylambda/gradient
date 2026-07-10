@@ -2,6 +2,8 @@ import { join } from "node:path";
 import { assertInside } from "./security.js";
 import { safeReadFile, safeWriteFile } from "./safeFs.js";
 
+const SETTINGS_MAX_BYTES = 1_000_000;
+
 export function settingsPath(projectDir: string): string {
   return join(projectDir, ".claude", "settings.local.json");
 }
@@ -71,7 +73,7 @@ export async function installHook(
   assertInside(join(projectDir, ".claude"), path);
   let existing: Record<string, any> = {};
   try {
-    existing = JSON.parse(await safeReadFile(projectDir, path));
+    existing = JSON.parse(await safeReadFile(projectDir, path, { maxBytes: SETTINGS_MAX_BYTES }));
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
       throw new Error(`refusing to overwrite unreadable ${path}: ${(e as Error).message}`);
@@ -89,7 +91,7 @@ export async function removeHook(projectDir: string, event: string, command: str
   assertInside(join(projectDir, ".claude"), path);
   let existing: Record<string, any>;
   try {
-    existing = JSON.parse(await safeReadFile(projectDir, path));
+    existing = JSON.parse(await safeReadFile(projectDir, path, { maxBytes: SETTINGS_MAX_BYTES }));
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return path; // nothing to remove
     throw new Error(`refusing to overwrite unreadable ${path}: ${(e as Error).message}`);
@@ -106,7 +108,11 @@ export async function hookInstalled(
   opts: { matcher?: string } = {},
 ): Promise<boolean> {
   try {
-    const parsed = JSON.parse(await safeReadFile(projectDir, settingsPath(projectDir)));
+    const parsed = JSON.parse(await safeReadFile(
+      projectDir,
+      settingsPath(projectDir),
+      { maxBytes: SETTINGS_MAX_BYTES },
+    ));
     const groups: HookGroup[] = Array.isArray(parsed?.hooks?.[event]) ? parsed.hooks[event] : [];
     return groups.some(group =>
       (opts.matcher === undefined || group.matcher === opts.matcher) &&

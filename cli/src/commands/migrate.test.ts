@@ -3,15 +3,18 @@ import { access, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addEntry, artifactMarker, loadManifest } from "../core/manifest.js";
+import { recordArtifactApproval } from "../core/approvals.js";
 import { migrate, splitCommandFile } from "./migrate.js";
 
 let dir: string;
+let home: string;
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "grad-mig-"));
+  home = await mkdtemp(join(tmpdir(), "grad-mig-home-"));
 });
 
-async function seedCommand(name: string, relative = false): Promise<string> {
+async function seedCommand(name: string, relative = false, approved = true): Promise<string> {
   const absolute = join(dir, ".claude", "commands", `${name}.md`);
   const entry = {
     name,
@@ -20,9 +23,11 @@ async function seedCommand(name: string, relative = false): Promise<string> {
     createdAt: "2026-07-01",
     suggestionId: "x",
   };
+  const content = `---\ndescription: "Fix the push"\n---\n${artifactMarker(entry)}\nDo the fix.\n`;
   await mkdir(join(dir, ".claude", "commands"), { recursive: true });
-  await writeFile(absolute, `---\ndescription: "Fix the push"\n---\n${artifactMarker(entry)}\nDo the fix.\n`);
+  await writeFile(absolute, content);
   await addEntry(dir, entry);
+  if (approved) await recordArtifactApproval(dir, entry, content, home);
   return absolute;
 }
 
@@ -42,7 +47,7 @@ describe("splitCommandFile", () => {
 describe("migrate", () => {
   it("converts a tracked command into a skill and deletes the old file", async () => {
     const old = await seedCommand("fix-push", true);
-    const result = await migrate(dir);
+    const result = await migrate(dir, { home });
 
     expect(result).toEqual({ migrated: ["fix-push"], skipped: [] });
     const skillPath = join(dir, ".claude", "skills", "fix-push", "SKILL.md");
@@ -62,7 +67,7 @@ describe("migrate", () => {
 
   it("dry-run reports migrations without changing files or the manifest", async () => {
     const old = await seedCommand("fix-push");
-    const result = await migrate(dir, { dryRun: true });
+    const result = await migrate(dir, { dryRun: true, home });
 
     expect(result).toEqual({ migrated: ["fix-push"], skipped: [] });
     await expect(stat(old)).resolves.toBeTruthy();
@@ -86,7 +91,7 @@ describe("migrate", () => {
       suggestionId: "z",
     });
 
-    expect(await migrate(dir)).toEqual({ migrated: [], skipped: ["ghost"] });
+    expect(await migrate(dir, { home })).toEqual({ migrated: [], skipped: ["ghost"] });
   });
 
   it("leaves untracked command files untouched", async () => {
@@ -94,7 +99,7 @@ describe("migrate", () => {
     await mkdir(join(dir, ".claude", "commands"), { recursive: true });
     await writeFile(untracked, "Hand-written workflow.\n");
 
-    expect(await migrate(dir)).toEqual({ migrated: [], skipped: [] });
+    expect(await migrate(dir, { home })).toEqual({ migrated: [], skipped: [] });
     expect(await readFile(untracked, "utf8")).toBe("Hand-written workflow.\n");
   });
 
@@ -110,7 +115,7 @@ describe("migrate", () => {
       suggestionId: "evil",
     }]));
 
-    await expect(migrate(dir)).rejects.toThrow(/path/);
+    await expect(migrate(dir, { home })).rejects.toThrow(/path/);
     expect(await readFile(victim, "utf8")).toBe("keep me\n");
   });
 
@@ -120,9 +125,16 @@ describe("migrate", () => {
     await mkdir(join(dir, ".claude", "skills", "fix-push"), { recursive: true });
     await writeFile(skillPath, "hand-written skill\n");
 
-    expect(await migrate(dir)).toEqual({ migrated: [], skipped: ["fix-push"] });
+    expect(await migrate(dir, { home })).toEqual({ migrated: [], skipped: ["fix-push"] });
     expect(await readFile(skillPath, "utf8")).toBe("hand-written skill\n");
     await expect(stat(old)).resolves.toBeTruthy();
     expect((await loadManifest(dir))[0].type).toBe("command");
+  });
+
+  it("refuses to promote a legacy command without current exact-content approval", async () => {
+    const old = await seedCommand("legacy", false, false);
+    expect(await migrate(dir, { home })).toEqual({ migrated: [], skipped: ["legacy"] });
+    await expect(stat(old)).resolves.toBeTruthy();
+    await expect(access(join(dir, ".claude", "skills", "legacy", "SKILL.md"))).rejects.toThrow();
   });
 });

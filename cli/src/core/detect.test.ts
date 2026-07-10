@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detect, candidateToCommand, buildDetectPrompt, candidateRef } from "./detect.js";
+import { detect, candidateToCommand, buildDetectPrompt, candidateRef, MAX_DETECT_CANDIDATES } from "./detect.js";
 import type { Candidate } from "./types.js";
 
 const cand = (signature: string, count: number, confidence: any = "high"): Candidate => ({
@@ -202,6 +202,21 @@ describe("detect", () => {
     const [out] = await detect(sources, llm, { limit: 5, onCap: value => (dropped = value) });
     expect(dropped).toBe(15);
     expect(out.confidence).toBe("inferred");
+  });
+
+  it("never sends more than the absolute candidate cap", async () => {
+    const sources = Array.from({ length: MAX_DETECT_CANDIDATES + 20 }, (_, i) => cand(`p${i}`, 200 - i));
+    let sent = 0;
+    const llm = {
+      name: "fake",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => {
+        sent = JSON.parse(prompt).length;
+        return JSON.stringify({ suggestions: [] });
+      },
+    };
+    await detect(sources, llm, { limit: Number.MAX_SAFE_INTEGER });
+    expect(sent).toBe(MAX_DETECT_CANDIDATES);
   });
 
   it("degrades safely when the backend throws or returns malformed JSON", async () => {

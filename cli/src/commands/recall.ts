@@ -33,7 +33,12 @@ export function adoptionPath(projectDir: string, home?: string): string {
 
 export async function appendAdoption(projectDir: string, event: AdoptionEvent, home?: string): Promise<void> {
   const userHome = home ?? homedir();
-  await safeAppendFile(userHome, adoptionPath(projectDir, userHome), `${JSON.stringify(event)}\n`);
+  await safeAppendFile(
+    userHome,
+    adoptionPath(projectDir, userHome),
+    `${JSON.stringify(event)}\n`,
+    { maxBytes: 5_000_000 },
+  );
 }
 
 /** Fail-open, local-only UserPromptSubmit hook. Every failure returns no hint. */

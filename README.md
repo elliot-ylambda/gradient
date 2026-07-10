@@ -55,6 +55,7 @@ npx gradient.md recall on   # hint when a typed prompt matches an installed arti
 npx gradient.md stats       # coverage plus artifact adoption
 npx gradient.md insights    # local behavior report + concrete next actions
 npx gradient.md continuity on # checkpoint before compaction, recap after resume
+npx gradient.md bundle team-kit # package approved artifacts for teammates
 ```
 
 The npm package is **`gradient.md`**; the command it installs is **`gradient`**.
@@ -63,9 +64,11 @@ So `npx gradient.md scan` and, once installed globally, plain `gradient scan`.
 **Scope.** `scan` defaults to the project you're in. `--user` widens to every
 project but bounds it to a recent window (last 7 days, set via `userScopeDays`
 in config or `--since`), so it stays fast. A recency cap (`--max-prompts`,
-default 1500) protects the clustering step from very large histories and reports
-anything it drops. Cross-project scans deliberately skip Q→A preference mining,
-so a preference learned in one repository cannot become a rule in another.
+default 1500, absolute ceiling 5000) protects the clustering step from very
+large histories and reports anything it drops. Transcript discovery also has
+file-count, depth, per-file, and aggregate-byte ceilings. Cross-project scans
+deliberately skip Q→A preference mining, so a preference learned in one
+repository cannot become a rule in another.
 
 The default backend reuses your existing `claude` CLI auth — no API key required.
 Clustering is local and LLM-free. `scan` sends bounded candidate snippets—not
@@ -83,8 +86,8 @@ things draw on it:
 
 - **`scan`** — one call per run, to name and rank the mined clusters.
 - **`autopilot`** — at most `autopilotBudget` judge attempts per session
-  (default 10, clampable lower per repo in `gradient.md`). Stand-downs and
-  failed or timed-out calls consume the budget too.
+  (default 10, absolute ceiling 100, clampable lower per repo in `gradient.md`).
+  Stand-downs and failed or timed-out calls consume the budget too.
 
 An always-on autopilot is therefore a recurring cost, not a free one. If that
 matters, lower the budget or set `max-mode: off` in the repos you don't want it
@@ -157,8 +160,8 @@ per session and never again.
 
 Three other bounds replace it, and each is independent:
 
-- **Budget** — a hard cap on judge attempts per session (default 10), clampable
-  further per repo.
+- **Budget** — a hard cap on judge attempts per session (default 10, absolute
+  ceiling 100), clampable further per repo.
 - **Progress gate** — if Claude stops again having done no tool work since the
   last nudge, autopilot latches off for the session rather than nudging into a
   wall.
@@ -217,7 +220,11 @@ consent, deletes the checkpoint, then removes only those two hooks.
   capped/redacted candidate snippets to the selected model. Project-scoped
   preference mining also reads bounded assistant questions; cross-project scans
   skip that pass. `--user --since` filters individual turn timestamps; every
-  scope keeps the default 1,500-prompt processing cap.
+  scope keeps the default 1,500-prompt processing cap and an absolute 5,000
+  prompt ceiling. Transcript traversal, individual files, total input bytes,
+  candidate count, caches, settings, playbooks, and append-only logs are also
+  bounded. Site-specific `ignorePatterns` accept only a capped, linear-looking
+  regex subset to avoid backtracking denial of service.
 - Suggestions must map to opaque IDs for exact local source candidates; redacted
   text is never used as a provenance key. Artifact bodies, titles, triggers,
   rule text, and hook commands are reconstructed locally, and `review` shows the
@@ -237,6 +244,27 @@ consent, deletes the checkpoint, then removes only those two hooks.
 
 See [SECURITY.md](SECURITY.md) for supported versions and vulnerability reports.
 
+## Share with your team
+
+After reviewing and applying the workflows you want, package only those
+manifest-tracked artifacts as a Claude Code plugin:
+
+```bash
+npx gradient.md bundle team-kit              # skills, commands, and project rules
+claude --plugin-dir .gradient/bundle/team-kit
+```
+
+The bundle copies no raw transcript or cache files, evidence counts, local
+suggestion IDs, hooks, or other personal telemetry. Artifact text can quote or
+derive from redacted prompts, so review every bundled file before sharing.
+Export additionally requires a private, exact-content approval recorded by the
+hardened generator; legacy, changed, unapproved, unmarked, and sensitive-looking
+artifacts are skipped. Secret detection is best effort, not a DLP guarantee.
+Rules include an explicit manual review/copy instruction because plugins do not
+auto-load project rules. Hook export is disabled pending a recipient-side
+consent design. The command prints a current-schema marketplace catalog you can
+add to a repository alongside the generated plugin directory.
+
 ## Develop
 
 ```bash
@@ -249,9 +277,11 @@ Phase A of the v2 funnel makes both ends of mining more honest: continuation
 summaries, task notifications, configured injectors, and template floods are
 excluded from habit detection; approved command-type suggestions now become
 model-invoked Claude Code skills under `.claude/skills/` by default. Existing
-gradient-generated commands can be converted safely with `gradient migrate`
-(`--dry-run` previews the change). Set `emitTarget` to `"command"` in the
-gradient config only when legacy `.claude/commands/` output is required. Phase B
+current-safe gradient-generated commands can be converted with `gradient
+migrate` (`--dry-run` previews the change). Pre-0.1.1 commands lack the private
+exact-content approval and are skipped; re-scan, review, and apply them first.
+Set `emitTarget` to `"command"` in the gradient config only when legacy
+`.claude/commands/` output is required. Phase B
 adds local recall hints and artifact adoption reporting, closing the gap between
 generating a workflow and actually using it. Phase C detects repeated pasted
 failures, exact recurring sequences, and repeated low-impact preferences across
@@ -262,10 +292,12 @@ inferring authorization from prior behavior.
 Phase D adds the LLM-free behavior report and the opt-in continuity pack:
 `gradient insights` turns local work signals into concrete next actions, while
 `gradient continuity on` preserves a redacted checkpoint across compaction and
-resumed sessions.
+resumed sessions. Phase E closes the v2 funnel by packaging current-safe,
+exact-content-approved artifacts as validated team plugins, with hook export
+disabled and personal evidence stripped.
 
-The opt-in `gradient autopilot` Stop-hook responder also ships today. The final
-v2 phase packages approved artifacts for teams.
+The opt-in `gradient autopilot` Stop-hook responder also ships today. All five
+v2 phases are implemented.
 
 - Design spec: [`docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md`](docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md)
 - Implementation plan: [`docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md`](docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md)
@@ -276,6 +308,7 @@ v2 phase packages approved artifacts for teams.
 - Phase B implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md)
 - Phase C implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md)
 - Phase D implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md)
+- Phase E implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md)
 
 ## License
 

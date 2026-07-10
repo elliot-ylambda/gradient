@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encodeProjectDir, matchesSince, collect } from "./collect.js";
@@ -41,5 +41,14 @@ describe("collect", () => {
     const files = await collect({ scope: "project", projectPath: "/p/x", home });
     expect(files.length).toBe(1);
     expect(files[0].endsWith("a.jsonl")).toBe(true);
+  });
+
+  it("does not follow a symlinked transcript root outside the user home", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "grad-transcript-victim-"));
+    await mkdir(join(home, ".claude"), { recursive: true });
+    await writeFile(join(outside, "stolen.jsonl"), '{"type":"user"}');
+    await symlink(outside, join(home, ".claude", "projects"));
+    expect(await collect({ scope: "all", home })).toEqual([]);
   });
 });

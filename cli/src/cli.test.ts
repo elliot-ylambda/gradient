@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { parseCliArgs, main } from "./cli.js";
+import { parseCliArgs, main, posixShellQuote } from "./cli.js";
 import { spawnDetached } from "./core/spawn.js";
 import { migrate } from "./commands/migrate.js";
 import { recallHook, recallStatus, setRecall } from "./commands/recall.js";
@@ -7,6 +7,7 @@ import { stats } from "./commands/stats.js";
 import { insights, writeInsightsHtml } from "./commands/insights.js";
 import { continuityStatus, setContinuity } from "./commands/continuity.js";
 import { recap } from "./commands/recap.js";
+import { bundleCommand } from "./commands/bundle.js";
 
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
 vi.mock("./commands/migrate.js", () => ({
@@ -60,6 +61,16 @@ vi.mock("./commands/continuity.js", () => ({
 }));
 vi.mock("./commands/recap.js", () => ({
   recap: vi.fn(async () => null),
+}));
+vi.mock("./commands/bundle.js", () => ({
+  bundleCommand: vi.fn(async () => ({
+    dir: "/repo/.gradient/bundle/team-toolkit",
+    files: [
+      "/repo/.gradient/bundle/team-toolkit/.claude-plugin/plugin.json",
+      "/repo/.gradient/bundle/team-toolkit/skills/ship/SKILL.md",
+    ],
+    skipped: ["a-loop"],
+  })),
 }));
 
 describe("parseCliArgs", () => {
@@ -330,5 +341,56 @@ describe("continuity dispatch", () => {
     const lines: string[] = [];
     expect(await main(["recap"], { log: line => lines.push(line) })).toBe(0);
     expect(lines).toEqual([]);
+  });
+});
+
+describe("bundle dispatch", () => {
+  it("requires a name and lists the command in help", async () => {
+    const missing: string[] = [];
+    expect(await main(["bundle"], { log: line => missing.push(line) })).toBe(2);
+    expect(missing.join("\n")).toContain("bundle needs a name");
+
+    const help: string[] = [];
+    await main([], { log: line => help.push(line) });
+    expect(help.join("\n")).toContain("gradient bundle <name>");
+  });
+
+  it("prints the bundle tree and a current-schema marketplace catalog", async () => {
+    vi.mocked(bundleCommand).mockClear();
+    const lines: string[] = [];
+    expect(await main(["bundle", "Team Toolkit!"], { log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(bundleCommand)).toHaveBeenCalledWith(expect.any(String), "Team Toolkit!", { withHooks: false });
+    const output = lines.join("\n");
+    expect(output).toContain(".claude-plugin/plugin.json");
+    expect(output).toContain("skipped a-loop");
+    expect(output).toContain('"owner"');
+    expect(output).toContain('"description": "Team workflows packaged by gradient"');
+    expect(output).toContain('"name": "team-toolkit"');
+    expect(output).toContain('"source": "./team-toolkit"');
+  });
+
+  it("rejects hook export before building anything", async () => {
+    vi.mocked(bundleCommand).mockClear();
+    const lines: string[] = [];
+    expect(await main(["bundle", "kit", "--with-hooks"], { log: line => lines.push(line) })).toBe(2);
+    expect(vi.mocked(bundleCommand)).not.toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("recipient-side consent");
+  });
+
+  it("single-quotes shell metacharacters in the printed plugin command", async () => {
+    const malicious = "/tmp/$(touch pwned)`touch also-pwned`'kit";
+    vi.mocked(bundleCommand).mockResolvedValueOnce({ dir: malicious, files: [], skipped: [] });
+    const lines: string[] = [];
+    expect(await main(["bundle", "kit"], { log: line => lines.push(line) })).toBe(0);
+    expect(lines.join("\n")).toContain(`claude --plugin-dir ${posixShellQuote(malicious)}`);
+    expect(posixShellQuote("a'b")).toBe("'a'\\''b'");
+  });
+
+  it("omits an executable command for a control-character path", async () => {
+    vi.mocked(bundleCommand).mockResolvedValueOnce({ dir: "/tmp/bad\npath", files: [], skipped: [] });
+    const lines: string[] = [];
+    expect(await main(["bundle", "kit"], { log: line => lines.push(line) })).toBe(0);
+    expect(lines.join("\n")).toContain("executable command omitted");
+    expect(lines.join("\n")).not.toContain("claude --plugin-dir");
   });
 });

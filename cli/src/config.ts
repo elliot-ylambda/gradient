@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import type { Config } from "./core/types.js";
 import { safeReadFile, safeWriteFile } from "./core/safeFs.js";
 
+const CONFIG_MAX_BYTES = 1_000_000;
+
 export function configPath(home?: string): string {
   return join(home ?? homedir(), ".config", "gradient", "config.json");
 }
@@ -23,7 +25,11 @@ export function projectCacheDir(projectDir: string, home?: string): string {
 export async function loadConfig(home?: string): Promise<Config> {
   const userHome = home ?? homedir();
   try {
-    return JSON.parse(await safeReadFile(userHome, configPath(userHome))) as Config;
+    return JSON.parse(await safeReadFile(
+      userHome,
+      configPath(userHome),
+      { maxBytes: CONFIG_MAX_BYTES },
+    )) as Config;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
     throw new Error(`refusing unreadable gradient config: ${(error as Error).message}`);
@@ -36,4 +42,10 @@ export async function saveConfig(c: Config, home?: string): Promise<void> {
 }
 
 export const DEFAULT_AUTOPILOT_BUDGET = 10;
+export const MAX_AUTOPILOT_BUDGET = 100;
 export const DEFAULT_AUTOPILOT_MODEL = "haiku";
+
+export function boundedAutopilotBudget(value: number | undefined): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) return DEFAULT_AUTOPILOT_BUDGET;
+  return Math.min(value as number, MAX_AUTOPILOT_BUDGET);
+}

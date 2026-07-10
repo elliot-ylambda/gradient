@@ -92,6 +92,10 @@ describe("classifyPrompt", () => {
   it("compileIgnorePatterns skips invalid regexes", () => {
     expect(compileIgnorePatterns(["[unclosed", "^ok$"])).toHaveLength(1);
   });
+  it("rejects backtracking-prone user regexes and caps their count", () => {
+    expect(compileIgnorePatterns(["^(a+)+$", "(?:a|aa)+$", "^safe.*prefix$"])).toHaveLength(1);
+    expect(compileIgnorePatterns(Array.from({ length: 30 }, (_, i) => `^safe-${i}$`))).toHaveLength(20);
+  });
 });
 
 describe("classifyPrompts / filterPrompts", () => {

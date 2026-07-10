@@ -5,34 +5,43 @@ import { join } from "node:path";
 import { applySuggestion } from "./apply.js";
 import { addEntry, loadManifest } from "./manifest.js";
 import type { Suggestion } from "./types.js";
+import { approvalMatches, loadArtifactApprovals } from "./approvals.js";
 
 const base = { id: "x", title: "t", rationale: "r", evidence: { count: 3, sessions: 2 }, confidence: "high" as const };
 
+async function testDirs(): Promise<{ dir: string; home: string }> {
+  return {
+    dir: await mkdtemp(join(tmpdir(), "grad-")),
+    home: await mkdtemp(join(tmpdir(), "grad-home-")),
+  };
+}
+
 describe("applySuggestion", () => {
   it("writes a SKILL.md by default and records manifest type skill", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const { dir, home } = await testDirs();
     const s: Suggestion = {
       ...base,
       name: "lgtm",
       payload: { type: "command", commandName: "lgtm", body: "approve it", triggers: ["lgtm"] },
     };
-    const r = await applySuggestion(s, dir);
+    const r = await applySuggestion(s, dir, { home });
     expect(r.written).toBe(join(dir, ".claude/skills/lgtm/SKILL.md"));
     expect(await readFile(r.written!, "utf8")).toContain("approve it");
     expect((await loadManifest(dir))[0]).toMatchObject({ name: "lgtm", type: "skill" });
+    expect(approvalMatches(await loadArtifactApprovals(dir, home), (await loadManifest(dir))[0], await readFile(r.written!, "utf8"))).toBe(true);
   });
 
   it("writes a command file and records it in the manifest", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const { dir, home } = await testDirs();
     const s: Suggestion = { ...base, name: "ship", payload: { type: "command", commandName: "ship", body: "do it" } };
-    const r = await applySuggestion(s, dir, { emitTarget: "command" });
+    const r = await applySuggestion(s, dir, { emitTarget: "command", home });
     expect(r.written).toBe(join(dir, ".claude/commands/ship.md"));
     expect(await readFile(r.written!, "utf8")).toContain("do it");
     expect((await loadManifest(dir))[0]).toMatchObject({ name: "ship", type: "command" });
   });
 
   it("refuses to overwrite an untracked hand-written skill", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const { dir, home } = await testDirs();
     const path = join(dir, ".claude", "skills", "ship", "SKILL.md");
     await mkdir(join(dir, ".claude", "skills", "ship"), { recursive: true });
     await writeFile(path, "hand-written skill\n");
@@ -42,13 +51,13 @@ describe("applySuggestion", () => {
       payload: { type: "command", commandName: "ship", body: "generated body" },
     };
 
-    await expect(applySuggestion(s, dir)).rejects.toThrow(/untracked artifact/);
+    await expect(applySuggestion(s, dir, { home })).rejects.toThrow(/untracked artifact/);
     expect(await readFile(path, "utf8")).toBe("hand-written skill\n");
     expect(await loadManifest(dir)).toEqual([]);
   });
 
   it("refuses a forged manifest that claims a hand-written skill", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const { dir, home } = await testDirs();
     const path = join(dir, ".claude", "skills", "ship", "SKILL.md");
     await mkdir(join(dir, ".claude", "skills", "ship"), { recursive: true });
     await writeFile(path, "hand-written skill\n");
@@ -60,24 +69,24 @@ describe("applySuggestion", () => {
       ...base, name: "ship",
       payload: { type: "command", commandName: "ship", body: "generated body" },
     };
-    await expect(applySuggestion(suggestion, dir)).rejects.toThrow(/provenance/);
+    await expect(applySuggestion(suggestion, dir, { home })).rejects.toThrow(/provenance/);
     expect(await readFile(path, "utf8")).toBe("hand-written skill\n");
   });
 
   it("can update a skill already tracked under the same manifest name", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const { dir, home } = await testDirs();
     const first: Suggestion = {
       ...base,
       name: "ship",
       payload: { type: "command", commandName: "ship", body: "first body" },
     };
-    await applySuggestion(first, dir);
-    await applySuggestion({ ...first, payload: { ...first.payload, body: "updated body" } }, dir);
+    await applySuggestion(first, dir, { home });
+    await applySuggestion({ ...first, payload: { ...first.payload, body: "updated body" } }, dir, { home });
     expect(await readFile(join(dir, ".claude", "skills", "ship", "SKILL.md"), "utf8")).toContain("updated body");
   });
 
   it("refuses a tracked artifact symlink without touching its victim", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const { dir, home } = await testDirs();
     const outside = await mkdtemp(join(tmpdir(), "grad-victim-"));
     const victim = join(outside, "victim.txt");
     const path = join(dir, ".claude", "skills", "ship", "SKILL.md");
@@ -89,21 +98,21 @@ describe("applySuggestion", () => {
       ...base, name: "ship",
       payload: { type: "command", commandName: "ship", body: "replace victim" },
     };
-    await expect(applySuggestion(suggestion, dir)).rejects.toThrow(/symlink/);
+    await expect(applySuggestion(suggestion, dir, { home })).rejects.toThrow(/symlink/);
     expect(await readFile(victim, "utf8")).toBe("keep me");
   });
 
   it("prints (does not write) a loop suggestion but still records it", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const { dir, home } = await testDirs();
     const s: Suggestion = { ...base, name: "cont", payload: { type: "loop", instruction: "continue until done" } };
-    const r = await applySuggestion(s, dir);
+    const r = await applySuggestion(s, dir, { home });
     expect(r.written).toBeUndefined();
     expect(r.printed).toContain("/loop");
     expect((await loadManifest(dir)).map(e => e.name)).toEqual(["cont"]);
   });
 
   it("applies a project rule as a manifest-tracked file", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const { dir, home } = await testDirs();
     const suggestion: Suggestion = {
       ...base,
       id: "r1",
@@ -118,13 +127,13 @@ describe("applySuggestion", () => {
         text: "Default to the recommended option.",
       },
     };
-    const result = await applySuggestion(suggestion, dir);
+    const result = await applySuggestion(suggestion, dir, { home });
     expect(result.written).toBe(join(dir, ".claude", "rules", "gradient-prefer-recommended.md"));
     expect((await loadManifest(dir))[0]).toMatchObject({ name: "prefer-recommended", type: "rule" });
   });
 
   it("refuses a project-rule directory symlink without touching its victim", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const { dir, home } = await testDirs();
     const outside = await mkdtemp(join(tmpdir(), "grad-rule-victim-"));
     await mkdir(join(dir, ".claude"), { recursive: true });
     await symlink(outside, join(dir, ".claude", "rules"));
@@ -132,12 +141,12 @@ describe("applySuggestion", () => {
       ...base, name: "prefer-pnpm", title: "Prefer pnpm",
       payload: { type: "rule", target: "project", ruleName: "prefer-pnpm", text: "Prefer pnpm." },
     };
-    await expect(applySuggestion(suggestion, dir)).rejects.toThrow(/symlink/);
+    await expect(applySuggestion(suggestion, dir, { home })).rejects.toThrow(/symlink/);
     await expect(readFile(join(outside, "gradient-prefer-pnpm.md"), "utf8")).rejects.toThrow();
   });
 
   it("prints a user rule without writing a file", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const { dir, home } = await testDirs();
     const suggestion: Suggestion = {
       ...base,
       id: "r2",
@@ -149,7 +158,7 @@ describe("applySuggestion", () => {
         text: "Default to the recommended option.",
       },
     };
-    const result = await applySuggestion(suggestion, dir);
+    const result = await applySuggestion(suggestion, dir, { home });
     expect(result.written).toBeUndefined();
     expect(result.printed).toContain("~/.claude/CLAUDE.md");
     expect((await loadManifest(dir))[0]).toMatchObject({ type: "rule", path: "" });

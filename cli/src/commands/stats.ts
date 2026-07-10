@@ -9,6 +9,8 @@ import { adoptionPath } from "./recall.js";
 import { safeReadFile } from "../core/safeFs.js";
 import { homedir } from "node:os";
 
+const ADOPTION_LOG_MAX_BYTES = 5_000_000;
+
 export interface StatPattern {
   name: string;
   count: number;
@@ -44,6 +46,7 @@ export interface StatsOptions {
   now?: number;
   collectFn?: typeof collect;
   parseFn?: typeof parseFile;
+  onSkip?: (message: string) => void;
 }
 
 export async function adoptionFromTurns(
@@ -85,7 +88,11 @@ async function readRetypes(
   const counts = new Map<string, number>();
   try {
     const userHome = home ?? homedir();
-    const raw = await safeReadFile(userHome, adoptionPath(projectDir, userHome));
+    const raw = await safeReadFile(
+      userHome,
+      adoptionPath(projectDir, userHome),
+      { maxBytes: ADOPTION_LOG_MAX_BYTES },
+    );
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue;
       try {
@@ -107,7 +114,7 @@ async function readRetypes(
 }
 
 export async function stats(projectDir: string, opts: StatsOptions = {}): Promise<StatsReport> {
-  const suggestions = await loadSuggestions(projectDir, opts.home);
+  const suggestions = await loadSuggestions(projectDir, opts);
   const manifest = await loadManifest(projectDir);
   const coveredIds = new Set(manifest.map(m => m.suggestionId));
   const config = await loadConfig(opts.home);

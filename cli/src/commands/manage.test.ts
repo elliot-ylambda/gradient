@@ -7,6 +7,7 @@ import { list } from "./list.js";
 import { remove } from "./remove.js";
 import type { Suggestion } from "../core/types.js";
 import { saveConfig } from "../config.js";
+import { loadArtifactApprovals } from "../core/approvals.js";
 
 const ship: Suggestion = {
   id: "id-ship", name: "ship", title: "t", rationale: "r",
@@ -26,8 +27,9 @@ describe("manage commands", () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     await seed(dir, home);
     await applyByIds(["id-ship"], dir, { home });
-    expect(await remove(dir, "ship")).toBe(true);
+    expect(await remove(dir, "ship", { home })).toBe(true);
     await expect(stat(join(dir, ".claude", "skills", "ship"))).rejects.toThrow();
+    expect(await loadArtifactApprovals(dir, home)).toEqual([]);
   });
 
   it("apply honors the configured command emit target", async () => {
@@ -47,7 +49,7 @@ describe("manage commands", () => {
     expect(applied.length).toBe(1);
     expect(applied[0].written).toBe(join(dir, ".claude", "skills", "ship", "SKILL.md"));
     expect((await list(dir)).map(e => e.name)).toEqual(["ship"]);
-    const ok = await remove(dir, "ship");
+    const ok = await remove(dir, "ship", { home });
     expect(ok).toBe(true);
     await expect(access(applied[0].written!)).rejects.toThrow();
     expect(await list(dir)).toEqual([]);

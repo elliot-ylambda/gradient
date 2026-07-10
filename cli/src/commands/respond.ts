@@ -1,5 +1,5 @@
 import type { Config } from "../core/types.js";
-import { loadConfig, DEFAULT_AUTOPILOT_BUDGET, DEFAULT_AUTOPILOT_MODEL, projectKey } from "../config.js";
+import { boundedAutopilotBudget, loadConfig, DEFAULT_AUTOPILOT_MODEL, projectKey } from "../config.js";
 import { loadState, saveState, cleanupStale } from "../core/state.js";
 import { renderTail, fingerprint, readTranscriptLines } from "../core/tail.js";
 import { loadPlaybook, loadProjectPlaybook, clampMode } from "../core/playbook.js";
@@ -79,7 +79,7 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
     // Gate 2b: project clamp (spec §4). A committed gradient.md may only
     // restrict authority. Malformed frontmatter clamps this repo to off.
     let effectiveMode: "nudge" | "full" = mode;
-    let effectiveBudget = config.autopilotBudget ?? DEFAULT_AUTOPILOT_BUDGET;
+    let effectiveBudget = boundedAutopilotBudget(config.autopilotBudget);
     const project = await loadProjectPlaybook(input.cwd);
     if (project) {
       if (project.clamps.malformed) return allow; // fail closed: off

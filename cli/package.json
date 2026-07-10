@@ -1,13 +1,14 @@
 {
   "name": "gradient.md",
   "version": "0.1.1",
-  "description": "Mine repeated Claude Code workflows into reviewable skills, rules, loops, and hooks.",
+  "description": "Mine Claude Code workflows into reviewable skills, rules, insights, and team plugins.",
   "keywords": [
     "claude",
     "claude-code",
     "cli",
     "automation",
-    "slash-commands",
+    "skills",
+    "plugins",
     "hooks",
     "developer-tools",
     "ai"

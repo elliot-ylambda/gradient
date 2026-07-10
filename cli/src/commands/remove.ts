@@ -5,6 +5,7 @@ import { artifactHasMarker, expectedArtifactPath } from "../core/manifest.js";
 import { assertInside } from "../core/security.js";
 import { refreshRecallIndex } from "./recall.js";
 import { assertNoSymlinkPath, safeReadFile, safeUnlink } from "../core/safeFs.js";
+import { revokeArtifactApproval } from "../core/approvals.js";
 
 export async function remove(
   projectDir: string,
@@ -35,6 +36,7 @@ export async function remove(
   }
   // Only mutate the manifest after the target passed containment checks.
   await removeEntry(projectDir, name);
+  await revokeArtifactApproval(projectDir, name, opts.home);
   await refreshRecallIndex(projectDir, opts.home);
   return true;
 }

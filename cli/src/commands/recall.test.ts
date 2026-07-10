@@ -12,6 +12,7 @@ import { scan } from "./scan.js";
 import { addEntry, artifactMarker } from "../core/manifest.js";
 import { projectKey, saveConfig } from "../config.js";
 import { suggestionsPath } from "./apply.js";
+import { recordArtifactApproval } from "../core/approvals.js";
 
 let dir: string;
 let home: string;
@@ -207,8 +208,10 @@ describe("recall index synchronization", () => {
       createdAt: "2026-07-01",
       suggestionId: "legacy-id",
     };
-    await writeFile(commandPath, `---\ndescription: "Legacy workflow"\n---\n${artifactMarker(entry)}\nDo legacy work.\n`);
+    const content = `---\ndescription: "Legacy workflow"\n---\n${artifactMarker(entry)}\nDo legacy work.\n`;
+    await writeFile(commandPath, content);
     await addEntry(dir, entry);
+    await recordArtifactApproval(dir, entry, content, home);
 
     await migrate(dir, { home });
     expect((await loadRecallIndex(dir, home))?.entries).toContainEqual(expect.objectContaining({

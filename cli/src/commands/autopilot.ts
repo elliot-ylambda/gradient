@@ -1,5 +1,5 @@
 import { access } from "node:fs/promises";
-import { loadConfig, saveConfig, DEFAULT_AUTOPILOT_BUDGET, projectKey } from "../config.js";
+import { boundedAutopilotBudget, loadConfig, saveConfig, projectKey } from "../config.js";
 import { installHook, removeHook, hookInstalled } from "../core/settings.js";
 import { latestState } from "../core/state.js";
 import { playbookPath, projectPlaybookPath, loadProjectPlaybook, clampMode } from "../core/playbook.js";
@@ -92,7 +92,7 @@ export async function autopilotStatus(
     }
   }
 
-  const budget = config.autopilotBudget ?? DEFAULT_AUTOPILOT_BUDGET;
+  const budget = boundedAutopilotBudget(config.autopilotBudget);
   let effectiveBudget = budget;
   if (project && !project.clamps.malformed && project.clamps.budget !== undefined) {
     effectiveBudget = Math.min(budget, project.clamps.budget);

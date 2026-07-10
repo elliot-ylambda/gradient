@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
-  appendFile,
   lstat,
   mkdir,
   open,
   rename,
+  rm,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -97,7 +97,29 @@ export async function safeReadFile(
     if (opts.maxBytes !== undefined && metadata.size > opts.maxBytes) {
       throw Object.assign(new Error(`file exceeds ${opts.maxBytes} byte cap: ${resolved.target}`), { code: "EFBIG" });
     }
-    return await handle.readFile("utf8");
+    if (opts.maxBytes === undefined) return await handle.readFile("utf8");
+
+    // Do not trust the pre-read stat alone: an append or file replacement race
+    // could otherwise grow the file between stat() and readFile(). Read at most
+    // maxBytes + 1 through the already-open O_NOFOLLOW descriptor and reject
+    // overflow without allocating or ingesting the rest.
+    if (!Number.isSafeInteger(opts.maxBytes) || opts.maxBytes < 0) {
+      throw new Error("maxBytes must be a non-negative safe integer");
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (total <= opts.maxBytes) {
+      const capacity = Math.min(64 * 1024, opts.maxBytes + 1 - total);
+      const buffer = Buffer.allocUnsafe(capacity);
+      const { bytesRead } = await handle.read(buffer, 0, capacity, null);
+      if (bytesRead === 0) break;
+      chunks.push(buffer.subarray(0, bytesRead));
+      total += bytesRead;
+    }
+    if (total > opts.maxBytes) {
+      throw Object.assign(new Error(`file exceeds ${opts.maxBytes} byte cap: ${resolved.target}`), { code: "EFBIG" });
+    }
+    return Buffer.concat(chunks, total).toString("utf8");
   } finally {
     await handle.close();
   }
@@ -134,23 +156,67 @@ export async function safeAppendFile(
   base: string,
   path: string,
   data: string,
-  mode = 0o600,
+  opts: number | { mode?: number; maxBytes?: number } = {},
 ): Promise<void> {
   const resolved = resolvedInside(base, path);
   await safeMkdir(resolved.base, dirname(resolved.target));
   await assertNoSymlinkPath(resolved.base, resolved.target);
-  // appendFile with numeric O_NOFOLLOW flags rejects a final symlink.
-  await appendFile(
+  const mode = typeof opts === "number" ? opts : (opts.mode ?? 0o600);
+  const maxBytes = typeof opts === "number" ? undefined : opts.maxBytes;
+  // Opening the descriptor ourselves lets us enforce both O_NOFOLLOW and a
+  // bounded append log without a second path-based race.
+  const handle = await open(
     resolved.target,
-    data,
-    { flag: constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0), mode },
+    constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0),
+    mode,
   );
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile()) throw new Error(`refusing non-file append path: ${resolved.target}`);
+    const appendBytes = Buffer.byteLength(data, "utf8");
+    if (maxBytes !== undefined && metadata.size + appendBytes > maxBytes) {
+      throw Object.assign(new Error(`append would exceed ${maxBytes} byte cap: ${resolved.target}`), { code: "EFBIG" });
+    }
+    await handle.writeFile(data, "utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function safeUnlink(base: string, path: string): Promise<void> {
   // A final symlink is safe to unlink; no ancestor may redirect the operation.
   await assertNoSymlinkPath(base, path, { includeTarget: false });
   await unlink(path);
+}
+
+/** Remove a generated subtree without following a symlinked ancestor or final
+ * target. Symlinks contained inside a real directory are unlinked by rm rather
+ * than traversed. */
+export async function safeRemoveTree(base: string, path: string): Promise<void> {
+  const resolved = resolvedInside(base, path);
+  await assertNoSymlinkPath(resolved.base, resolved.target, { includeTarget: false });
+  try {
+    const target = await lstat(resolved.target);
+    if (target.isSymbolicLink()) {
+      await unlink(resolved.target);
+      return;
+    }
+    await rm(resolved.target, { recursive: true, force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+/** Rename a real file or directory within one trusted tree. Both ancestor
+ * chains and final entries are checked immediately before the atomic rename;
+ * callers should use unique, absent destination names. */
+export async function safeRename(base: string, from: string, to: string): Promise<void> {
+  const source = resolvedInside(base, from);
+  const destination = resolvedInside(base, to);
+  await assertNoSymlinkPath(source.base, source.target);
+  await assertNoSymlinkPath(destination.base, destination.target);
+  await rename(source.target, destination.target);
+  await assertNoSymlinkPath(destination.base, destination.target);
 }
 
 export function safeOpenAppendSync(base: string, path: string, mode = 0o600): number {

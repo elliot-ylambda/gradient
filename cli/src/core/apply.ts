@@ -6,6 +6,7 @@ import { addEntry, loadManifest } from "./manifest.js";
 import { artifactHasMarker } from "./manifest.js";
 import { safeReadFile, safeWriteFile } from "./safeFs.js";
 import { validateSuggestion } from "./validate.js";
+import { recordArtifactApproval } from "./approvals.js";
 
 export interface ApplyResult {
   suggestion: Suggestion;
@@ -25,13 +26,14 @@ async function trackedTarget(projectDir: string, s: Suggestion, target: string):
 export async function applySuggestion(
   s: Suggestion,
   projectDir: string,
-  opts: { emitTarget?: EmitTarget } = {},
+  opts: { emitTarget?: EmitTarget; home?: string } = {},
 ): Promise<ApplyResult> {
   validateSuggestion(s);
   const result = emit(s, { target: opts.emitTarget });
   let type: ArtifactType;
   let written: string | undefined;
   let printed: string | undefined;
+  let approvalContent: string | undefined;
 
   if (result.kind === "command" || result.kind === "skill" || result.kind === "rule") {
     const abs = join(projectDir, result.path);
@@ -54,6 +56,7 @@ export async function applySuggestion(
       }
     }
     written = abs;
+    approvalContent = result.content;
     type = result.kind;
   } else if (result.kind === "loop") {
     printed = result.command;
@@ -74,5 +77,11 @@ export async function applySuggestion(
     suggestionId: s.id,
   };
   await addEntry(projectDir, entry);
+  // The repo-local manifest and marker prove ownership, not human approval.
+  // Keep the export authorization outside the repository and bind it to the
+  // exact bytes produced by the current hardened generator.
+  if (written && approvalContent && (type === "skill" || type === "command" || type === "rule")) {
+    await recordArtifactApproval(projectDir, entry, approvalContent, opts.home);
+  }
   return { suggestion: s, written, printed };
 }

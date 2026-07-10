@@ -9,10 +9,10 @@ dist/
 .npmrc
 .worktrees/
 
-# Claude Code state. gradient generates into these paths itself: `apply` writes
-# slash commands to commands/, `autopilot` installs its Stop hook into
-# settings.json. Both are per-developer artifacts, not shared project config —
-# committing the hook would run `gradient respond` on contributors' machines.
+# Claude Code state. The legacy command target and locally installed hooks are
+# per-developer artifacts. Skills and rules are intentionally not ignored so a
+# user can choose to review and share them; `gradient bundle` is the explicit
+# team-distribution path.
 .claude/worktrees/
 .claude/settings.json
 .claude/settings.local.json

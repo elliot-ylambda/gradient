@@ -28,9 +28,9 @@ export function suggestionPreview(s: Suggestion, target: EmitTarget): string {
 export async function review(
   projectDir: string,
   prompt: Prompter,
-  opts: { home?: string } = {},
+  opts: { home?: string; onSkip?: (message: string) => void } = {},
 ): Promise<ApplyResult[]> {
-  const suggestions = await loadSuggestions(projectDir, opts.home);
+  const suggestions = await loadSuggestions(projectDir, opts);
   const config = await loadConfig(opts.home);
   const emitTarget = config.emitTarget ?? "skill";
   const out: ApplyResult[] = [];
@@ -41,7 +41,7 @@ export async function review(
     );
     if (decision === "quit") break;
     if (decision === "approve") {
-      out.push(await applySuggestion(suggestions[i], projectDir, { emitTarget }));
+      out.push(await applySuggestion(suggestions[i], projectDir, { emitTarget, home: opts.home }));
     }
   }
   if (out.length > 0) {

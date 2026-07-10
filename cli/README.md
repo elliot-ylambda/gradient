@@ -12,6 +12,7 @@ npx gradient.md recall on # hint when prompts match installed artifacts
 npx gradient.md stats     # coverage and artifact adoption
 npx gradient.md insights  # local behavior report and recommended actions
 npx gradient.md continuity on # preserve context across compact/resume
+npx gradient.md bundle team-kit # package approved artifacts as a plugin
 ```
 
 ## How it works
@@ -36,7 +37,8 @@ Skills are the default because Claude Code can invoke them from their mined
 trigger descriptions. Set `emitTarget` to `"command"` in the gradient config
 for legacy `.claude/commands/*.md` output. `gradient migrate --dry-run` previews
 conversion of manifest-tracked commands; `gradient migrate` performs it without
-touching hand-written files.
+touching hand-written files. Commands created before the hardened private
+approval ledger are skipped; re-scan, review, and apply those workflows first.
 
 `gradient recall on` installs an LLM-free `UserPromptSubmit` hook in
 `.claude/settings.local.json`. Its private user-cache index covers project and
@@ -57,6 +59,16 @@ user cache, not the repo, and returns to Claude as explicitly untrusted context.
 Raw assistant/tool-output prose is excluded, and `continuity off` deletes it.
 `--html` explicitly writes a private `.gradient/insights.html` report.
 
+`gradient bundle <name>` atomically rebuilds a Claude Code plugin under
+`.gradient/bundle/<name>/` from manifest-tracked artifacts only. It copies no
+raw transcript or cache files, evidence counts, local provenance IDs, or hooks;
+artifact text can still quote or derive from redacted prompts. Every source must
+match a private exact-content approval from the hardened generator. Legacy,
+changed, unapproved, unmarked, and sensitive-looking artifacts are skipped.
+Secret detection is best effort, so review every output. The generated README
+explains the manual rule-copy/review step. Hook export is disabled until
+recipients have their own consent boundary.
+
 ## Autopilot (opt-in)
 
 `gradient autopilot` installs a `Stop` hook that answers the nudges you type most
@@ -68,7 +80,8 @@ npx gradient.md autopilot status   # what did it do while I was away?
 npx gradient.md autopilot off      # remove the hook
 ```
 
-It is consented per project, bounded by paid judge attempts, latches off when it
+It is consented per project, bounded by paid judge attempts (default 10,
+absolute ceiling 100), latches off when it
 sees no progress, and fails open — any error means the stop simply stands. The
 judge runs in safe mode with tools and customizations disabled; its text is never
 relayed. `full` mode is disabled in `0.1.1`. A committed `gradient.md` can only
@@ -86,16 +99,18 @@ backend fails closed rather than silently falling back.
 Candidate snippets (including bounded assistant question text for project-only
 preference mining) and autopilot tails are sent to the selected model after
 common credential/PII redaction. Redaction cannot identify every kind of
-sensitive or proprietary text. See the repository's
+sensitive or proprietary text. Scan input, candidates, caches, playbooks,
+settings, and logs have hard resource ceilings; custom `ignorePatterns` use a
+capped, linear-looking regex subset. See the repository's
 [security and data-boundary documentation](https://github.com/elliot-ylambda/gradient#data-and-trust-boundaries).
 
 Full details: [Usage and billing](https://github.com/elliot-ylambda/gradient#usage-and-billing).
 
 ## Development
 
-This package is built test-first. The current skills-output work is specified in
+This package is built test-first. The complete v2 funnel is specified in
 the [v2 funnel design](https://github.com/elliot-ylambda/gradient/blob/main/docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md)
-and [Phase A plan](https://github.com/elliot-ylambda/gradient/blob/main/docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md).
+and its five implementation plans under `docs/superpowers/plans/`.
 
 ```bash
 npm install
