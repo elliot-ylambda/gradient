@@ -364,6 +364,7 @@ describe("bundle dispatch", () => {
     expect(output).toContain(".claude-plugin/plugin.json");
     expect(output).toContain("skipped a-loop");
     expect(output).toContain('"owner"');
+    expect(output).toContain('"description": "Team workflows packaged by gradient"');
     expect(output).toContain('"name": "team-toolkit"');
     expect(output).toContain('"source": "./team-toolkit"');
   });

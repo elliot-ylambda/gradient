@@ -79,9 +79,9 @@ Full details: [Usage and billing](https://github.com/elliot-ylambda/gradient#usa
 
 ## Development
 
-This package is built test-first. The current skills-output work is specified in
+This package is built test-first. The complete v2 funnel is specified in
 the [v2 funnel design](https://github.com/elliot-ylambda/gradient/blob/main/docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md)
-and [Phase A plan](https://github.com/elliot-ylambda/gradient/blob/main/docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md).
+and its five implementation plans under `docs/superpowers/plans/`.
 
 ```bash
 npm install

@@ -169,7 +169,7 @@ export async function main(
         return 0;
       }
       case "review": {
-        const applied = await review(projectDir, readlinePrompter());
+        const applied = await review(projectDir, readlinePrompter(), { onSkip: log });
         log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
         for (const a of applied) {
           if (a.printed) log(`  ${c.dim("run:")} ${a.printed}`);
@@ -177,14 +177,14 @@ export async function main(
         return 0;
       }
       case "apply": {
-        const applied = await applyByIds(positionals, projectDir);
+        const applied = await applyByIds(positionals, projectDir, { onSkip: log });
         for (const a of applied) {
           log(a.written ? `${c.ok("wrote")} ${c.muted(a.written)}` : `${c.dim("run:")} ${a.printed}`);
         }
         return 0;
       }
       case "explain": {
-        const s = await explain(projectDir, positionals[0] ?? "");
+        const s = await explain(projectDir, positionals[0] ?? "", { onSkip: log });
         if (!s) {
           log(c.coral(`no suggestion matching: ${positionals[0] ?? "(none given)"}`));
           return 1;
@@ -261,7 +261,7 @@ export async function main(
       }
       case "stats": {
         log(banner(VERSION));
-        const r = await stats(projectDir);
+        const r = await stats(projectDir, { onSkip: log });
         log(c.dim(`coverage: ${r.covered}/${r.total} patterns automated (${r.coveragePct}%)`));
         log(c.dim(`session-start scan: ${r.sessionScanEnabled ? "on" : "off"}`));
         for (const p of r.patterns) {
@@ -340,6 +340,7 @@ export async function main(
         log(JSON.stringify({
           name: `${pluginName}-marketplace`,
           owner: { name: "YOUR_TEAM" },
+          description: "Team workflows packaged by gradient",
           plugins: [{
             name: pluginName,
             source: `./${pluginName}`,

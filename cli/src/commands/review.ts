@@ -11,9 +11,9 @@ export type Prompter = (s: Suggestion, index: number, total: number) => Promise<
 export async function review(
   projectDir: string,
   prompt: Prompter,
-  opts: { home?: string } = {},
+  opts: { home?: string; onSkip?: (message: string) => void } = {},
 ): Promise<ApplyResult[]> {
-  const suggestions = await loadSuggestions(projectDir);
+  const suggestions = await loadSuggestions(projectDir, opts.onSkip);
   const config = await loadConfig(opts.home);
   const emitTarget = config.emitTarget ?? "skill";
   const out: ApplyResult[] = [];

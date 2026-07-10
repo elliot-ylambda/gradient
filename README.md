@@ -233,10 +233,11 @@ standing project rules without retaining pasted error bodies.
 Phase D adds the LLM-free behavior report and the opt-in continuity pack:
 `gradient insights` turns local work signals into concrete next actions, while
 `gradient continuity on` preserves a redacted checkpoint across compaction and
-resumed sessions.
+resumed sessions. Phase E closes the v2 funnel by packaging approved artifacts
+as validated team plugins, with hooks opt-in and personal evidence stripped.
 
-The opt-in `gradient autopilot` Stop-hook responder also ships today. The final
-v2 phase packages approved artifacts for teams.
+The opt-in `gradient autopilot` Stop-hook responder also ships today. All five
+v2 phases are implemented.
 
 - Design spec: [`docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md`](docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md)
 - Implementation plan: [`docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md`](docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md)
@@ -247,6 +248,7 @@ v2 phase packages approved artifacts for teams.
 - Phase B implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md)
 - Phase C implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md)
 - Phase D implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md)
+- Phase E implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md)
 
 ## License
 
