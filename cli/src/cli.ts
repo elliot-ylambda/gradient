@@ -311,6 +311,10 @@ export async function main(
         log(`  ${c.bold("prompts")} ${metrics.prompts}   ${c.bold("nudges")} ${metrics.nudges}   ${c.bold("interrupts")} ${metrics.interrupts}`);
         log(`  ${c.bold("context deaths")} ${metrics.continuations}   ${c.bold("compacts")} ${metrics.compacts}   ${c.bold("error pastes")} ${metrics.errorPastes}`);
         log(`  ${c.bold("model switches")} ${metrics.modelSwitches}   ${c.bold("effort switches")} ${metrics.effortSwitches}`);
+        if ((report.costs ?? []).length > 0) {
+          log(`\n${c.bold("cost of unautomated habits")}`);
+          for (const cost of report.costs ?? []) log(`  ${c.violet("→")} ${cost.line}`);
+        }
         log("");
         for (const recommendation of report.recommendations) log(`  ${c.violet("→")} ${recommendation.line}`);
         if (flags.html) log(`${c.ok("wrote")} ${c.muted(await writeInsightsHtml(projectDir, report))}`);

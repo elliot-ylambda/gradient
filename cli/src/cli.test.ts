@@ -52,6 +52,7 @@ vi.mock("./commands/insights.js", () => ({
       errorPastes: 5,
     },
     recommendations: [{ metric: "nudges", line: "try: gradient autopilot nudge" }],
+    costs: [{ metric: "nudges", tokens: 120, prompts: 11, line: "≈120 tokens · 11 nudge prompts" }],
   })),
   writeInsightsHtml: vi.fn(async () => "/repo/.gradient/insights.html"),
 }));
