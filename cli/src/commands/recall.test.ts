@@ -3,7 +3,13 @@ import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { recallHook, recallStatus, setRecall } from "./recall.js";
-import { saveRecallIndex } from "../core/recall.js";
+import { loadRecallIndex, saveRecallIndex } from "../core/recall.js";
+import { applyByIds } from "./apply.js";
+import { migrate } from "./migrate.js";
+import { remove } from "./remove.js";
+import { review } from "./review.js";
+import { scan } from "./scan.js";
+import { addEntry } from "../core/manifest.js";
 
 let dir: string;
 let home: string;
@@ -119,5 +125,72 @@ describe("setRecall / recallStatus", () => {
     await setRecall(true, dir, home);
     await setRecall(false, dir, home);
     expect((await recallStatus(dir)).installed).toBe(false);
+  });
+});
+
+async function seedSuggestion(name: string): Promise<void> {
+  await mkdir(join(dir, ".gradient"), { recursive: true });
+  await writeFile(join(dir, ".gradient", "suggestions.json"), JSON.stringify([{
+    id: `id-${name}`,
+    name,
+    title: `Run ${name}`,
+    rationale: "",
+    confidence: "high",
+    evidence: { count: 3, sessions: 2 },
+    payload: {
+      type: "command",
+      commandName: name,
+      body: `${name} body workflow`,
+      triggers: [`run ${name}`],
+    },
+  }]));
+}
+
+describe("recall index synchronization", () => {
+  it("apply and remove keep the index synchronized", async () => {
+    await seedSuggestion("ship");
+    await applyByIds(["id-ship"], dir, { home });
+    expect((await loadRecallIndex(dir))?.entries.some(entry => entry.name === "ship")).toBe(true);
+
+    await remove(dir, "ship", { home });
+    expect((await loadRecallIndex(dir))?.entries.some(entry => entry.name === "ship")).toBe(false);
+  });
+
+  it("review refreshes the index after approving a suggestion", async () => {
+    await seedSuggestion("reviewed");
+    await review(dir, async () => "approve", { home });
+    expect((await loadRecallIndex(dir))?.entries.some(entry => entry.name === "reviewed")).toBe(true);
+  });
+
+  it("migrate refreshes the index after converting a command", async () => {
+    const commandPath = join(dir, ".claude", "commands", "legacy.md");
+    await mkdir(join(dir, ".claude", "commands"), { recursive: true });
+    await writeFile(commandPath, `---\ndescription: "Legacy workflow"\n---\nDo legacy work.\n`);
+    await addEntry(dir, {
+      name: "legacy",
+      type: "command",
+      path: commandPath,
+      createdAt: "2026-07-01",
+      suggestionId: "legacy-id",
+    });
+
+    await migrate(dir, { home });
+    expect((await loadRecallIndex(dir))?.entries).toContainEqual(expect.objectContaining({
+      name: "legacy",
+      kind: "skill",
+    }));
+  });
+
+  it("scan refreshes the index to pick up hand-written artifacts", async () => {
+    await mkdir(join(dir, ".claude", "skills", "hand-written"), { recursive: true });
+    await writeFile(
+      join(dir, ".claude", "skills", "hand-written", "SKILL.md"),
+      `---\ndescription: "Hand-written workflow"\n---\nDo the hand-written workflow.\n`,
+    );
+    await scan(
+      { scope: "project", projectPath: dir, home },
+      { backend: null, collectFn: async () => [], config: {} },
+    );
+    expect((await loadRecallIndex(dir))?.entries.some(entry => entry.name === "hand-written")).toBe(true);
   });
 });

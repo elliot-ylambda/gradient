@@ -4,6 +4,7 @@ import type { Suggestion } from "../core/types.js";
 import { gradientDir } from "../core/manifest.js";
 import { applySuggestion, type ApplyResult } from "../core/apply.js";
 import { loadConfig } from "../config.js";
+import { refreshRecallIndex } from "./recall.js";
 
 export async function loadSuggestions(projectDir: string): Promise<Suggestion[]> {
   try {
@@ -24,5 +25,6 @@ export async function applyByIds(
   const emitTarget = config.emitTarget ?? "skill";
   const out: ApplyResult[] = [];
   for (const s of wanted) out.push(await applySuggestion(s, projectDir, { emitTarget }));
+  if (out.length > 0) await refreshRecallIndex(projectDir, opts.home);
   return out;
 }

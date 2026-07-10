@@ -102,3 +102,13 @@ export async function recallStatus(
     ...(index ? { builtAt: index.builtAt } : {}),
   };
 }
+
+/** Best-effort derived index refresh. Artifact mutations must never fail just
+ * because the recall cache cannot be written. */
+export async function refreshRecallIndex(projectDir: string, home?: string): Promise<void> {
+  try {
+    await saveRecallIndex(projectDir, await buildRecallIndex(projectDir, home));
+  } catch {
+    // The hook can rebuild inline later; the artifact operation remains valid.
+  }
+}

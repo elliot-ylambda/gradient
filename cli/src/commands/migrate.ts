@@ -2,6 +2,7 @@ import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { addEntry, loadManifest } from "../core/manifest.js";
 import { assertInside, sanitizeName } from "../core/security.js";
+import { refreshRecallIndex } from "./recall.js";
 
 export interface MigrateResult {
   migrated: string[];
@@ -41,7 +42,7 @@ async function pathExists(path: string): Promise<boolean> {
 /** Convert only manifest-tracked command files into model-invokable skills. */
 export async function migrate(
   projectDir: string,
-  opts: { dryRun?: boolean } = {},
+  opts: { dryRun?: boolean; home?: string } = {},
 ): Promise<MigrateResult> {
   const migrated: string[] = [];
   const skipped: string[] = [];
@@ -105,5 +106,8 @@ export async function migrate(
     await unlink(oldPath).catch(() => undefined);
   }
 
+  if (!opts.dryRun && migrated.length > 0) {
+    await refreshRecallIndex(projectDir, opts.home);
+  }
   return { migrated, skipped };
 }
