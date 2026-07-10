@@ -84,4 +84,22 @@ describe("parseDialogueLines", () => {
     ];
     expect(parseDialogueLines(lines)).toEqual([]);
   });
+
+  it("recovers explicit answers from structured question results", () => {
+    const question = "Which package manager should I use?";
+    const lines = [mk({
+      type: "user",
+      sessionId: "s",
+      timestamp: "t2",
+      message: { role: "user", content: [{ type: "tool_result", content: "synthetic wrapper" }] },
+      toolUseResult: {
+        questions: [{ question }],
+        answers: { [question]: "pnpm" },
+      },
+    })];
+    expect(parseDialogueLines(lines).map(turn => [turn.role, turn.text])).toEqual([
+      ["assistant", question],
+      ["user", "pnpm"],
+    ]);
+  });
 });

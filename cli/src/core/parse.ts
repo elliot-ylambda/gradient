@@ -2,6 +2,11 @@ import { readFile } from "node:fs/promises";
 import type { Turn, Role } from "./types.js";
 
 interface RawBlock { type?: string; text?: string }
+interface RawQuestion { question?: string }
+interface RawToolUseResult {
+  questions?: RawQuestion[];
+  answers?: Record<string, unknown>;
+}
 interface Raw {
   type?: string;
   isSidechain?: boolean;
@@ -10,6 +15,7 @@ interface Raw {
   gitBranch?: string;
   timestamp?: string;
   message?: { role?: string; content?: string | RawBlock[] };
+  toolUseResult?: RawToolUseResult;
 }
 
 function project(cwd: string | undefined): string {
@@ -79,6 +85,23 @@ export function parseDialogueLines(lines: string[]): DialogueTurn[] {
       continue;
     }
     if (raw.isSidechain || (raw.type !== "user" && raw.type !== "assistant")) continue;
+
+    // AskUserQuestion responses are stored as a tool_result wrapper, but the
+    // top-level result preserves the user-authored answer separately. Rebuild
+    // alternating Q→A turns from that structured data; never mine the wrapper.
+    if (raw.type === "user" && raw.toolUseResult?.questions && raw.toolUseResult.answers) {
+      for (const item of raw.toolUseResult.questions) {
+        const question = item.question?.trim();
+        if (!question) continue;
+        const answer = raw.toolUseResult.answers[question];
+        if (typeof answer !== "string" || !answer.trim()) continue;
+        const common = { ts: raw.timestamp ?? "", sessionId: raw.sessionId ?? "?" };
+        out.push({ role: "assistant", text: question, ...common });
+        out.push({ role: "user", text: answer, ...common });
+      }
+      continue;
+    }
+
     const content = raw.message?.content;
     let text = "";
     if (typeof content === "string") text = content;
