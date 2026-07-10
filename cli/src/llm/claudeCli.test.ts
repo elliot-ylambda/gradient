@@ -82,3 +82,31 @@ describe("system prompt mode", () => {
     expect(args[args.indexOf("--system-prompt") + 1]).toBe("JUDGE INSTRUCTIONS");
   });
 });
+
+describe("the child never gets tools", () => {
+  const capture = async () => {
+    let seen: string[] = [];
+    const b = new ClaudeCliBackend({
+      whichFn: async () => "/usr/bin/claude",
+      runFn: async (_cmd, args) => { seen = args; return { code: 0, stdout: '{"result":"{}"}', stderr: "" }; },
+    });
+    await b.complete({ system: "s", prompt: "p" });
+    return seen;
+  };
+
+  // Measured: without this, `claude -p` grants the child Claude Code's full
+  // toolset and it WILL use it (a Glob-seeking prompt ran in 3 turns).
+  // --allowed-tools "" and a sentinel whitelist both fail to block; only an
+  // explicit deny list does. Neither caller (scan's classifier, autopilot's
+  // judge) is anything but a text->text call.
+  it("passes --disallowed-tools", async () => {
+    expect(await capture()).toContain("--disallowed-tools");
+  });
+
+  it("denies the filesystem, shell, and network tools", async () => {
+    const args = await capture();
+    for (const t of ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "Task"]) {
+      expect(args).toContain(t);
+    }
+  });
+});
