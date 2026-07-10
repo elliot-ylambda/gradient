@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { selectBackend, defaultCandidates } from "./index.js";
 import { ClaudeCliBackend } from "./claudeCli.js";
+import { CodexCliBackend } from "./codexCli.js";
 
 const avail = (name: string, ok: boolean) =>
   ({ name, available: async () => ok, complete: async () => "" });
@@ -25,6 +26,13 @@ describe("selectBackend", () => {
     });
     expect(b?.name).toBe("anthropic");
   });
+  it("honors an explicit codex-cli backend", async () => {
+    const backend = await selectBackend({
+      candidates: [avail("claude-cli", true), avail("codex-cli", true)],
+      config: { backend: "codex-cli", targets: ["codex"] },
+    });
+    expect(backend?.name).toBe("codex-cli");
+  });
 });
 
 describe("defaultCandidates", () => {
@@ -34,6 +42,11 @@ describe("defaultCandidates", () => {
     expect(cli).toBeInstanceOf(ClaudeCliBackend);
     const extraEnv = (cli as unknown as { extraEnv?: Record<string, string> }).extraEnv;
     expect(extraEnv).toEqual({ GRADIENT_AUTOPILOT_CHILD: "1" });
+  });
+
+  it("prefers Codex for a Codex-only target and includes it for both targets", () => {
+    expect(defaultCandidates({ targets: ["codex"] })[0]).toBeInstanceOf(CodexCliBackend);
+    expect(defaultCandidates({ targets: ["claude-code", "codex"] })[1]).toBeInstanceOf(CodexCliBackend);
   });
 });
 
@@ -49,5 +62,14 @@ describe("scan's claude child runs outside the project", () => {
     expect(cli.name).toBe("claude-cli");
     expect(cli.spawnCwd).toBe(tmpdir());
     expect(cli.spawnCwd).not.toBe(process.cwd());
+  });
+});
+
+describe("scan's codex child runs outside the project", () => {
+  it("uses a neutral cwd and ephemeral backend", async () => {
+    const { tmpdir } = await import("node:os");
+    const codex = defaultCandidates({ targets: ["codex"] })[0] as { name: string; spawnCwd?: string };
+    expect(codex.name).toBe("codex-cli");
+    expect(codex.spawnCwd).toBe(tmpdir());
   });
 });

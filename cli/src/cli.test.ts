@@ -103,6 +103,10 @@ describe("parseCliArgs", () => {
     expect(parseCliArgs(["insights", "--html"]).flags.html).toBe(true);
   });
 
+  it("parses the init assistant target", () => {
+    expect(parseCliArgs(["init", "--target", "both"]).flags.target).toBe("both");
+  });
+
   it("returns empty command for empty argv", () => {
     const r = parseCliArgs([]);
     expect(r.command).toBe("");

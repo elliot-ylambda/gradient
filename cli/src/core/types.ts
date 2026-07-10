@@ -60,8 +60,10 @@ export interface ManifestEntry {
 }
 
 export interface Config {
-  backend?: "claude-cli" | "anthropic";
+  backend?: "claude-cli" | "codex-cli" | "anthropic";
   model?: string;
+  /** Model used by the Codex CLI backend; absent uses the Codex default. */
+  codexModel?: string;
   /** Default recency window (days) for `scan --user`. Defaults to 7. */
   userScopeDays?: number;
   /** Max prompts fed into clustering before older ones are dropped. Defaults to 1500. */

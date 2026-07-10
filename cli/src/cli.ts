@@ -24,11 +24,13 @@ import { insights, writeInsightsHtml } from "./commands/insights.js";
 import { continuityStatus, setContinuity } from "./commands/continuity.js";
 import { recap } from "./commands/recap.js";
 import { bundleCommand } from "./commands/bundle.js";
+import type { Assistant } from "./core/types.js";
 
-const HELP = `gradient — turn repeated Claude Code workflows into artifacts
+const HELP = `gradient — turn repeated Claude Code and Codex workflows into artifacts
 
 Usage:
-  gradient init                 configure + install the /gradient skill
+  gradient init [--target claude-code|codex|both]
+                                configure + install the gradient skill
   gradient init --session-scan  also run a scan at the start of each session
   gradient scan                 find repeated prompts, error pastes, and answers
   gradient scan --user          same, all projects, last 7 days (configurable)
@@ -75,6 +77,7 @@ export function parseCliArgs(argv: string[]): {
       "dry-run": { type: "boolean" },
       html: { type: "boolean" },
       "with-hooks": { type: "boolean" },
+      target: { type: "string" },
     },
   });
   return { command, positionals, flags: values as Record<string, string | boolean> };
@@ -84,6 +87,14 @@ function sinceDays(flag: string | boolean | undefined): number | undefined {
   if (typeof flag !== "string") return undefined;
   const m = /^(\d+)d?$/.exec(flag.trim());
   return m ? Number(m[1]) : undefined;
+}
+
+function initTargets(flag: string | boolean | undefined): Assistant[] | undefined {
+  if (flag === undefined) return undefined;
+  if (flag === "claude-code") return ["claude-code"];
+  if (flag === "codex") return ["codex"];
+  if (flag === "both") return ["claude-code", "codex"];
+  throw new Error(`unknown init target: ${String(flag)} (use claude-code|codex|both)`);
 }
 
 export async function main(
@@ -127,10 +138,15 @@ export async function main(
   try {
     switch (command) {
       case "init": {
-        const r = await init({ installSkill: !flags["no-skill"], sessionScan: !!flags["session-scan"], projectDir });
+        const r = await init({
+          installSkill: !flags["no-skill"],
+          sessionScan: !!flags["session-scan"],
+          projectDir,
+          targets: initTargets(flags.target),
+        });
         log(banner(VERSION));
         log(
-          `${c.muted("backend:")} ${r.backend}\n${c.muted("config:")} ${r.configPath}\n${c.muted("skill installed:")} ${r.skillInstalled}\n${c.muted("session-start scan:")} ${r.sessionScanInstalled}`,
+          `${c.muted("backend:")} ${r.backend}\n${c.muted("config:")} ${r.configPath}\n${c.muted("skill installed:")} ${r.skillPaths.length ? r.skillPaths.join(", ") : "false"}\n${c.muted("session-start scan:")} ${r.sessionScanInstalled}`,
         );
         return 0;
       }
