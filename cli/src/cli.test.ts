@@ -50,6 +50,29 @@ describe("unknown options", () => {
   });
 });
 
+describe("--version / --help", () => {
+  it.each([["--version"], ["-v"]])("%s prints the bare version and exits 0", async (flag) => {
+    const logs: string[] = [];
+    const code = await main([flag], { log: (m) => logs.push(m) });
+    expect(code).toBe(0);
+    // Bare and unadorned so `gradient --version` is scriptable — no banner, no ANSI.
+    expect(logs.join("\n").trim()).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  it.each([["--help"], ["-h"]])("%s prints usage and exits 0, not 2", async (flag) => {
+    const logs: string[] = [];
+    const code = await main([flag], { log: (m) => logs.push(m) });
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("Usage:");
+  });
+
+  it("does not treat --version as an unknown command", async () => {
+    const logs: string[] = [];
+    await main(["--version"], { log: (m) => logs.push(m) });
+    expect(logs.join("\n")).not.toContain("unknown command");
+  });
+});
+
 describe("main", () => {
   it("returns 0 and prints help for no command", async () => {
     const logs: string[] = [];
