@@ -21,7 +21,8 @@ npx gradient.md bundle team-kit # package approved artifacts as a plugin
    and Codex (`~/.codex/sessions/**/*.jsonl`). Spawned subagent logs are excluded.
 2. Clusters repeated prompts, failing-command pastes, recurring sequences, and
    conservative low-impact Q→A preferences locally (no LLM). Pasted bodies and
-   command arguments are discarded; cross-project scans skip Q→A rules.
+   command arguments are discarded; cross-project scans skip Q→A rules. It
+   also measures long Claude question→answer waits with bounded local reads.
 3. Sends only the top candidates to an LLM (`claude` by default, isolated
    `codex exec --ephemeral` for a Codex-only target, with an Anthropic API-key
    fallback) to name and type them.
@@ -59,6 +60,20 @@ uses, last use, retypes caught, and stale-artifact removal suggestions.
 artifacts or update the autopilot playbook. Approved artifacts are tracked in
 `.gradient/manifest.json` so `remove` cleanly undoes them.
 
+Flagged suggestions may include one 2–3 choice clarification. `gradient review`
+resolves that choice locally and shows the exact rendered artifact before a
+separate approval. The model can propose only bounded, redacted labels; every
+installable body is reconstructed from a fixed local authorization guard. The
+choice persists in the private user cache and appears in `gradient explain`;
+deciding later leaves the suggestion flagged and unapplied.
+
+Five or more Claude Code sessions with waits of at least five minutes produce a
+suggested `Notification` hook matched to `permission_prompt|idle_prompt`.
+Approved hook output calls the silent `gradient notify` target, which uses only
+the static message “Claude Code is waiting on you” via macOS `osascript` or
+Linux `notify-send`. Notification failures are ignored, and transcript text is
+never passed to the OS. Codex history does not produce this Claude-only hook.
+
 `gradient insights [--user] [--html]` is also LLM-free. It counts behavior
 signals such as nudges, interrupts, compacts, error pastes, and model churn,
 then routes them to concrete gradient actions. `gradient continuity on`
@@ -93,7 +108,7 @@ It is consented per project, bounded by paid judge attempts (default 10,
 absolute ceiling 100), latches off when it
 sees no progress, and fails open — any error means the stop simply stands. The
 judge runs in safe mode with tools and customizations disabled; its text is never
-relayed. `full` mode is disabled in `0.2.1`. A committed `gradient.md` can only
+relayed. `full` mode is disabled in `0.3.1`. A committed `gradient.md` can only
 lower mode or budget through structured frontmatter; repository prose is ignored.
 
 ## Model use and billing

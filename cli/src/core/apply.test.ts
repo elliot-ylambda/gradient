@@ -17,6 +17,18 @@ async function testDirs(): Promise<{ dir: string; home: string }> {
 }
 
 describe("applySuggestion", () => {
+  it("refuses every unresolved flagged suggestion at the core write boundary", async () => {
+    const { dir, home } = await testDirs();
+    const suggestion: Suggestion = {
+      ...base,
+      name: "ambiguous",
+      confidence: "flagged",
+      payload: { type: "command", commandName: "ambiguous", body: "Do one of two things." },
+    };
+    await expect(applySuggestion(suggestion, dir, { home })).rejects.toThrow(/unresolved flagged/);
+    expect(await loadManifest(dir)).toEqual([]);
+  });
+
   it("writes a SKILL.md by default and records manifest type skill", async () => {
     const { dir, home } = await testDirs();
     const s: Suggestion = {

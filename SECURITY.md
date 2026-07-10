@@ -2,10 +2,11 @@
 
 ## Supported versions
 
-Only the latest published release receives security fixes. Upgrade to `0.2.1`
-or newer: `0.1.0` has known isolation and installed-entrypoint defects, and
-`0.2.0` introduced Codex support without the complete cross-target filesystem,
-process-isolation, and approval hardening present in `0.2.1`.
+Only the latest published release receives security fixes. Upgrade to `0.3.1`
+or newer: `0.1.0` has known isolation and installed-entrypoint defects; the
+unpublished `0.2.x`/`0.3.0` development line lacks the complete cross-target
+filesystem, process-isolation, approval, clarification, attention-mining, and
+notification hardening present in `0.3.1`.
 
 ## Reporting a vulnerability
 
@@ -51,7 +52,11 @@ symlinked ancestors and untracked or incorrectly marked destinations. Hooks are 
 Claude settings and require private per-project consent where applicable.
 Observed behavior is not treated as authorization: paste/sequence artifacts are
 advisory, preference rules exclude consequential approvals, and arbitrary model
-content is not written into artifacts. Gradient does not store
+content is not written into artifacts. Clarification option bodies are rebuilt
+locally from bounded labels and unresolved flagged suggestions cannot be
+approved. Attention mining uses bounded, no-follow reads; desktop notification
+hooks use only static text and absolute operating-system notifier paths.
+Gradient does not store
 `ANTHROPIC_API_KEY`.
 
 Team bundles copy no raw transcript or cache files, but approved artifact text

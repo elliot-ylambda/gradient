@@ -66,6 +66,7 @@ describe("buildBundle", () => {
       name: "team-toolkit",
       description: "Workflows mined from real usage by gradient",
       version: VERSION,
+      author: { name: "gradient" },
     });
     const skill = await readFile(join(result.dir, "skills", "ship", "SKILL.md"), "utf8");
     expect(skill).toContain("body");

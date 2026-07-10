@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeSync, writeSync } from "node:fs";
@@ -55,5 +55,9 @@ describe("safe filesystem boundaries", () => {
     writeSync(fd, "new");
     closeSync(fd);
     expect(await readFile(path, "utf8")).toBe("new");
+    await chmod(path, 0o666);
+    fd = safeOpenWriteSync(root, path);
+    closeSync(fd);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 });

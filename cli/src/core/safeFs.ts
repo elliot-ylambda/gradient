@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import {
   constants,
+  fchmodSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -171,6 +172,7 @@ export async function safeAppendFile(
     mode,
   );
   try {
+    await handle.chmod(mode);
     const metadata = await handle.stat();
     if (!metadata.isFile()) throw new Error(`refusing non-file append path: ${resolved.target}`);
     const appendBytes = Buffer.byteLength(data, "utf8");
@@ -224,11 +226,13 @@ export function safeOpenAppendSync(base: string, path: string, mode = 0o600): nu
   assertNoSymlinkPathSync(resolved.base, dirname(resolved.target));
   mkdirSync(dirname(resolved.target), { recursive: true, mode: 0o700 });
   assertNoSymlinkPathSync(resolved.base, resolved.target);
-  return openSync(
+  const fd = openSync(
     resolved.target,
     constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0),
     mode,
   );
+  fchmodSync(fd, mode);
+  return fd;
 }
 
 /** Open a private bounded-by-replacement log target without following links.
@@ -239,9 +243,11 @@ export function safeOpenWriteSync(base: string, path: string, mode = 0o600): num
   assertNoSymlinkPathSync(resolved.base, dirname(resolved.target));
   mkdirSync(dirname(resolved.target), { recursive: true, mode: 0o700 });
   assertNoSymlinkPathSync(resolved.base, resolved.target);
-  return openSync(
+  const fd = openSync(
     resolved.target,
     constants.O_WRONLY | constants.O_TRUNC | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0),
     mode,
   );
+  fchmodSync(fd, mode);
+  return fd;
 }

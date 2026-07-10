@@ -4,7 +4,7 @@ import type { Suggestion } from "../core/types.js";
 import { applySuggestion, type ApplyResult } from "../core/apply.js";
 import { loadConfig, projectCacheDir, resolveCheapModel, resolveTargets } from "../config.js";
 import { refreshRecallIndex } from "./recall.js";
-import { safeReadFile } from "../core/safeFs.js";
+import { safeReadFile, safeWriteFile } from "../core/safeFs.js";
 import { validateSuggestion } from "../core/validate.js";
 import { loadManifest } from "../core/manifest.js";
 import { writePlaybook } from "../core/playbook.js";
@@ -49,6 +49,23 @@ export async function loadSuggestions(
   }
 }
 
+export async function saveSuggestions(
+  projectDir: string,
+  suggestions: Suggestion[],
+  home?: string,
+): Promise<void> {
+  if (!Array.isArray(suggestions) || suggestions.length > SUGGESTIONS_MAX_ENTRIES) {
+    throw new Error(`suggestion cache exceeds ${SUGGESTIONS_MAX_ENTRIES} entry cap`);
+  }
+  for (const suggestion of suggestions) validateSuggestion(suggestion);
+  const data = `${JSON.stringify(suggestions, null, 2)}\n`;
+  if (Buffer.byteLength(data, "utf8") > SUGGESTIONS_MAX_BYTES) {
+    throw new Error(`suggestion cache exceeds ${SUGGESTIONS_MAX_BYTES} byte cap`);
+  }
+  const userHome = home ?? homedir();
+  await safeWriteFile(userHome, suggestionsPath(projectDir, userHome), data, { mode: 0o600 });
+}
+
 export async function syncApprovedPlaybook(
   projectDir: string,
   suggestions: Suggestion[],
@@ -71,6 +88,10 @@ export async function applyByIds(
   const cheapModel = resolveCheapModel(config);
   const out: ApplyResult[] = [];
   for (const suggestion of wanted) {
+    if (suggestion.confidence === "flagged") {
+      opts.onSkip?.(`skipping unresolved flagged suggestion: ${suggestion.name}`);
+      continue;
+    }
     out.push(await applySuggestion(suggestion, projectDir, {
       emitTarget,
       targets,

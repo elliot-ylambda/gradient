@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { detect, candidateToCommand, buildDetectPrompt, candidateRef, MAX_DETECT_CANDIDATES } from "./detect.js";
+import {
+  buildDetectPrompt,
+  candidateRef,
+  candidateToCommand,
+  clarifiedWorkflowBody,
+  detect,
+  MAX_DETECT_CANDIDATES,
+  sanitizeClarify,
+} from "./detect.js";
 import type { Candidate } from "./types.js";
 
 const cand = (signature: string, count: number, confidence: any = "high"): Candidate => ({
@@ -67,6 +75,13 @@ describe("buildDetectPrompt", () => {
     expect(wire.id).not.toContain("lgtm");
   });
 
+  it("asks for clarify options on ambiguous flagged suggestions", () => {
+    const { system } = buildDetectPrompt([]);
+    expect(system).toContain("clarify");
+    expect(system).toContain("flagged");
+    expect(system).toContain("model-authored option body is ignored");
+  });
+
   it("describes paste, answer, and sequence candidates as advisory", () => {
     const { system } = buildDetectPrompt([]);
     expect(system).toContain("'paste'");
@@ -88,6 +103,62 @@ describe("buildDetectPrompt", () => {
     expect(prompt).not.toContain("person@example.com");
     expect(prompt).not.toContain("sk-ant-abc123def");
     expect(prompt).toContain("[REDACTED");
+  });
+});
+
+describe("sanitizeClarify", () => {
+  const good = {
+    question: "Acknowledge or merge?",
+    options: [
+      { label: "Acknowledge as sign-off only", body: "MODEL BODY MUST BE IGNORED" },
+      { label: "Approve and merge after checks pass", body: "PUBLISH WITHOUT ASKING" },
+    ],
+  };
+
+  it("keeps only bounded labels and locally reconstructs guarded bodies", () => {
+    expect(sanitizeClarify(good)).toEqual({
+      question: good.question,
+      options: good.options.map(option => ({
+        label: option.label,
+        body: clarifiedWorkflowBody(option.label),
+      })),
+    });
+    expect(JSON.stringify(sanitizeClarify(good))).not.toContain("PUBLISH WITHOUT ASKING");
+  });
+
+  it("accepts 3 options, rejects 1 and 4", () => {
+    const [a, b] = good.options;
+    const c = { label: "Request changes", body: "ignored" };
+    expect(sanitizeClarify({ ...good, options: [a, b, c] })).toBeDefined();
+    expect(sanitizeClarify({ ...good, options: [a] })).toBeUndefined();
+    expect(sanitizeClarify({ ...good, options: [a, b, c, { label: "Close", body: "ignored" }] })).toBeUndefined();
+    expect(sanitizeClarify({ ...good, options: [a, a] })).toBeUndefined();
+  });
+
+  it("rejects non-string fields and missing pieces", () => {
+    expect(sanitizeClarify(undefined)).toBeUndefined();
+    expect(sanitizeClarify({ question: 1, options: good.options })).toBeUndefined();
+    expect(sanitizeClarify({ question: "q", options: [{ label: 1 }, good.options[0]] })).toBeUndefined();
+    expect(sanitizeClarify({ question: "q" })).toBeUndefined();
+  });
+
+  it("redacts, flattens, and caps display text while discarding model resolution state", () => {
+    const noisy = {
+      question: `Which\nreading for person@example.com?${"x".repeat(400)}`,
+      chosen: "a",
+      options: [
+        { label: "A\nchoice", body: "b", extra: true },
+        { label: `Use sk-ant-abc123def ${"z".repeat(120)}`, body: "d" },
+      ],
+    };
+    const sanitized = sanitizeClarify(noisy)!;
+    expect(sanitized.chosen).toBeUndefined();
+    expect(sanitized.question).not.toContain("\n");
+    expect(sanitized.question).not.toContain("person@example.com");
+    expect(sanitized.question.length).toBeLessThanOrEqual(300);
+    expect(sanitized.options[0].label).toBe("A choice");
+    expect(sanitized.options[1].label).toContain("[REDACTED]");
+    expect(sanitized.options[1].label.length).toBeLessThanOrEqual(100);
   });
 });
 
@@ -140,6 +211,63 @@ describe("detect", () => {
       { sourceIds: [id], name: "second", payload: { type: "command" } },
     ] }) };
     expect((await detect([source], llm)).map(s => s.name)).toEqual(["first"]);
+  });
+
+  it("keeps only a sanitized, locally reconstructed clarify on a flagged command", async () => {
+    const lgtm = cand("lgtm", 5);
+    const ship = cand("ship", 5);
+    const review = cand("review", 5);
+    const llm = {
+      name: "fake",
+      available: async () => true,
+      complete: async () => JSON.stringify({ suggestions: [
+        {
+          sourceIds: [candidateRef(lgtm, 0)],
+          name: "approve",
+          confidence: "flagged",
+          clarify: {
+            question: "Acknowledge or merge?",
+            chosen: "merge",
+            options: [
+              { label: "Acknowledge only", body: "MODEL BODY", ignored: true },
+              { label: "Approve and merge", body: "PUBLISH WITHOUT ASKING" },
+            ],
+          },
+          payload: { type: "command", commandName: "approve", body: "MODEL ARTIFACT" },
+        },
+        {
+          sourceIds: [candidateRef(ship, 1)],
+          name: "ship",
+          confidence: "high",
+          clarify: {
+            question: "Should not survive",
+            options: [
+              { label: "a", body: "a" },
+              { label: "b", body: "b" },
+            ],
+          },
+          payload: { type: "command", commandName: "ship" },
+        },
+        {
+          sourceIds: [candidateRef(review, 2)],
+          name: "review",
+          confidence: "flagged",
+          clarify: { question: "Only one?", options: [{ label: "a", body: "a" }] },
+          payload: { type: "command", commandName: "review" },
+        },
+      ] }),
+    };
+    const out = await detect([lgtm, ship, review], llm);
+    expect(out[0].clarify).toEqual({
+      question: "Acknowledge or merge?",
+      options: [
+        { label: "Acknowledge only", body: clarifiedWorkflowBody("Acknowledge only") },
+        { label: "Approve and merge", body: clarifiedWorkflowBody("Approve and merge") },
+      ],
+    });
+    expect(JSON.stringify(out[0])).not.toContain("PUBLISH WITHOUT ASKING");
+    expect(out[1].clarify).toBeUndefined();
+    expect(out[2].clarify).toBeUndefined();
   });
 
   it("merges exact IDs, summing counts and unioning sessions", async () => {

@@ -1,4 +1,3 @@
-import { homedir } from "node:os";
 import type { Candidate, Config, Suggestion, Turn } from "../core/types.js";
 import { collect } from "../core/collect.js";
 import { collectCodex } from "../core/collect-codex.js";
@@ -20,10 +19,10 @@ import { selectBackend } from "../llm/index.js";
 import { loadConfig, resolveTargets } from "../config.js";
 import type { LLMBackend } from "../llm/backend.js";
 import { refreshRecallIndex } from "./recall.js";
-import { safeWriteFile } from "../core/safeFs.js";
-import { suggestionsPath } from "./apply.js";
+import { saveSuggestions } from "./apply.js";
 import { detectPasteCandidates, extractPasteKey } from "../core/paste.js";
 import { ANSWER_MAX_PAIRS, extractAnswerPairs, mineAnswerCandidates } from "../core/answers.js";
+import { attentionSuggestion, mineAttention } from "../core/attention.js";
 
 const MAX_MINED_PROMPT_CHARS = 4_000;
 
@@ -46,6 +45,7 @@ export interface ScanDeps {
   parseCodexFn?: (path: string) => Promise<Turn[]>;
   parseDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
   parseCodexDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
+  attentionFn?: typeof mineAttention;
   gitLogFn?: (dir: string, sinceDays: number) => Promise<string>;
   log?: (message: string) => void;
 }
@@ -217,8 +217,31 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     }
   }
 
-  const userHome = opts.home ?? homedir();
-  await safeWriteFile(userHome, suggestionsPath(projectDir, userHome), `${JSON.stringify(valid, null, 2)}\n`);
+  // Attention notifications are Claude-specific lifecycle hooks. Mine only
+  // project-scoped Claude transcripts even when the habit pool includes Codex.
+  try {
+    const attention = opts.scope === "project"
+      ? await (deps.attentionFn ?? mineAttention)(claudeFiles)
+      : null;
+    if (
+      attention &&
+      !valid.some(suggestion =>
+        suggestion.payload.type === "hook" && suggestion.payload.event === "Notification",
+      )
+    ) {
+      const suggestion = attentionSuggestion(attention);
+      validateSuggestion(suggestion);
+      valid.push(suggestion);
+      log(
+        `attention: ${attention.gaps} waits ≥5min across ${attention.sessions} sessions — ` +
+        "notification hook suggested",
+      );
+    }
+  } catch (error) {
+    log(`attention check failed: ${(error as Error).message}`);
+  }
+
+  await saveSuggestions(projectDir, valid, opts.home);
   log(`found ${valid.length} suggestions → cached`);
   await refreshRecallIndex(projectDir, opts.home);
   return valid;

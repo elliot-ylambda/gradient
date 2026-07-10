@@ -1,14 +1,34 @@
 import type { Suggestion } from "./types.js";
+import { AUTHORIZATION_GUARD, clarifiedWorkflowBody } from "./detect.js";
 import { sanitizeName, stripUnsafeControls } from "./security.js";
 
-export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan", "recap"]);
+export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan", "recap", "notify"]);
 const TYPES = new Set(["command", "loop", "hook", "rule"]);
 const CONFIDENCES = new Set(["high", "inferred", "flagged"]);
-const HOOK_EVENTS = new Set(["PreCompact", "SessionStart"]);
+const HOOK_EVENTS = new Set(["PreCompact", "SessionStart", "Notification"]);
+const NOTIFICATION_MATCHER = "permission_prompt|idle_prompt";
 const TEXT_CAP = 8_000;
 
 function validText(value: unknown, cap = TEXT_CAP): value is string {
   return typeof value === "string" && value.length <= cap && stripUnsafeControls(value) === value;
+}
+
+function validOneLine(value: unknown, cap: number): value is string {
+  return validText(value, cap) && value.trim().length > 0 && !/[\r\n\t]/.test(value);
+}
+
+function validHookTuple(payload: Record<string, unknown>): boolean {
+  if (payload.event === "PreCompact") {
+    return payload.subcommand === "checkpoint" && payload.matcher === undefined;
+  }
+  if (payload.event === "SessionStart") {
+    return (payload.subcommand === "scan" || payload.subcommand === "recap") &&
+      (payload.matcher === undefined || payload.matcher === "resume|compact");
+  }
+  if (payload.event === "Notification") {
+    return payload.subcommand === "notify" && payload.matcher === NOTIFICATION_MATCHER;
+  }
+  return false;
 }
 
 export function validateSuggestion(x: unknown): asserts x is Suggestion {
@@ -22,13 +42,11 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
   if (!CONFIDENCES.has(s.confidence as string)) {
     throw new Error(`invalid confidence: ${String(s.confidence)}`);
   }
+
   const payload = s.payload as Record<string, unknown> | undefined;
   if (!payload || typeof payload !== "object") throw new Error("suggestion.payload missing");
   if (typeof payload.type !== "string" || !TYPES.has(payload.type)) {
     throw new Error(`invalid payload.type: ${String(payload.type)}`);
-  }
-  if (payload.type === "command" && typeof payload.commandName !== "string") {
-    throw new Error("command payload needs commandName");
   }
   if (payload.type === "command") {
     if (!validText(payload.commandName, 100) || !validText(payload.body)) {
@@ -55,10 +73,59 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
       !HOOK_EVENTS.has(payload.event) || !KNOWN_SUBCOMMANDS.has(payload.subcommand)) {
       throw new Error("hook payload needs event + subcommand");
     }
+    if (!validHookTuple(payload)) throw new Error("hook event, matcher, and subcommand are not an approved combination");
     if (payload.description !== undefined && !validText(payload.description, 1_000)) {
       throw new Error("hook description must be safe bounded text");
     }
   }
+  if (payload.type === "rule") {
+    if (payload.target !== "project" && payload.target !== "user") {
+      throw new Error("rule payload target must be project|user");
+    }
+    if (!validText(payload.ruleName, 100) || sanitizeName(payload.ruleName) !== payload.ruleName) {
+      throw new Error("rule payload needs a safe sanitized ruleName");
+    }
+    if (payload.ruleName !== s.name) throw new Error("ruleName must match suggestion.name");
+    if (!validText(payload.text, 2_000) || payload.text.trim().length === 0) {
+      throw new Error("rule payload needs safe bounded text");
+    }
+  }
+
+  if (s.clarify !== undefined) {
+    if (payload.type !== "command") throw new Error("suggestion.clarify is supported only for commands");
+    const clarify = s.clarify as Record<string, unknown> | null;
+    if (!clarify || typeof clarify !== "object" || !validOneLine(clarify.question, 300)) {
+      throw new Error("suggestion.clarify needs a safe bounded one-line question");
+    }
+    if (!Array.isArray(clarify.options) || clarify.options.length < 2 || clarify.options.length > 3) {
+      throw new Error("suggestion.clarify needs 2-3 options");
+    }
+    const labels: string[] = [];
+    for (const option of clarify.options) {
+      const fields = option as Record<string, unknown> | null;
+      if (!fields || typeof fields !== "object" || !validOneLine(fields.label, 100) ||
+        !validText(fields.body) || fields.body !== clarifiedWorkflowBody(fields.label)) {
+        throw new Error("suggestion.clarify options must use safe labels and locally reconstructed bodies");
+      }
+      labels.push(fields.label);
+    }
+    if (new Set(labels).size !== labels.length) throw new Error("suggestion.clarify option labels must be unique");
+    if (clarify.chosen !== undefined) {
+      if (typeof clarify.chosen !== "string" || !labels.includes(clarify.chosen)) {
+        throw new Error("suggestion.clarify chosen must match an option");
+      }
+      if (s.confidence !== "high") throw new Error("resolved suggestion confidence must be high");
+      if (payload.body !== clarifiedWorkflowBody(clarify.chosen)) {
+        throw new Error("resolved clarification payload must use its locally reconstructed body");
+      }
+    } else if (s.confidence !== "flagged") {
+      throw new Error("unresolved clarification requires flagged confidence");
+    }
+    if (!(payload.body as string).includes(AUTHORIZATION_GUARD)) {
+      throw new Error("clarified command is missing its authorization guard");
+    }
+  }
+
   const evidence = s.evidence as Record<string, unknown> | undefined;
   if (!evidence || !Number.isInteger(evidence.count) || (evidence.count as number) < 0 ||
     (evidence.count as number) > 1_000_000_000 ||
@@ -78,23 +145,14 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
     (!Array.isArray(s.examples) || s.examples.length > 5 || s.examples.some(example => !validText(example, 2_000)))) {
     throw new Error("suggestion.examples must contain safe bounded text");
   }
-  if (payload.type === "rule") {
-    if (payload.target !== "project" && payload.target !== "user") {
-      throw new Error("rule payload target must be project|user");
-    }
-    if (!validText(payload.ruleName, 100) || sanitizeName(payload.ruleName) !== payload.ruleName) {
-      throw new Error("rule payload needs a safe sanitized ruleName");
-    }
-    if (payload.ruleName !== s.name) throw new Error("ruleName must match suggestion.name");
-    if (!validText(payload.text, 2_000) || payload.text.trim().length === 0) {
-      throw new Error("rule payload needs safe bounded text");
-    }
-  }
 }
 
 export function assertHookRunnable(s: Suggestion): void {
   if (s.payload.type !== "hook") return;
-  if (!KNOWN_SUBCOMMANDS.has(s.payload.subcommand)) {
-    throw new Error(`hook references unknown gradient subcommand: ${s.payload.subcommand}`);
+  const payload = s.payload as unknown as Record<string, unknown>;
+  if (!KNOWN_SUBCOMMANDS.has(s.payload.subcommand) || !validHookTuple(payload)) {
+    throw new Error(
+      `hook references an unsupported event/matcher/subcommand combination: ${s.payload.event}/${s.payload.subcommand}`,
+    );
   }
 }

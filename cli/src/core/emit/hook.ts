@@ -12,11 +12,16 @@ export function emitHook(s: Suggestion): { settingsPatch: string } {
   if (!KNOWN_HOOK_EVENTS.has(s.payload.event)) {
     throw new Error(`unknown hook event: ${s.payload.event}`);
   }
+  const group: {
+    matcher?: string;
+    hooks: Array<{ type: string; command: string }>;
+  } = {
+    hooks: [{ type: "command", command: `gradient ${s.payload.subcommand}` }],
+  };
+  if (s.payload.matcher) group.matcher = s.payload.matcher;
   const patch = {
     hooks: {
-      [s.payload.event]: [
-        { hooks: [{ type: "command", command: `gradient ${s.payload.subcommand}` }] },
-      ],
+      [s.payload.event]: [group],
     },
   };
   return { settingsPatch: JSON.stringify(patch, null, 2) };

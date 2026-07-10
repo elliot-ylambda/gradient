@@ -1,10 +1,20 @@
 # gradient — Review Disambiguation & Attention Hooks — Implementation Plan
 
+> **Security amendment (0.3.1):** The implementation deliberately supersedes
+> the original code snippets below. The model supplies only a bounded/redacted
+> question and 2–3 short labels; all option bodies are reconstructed locally
+> with an authorization guard. Unresolved flagged suggestions are never
+> approvable, the resolution is saved only in the private per-project user
+> cache, attention reads are no-follow and resource-capped, hook tuples are
+> allowlisted exactly, and notifications use absolute `/usr/bin` paths with
+> static arguments. The task-by-task snippets remain as historical execution
+> context and are not the normative security contract.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Flagged suggestions carry a judge-authored clarifying question the user answers in `review` (Component 1); scans that find long waiting-on-you gaps suggest a `Notification` desktop-ping hook backed by a new fail-open `gradient notify` subcommand (Component 2). Spec: `docs/superpowers/specs/2026-07-09-gradient-review-clarify-design.md`.
 
-**Architecture:** The detect LLM emits `clarify` (question + per-option replacement bodies) at detect time; a `sanitizeClarify` gate in `detect.ts` drops malformed shapes. `review` gains an optional `Clarifier` callback that resolves the choice offline and persists it to `suggestions.json`. A new pure `core/attention.ts` computes question→answer gaps straight from transcript lines; `scan` appends one deterministic hook suggestion when the floor is crossed. `emitHook` learns `matcher`; `notify` is a ~30-line spawn wrapper that always exits 0.
+**Architecture:** The detect LLM emits `clarify` labels at detect time; a `sanitizeClarify` gate reconstructs guarded option bodies locally. `review` resolves the choice offline, persists it to the private user cache, and requires a separate exact-artifact approval. `core/attention.ts` computes bounded question→answer gaps from no-follow transcript reads; `scan` appends one deterministic hook suggestion when the floor is crossed. `emitHook` validates the exact matcher/event/subcommand tuple; `notify` is a static, fail-open OS wrapper.
 
 **Tech Stack:** TypeScript (ESM, `.js` import suffixes), Node ≥ 20, vitest, zero new runtime dependencies. All work in `cli/`.
 
@@ -690,3 +700,38 @@ Expected: PASS; build clean.
 git add cli/src/commands/notify.ts cli/src/commands/notify.test.ts cli/src/commands/scan.ts cli/src/commands/scan.test.ts cli/src/cli.ts README.md
 git commit -m "feat(cli): gradient notify + attention-gap suggestion wiring"
 ```
+
+---
+
+## Execution notes (2026-07-10)
+
+All four tasks are implemented. The execution preserved the plan's user-visible
+contract and adapted it to the later multi-assistant and bundle work already on
+main:
+
+- `review` keeps its current config/options parameter; `Clarifier` is an option,
+  so Claude/Codex target fan-out and cheap-model settings remain intact.
+- Declining a clarification skips the unresolved suggestion immediately. This
+  enforces the spec's “flagged and unapplied” rule even if a custom approval
+  prompter would otherwise approve it.
+- Clarification provenance is persisted before artifact I/O, so a failed target
+  write cannot erase the user's choice. Cache validation accepts only the two
+  valid states: flagged/unresolved or high/chosen.
+- Attention mining reads Claude transcripts only. Codex prompts remain part of
+  shared habit mining, but cannot create a Claude lifecycle-hook suggestion.
+- Question-tail detection reuses Phase C's detector; duplicate transcript paths
+  cannot inflate the five-session floor, and even-sized medians use the
+  conventional midpoint.
+- Hook matchers survive both direct emission and Phase E plugin bundling. The
+  installed binary also dispatches `notify` through a lightweight path instead
+  of loading the LLM-facing CLI graph.
+- Release dogfooding upgraded Phase E's Claude manifest with author metadata;
+  generated bundles now pass both `claude plugin validate --strict` and the
+  Codex plugin validator.
+- Current Claude Code documentation confirms Notification matchers
+  `permission_prompt` and `idle_prompt`, including `|`-separated exact matching.
+- Final verification: 515 tests, typecheck, build, zero runtime audit findings,
+  packed global install, interactive clarification into both assistant targets,
+  matched-hook bundle/apply, real and missing notifier paths, and both plugin
+  validators. A read-only seven-day dogfood pass found 14 qualifying waits in
+  11 sessions (median 18 minutes).

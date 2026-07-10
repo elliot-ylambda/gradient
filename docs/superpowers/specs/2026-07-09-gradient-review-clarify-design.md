@@ -1,7 +1,7 @@
 # gradient — Review Disambiguation & Attention Hooks — Design
 
 **Date:** 2026-07-09
-**Status:** Draft (proposed; awaiting user review)
+**Status:** Implemented (2026-07-10)
 **Scope:** Spec 9. Two independently shippable components that close the
 funnel where Tier 2 gaps remain: (1) **flagged-suggestion disambiguation**
 in `review` — the judge's identified ambiguity becomes one question the
@@ -41,12 +41,12 @@ user-approved **artifact**, same as any other suggestion.
 
 | # | Decision | Choice |
 |---|----------|--------|
-| 1 | Where disambiguation happens | **At detect time, resolved at review time.** The judge emits the clarifying question *and a complete replacement body per option* while it already has the evidence in context. `review` then just presents a choice — it stays LLM-free, offline, and deterministic. No new LLM call from `review`. |
-| 2 | Schema | Flagged suggestions may carry `clarify?: { question: string; options: [{ label: string; body: string }] }` (2–3 options). A `sanitizeClarify` gate in `detect.ts` (the layer that maps the LLM response — not the autopilot judge in `judge.ts`) accepts a fully valid shape or drops the field: the suggestion survives as plain flagged, never rejected and never half-validated. Suggestions without `clarify` review exactly as today. |
-| 3 | Resolution semantics | Choosing an option **replaces the payload body and promotes `confidence` to `"high"`** (a human resolved the ambiguity), then the normal approve path runs. Declining to choose keeps the suggestion flagged and unapplied. The suggestion `id` is unchanged — identity comes from the mined pattern, not the chosen wording. |
+| 1 | Where disambiguation happens | **At detect time, resolved at review time.** The judge emits one question and 2–3 short, complete imperative labels while it has the evidence in context. Model-authored bodies are ignored. `review` stays LLM-free, offline, and deterministic. |
+| 2 | Schema | Flagged suggestions may carry `clarify?: { question: string; options: [{ label: string; body: string }] }`. `sanitizeClarify` bounds, redacts, and flattens the question/labels, rejects empty or duplicate choices, discards model resolution state and bodies, then fills each `body` from a fixed local authorization-guard template. Malformed clarification drops while the suggestion survives as plain flagged. |
+| 3 | Resolution semantics | Choosing an option reconstructs the body locally again, promotes `confidence` to `"high"`, persists the choice to the private per-project user cache, and then shows the exact rendered artifact for a separate approve/skip decision. Declining or lacking a valid clarification keeps the suggestion flagged and ineligible for approval. The suggestion `id` is unchanged. |
 | 4 | Notification artifact | A **suggest-only hook**: Spec 6's generalized hook payload with `event: "Notification"`, `matcher: "permission_prompt\|idle_prompt"`, `subcommand: "notify"`. Emitted only when evidence crosses the floor (Decision 6). Never auto-installed — review → apply → manifest → removable, like everything. |
-| 5 | `gradient notify` | New subcommand: reads the hook's stdin JSON, fires a local OS notification — macOS `osascript`, Linux `notify-send` — with a short static message ("Claude Code is waiting on you"). **Always exits 0**; missing binaries, parse failures, unknown platforms all no-op silently (fail-open, `respond`'s contract). Notification content never includes transcript text — no redaction surface at all. |
-| 6 | Evidence heuristic | An **attention gap** = assistant turn whose tail is a question (Phase C2's detector) followed by a human answer ≥ 5 minutes later. Floor: gaps in **≥ 5 sessions** → one `Notification`-hook suggestion per scan scope, with the gap count and median wait as evidence lines. Constants pinned by fixtures. |
+| 5 | `gradient notify` | New subcommand: drains the hook's stdin and fires a local OS notification through absolute `/usr/bin/osascript` or `/usr/bin/notify-send`, using only the static message "Claude Code is waiting on you". It always exits 0; failures and unsupported platforms silently no-op. Transcript text is never used. |
+| 6 | Evidence heuristic | An **attention gap** = assistant turn whose tail is a question followed by a human answer ≥ 5 minutes later. Floor: gaps in **≥ 5 sessions** → one project-scoped Claude `Notification` suggestion. File count, per-file/aggregate bytes, and extracted gaps are capped; default reads use a no-follow descriptor. |
 | 7 | Deps | Zero new runtime dependencies; notifications use OS binaries via the existing spawn seam. |
 
 ## 3. Component 1 — flagged-suggestion disambiguation
@@ -54,8 +54,8 @@ user-approved **artifact**, same as any other suggestion.
 ### Detect / judge
 
 - `detect.ts` briefing addition: *when you mark a suggestion `flagged`
-  because the user's intent is ambiguous, include `clarify` — one question,
-  2–3 options, each with a full replacement body reflecting that reading.*
+  because the user's intent is ambiguous, include `clarify` — one question
+  and 2–3 short, complete imperative labels.* Model bodies are not accepted.
   The `lgtm` case becomes: "When you say 'lgtm', should gradient
   acknowledge, or approve-and-merge the PR?" with two complete bodies.
 - `detect.ts`: `sanitizeClarify` per Decision 2; a malformed `clarify`
@@ -65,11 +65,11 @@ user-approved **artifact**, same as any other suggestion.
 ### Review
 
 - On a flagged suggestion with `clarify`, `review` renders the question and
-  options (existing readline UX), then per Decision 3 swaps the body,
-  promotes confidence, and continues into the normal approve/skip prompt.
+  labels, then per Decision 3 reconstructs the chosen body, promotes
+  confidence, and displays the exact artifact before approve/skip.
 - Resolution is recorded, not erased: the suggestion keeps its `clarify`
-  field and gains `clarify.chosen: <label>`; `suggestions.json` is
-  rewritten with the resolved body. `explain` renders the original
+  field and gains `clarify.chosen: <label>`; the private user-cache
+  `suggestions.json` is rewritten with the resolved body. `explain` renders the
   question, the options, and which one was chosen — full provenance for a
   decision that changed what the artifact does.
 
@@ -111,9 +111,10 @@ user-approved **artifact**, same as any other suggestion.
 
 ## 7. Testing
 
-- Schema: valid clarify accepted; malformed dropped-with-log; plain flagged
+- Schema: valid labels accepted with locally reconstructed bodies; malformed
+  or duplicate choices dropped; model bodies and chosen state ignored; plain flagged
   suggestions untouched.
-- Review flow: choose → body swapped, confidence `"high"`, manifest entry
+- Review flow: choose → body reconstructed, exact preview, confidence `"high"`, manifest entry
   identical shape; decline → still flagged, nothing written;
   `suggestions.json` round-trip preserves resolution.
 - `notify`: malformed stdin, missing binary, unknown platform → exit 0,

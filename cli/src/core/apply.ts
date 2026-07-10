@@ -53,6 +53,9 @@ export async function applySuggestion(
   } = {},
 ): Promise<ApplyResult> {
   validateSuggestion(suggestion);
+  if (suggestion.confidence === "flagged") {
+    throw new Error("refusing to apply an unresolved flagged suggestion; resolve it through gradient review first");
+  }
   const targets = normalizeTargets(opts.targets);
   const writes: ApplyResult["writes"] = [];
   const skippedTargets: Assistant[] = [];

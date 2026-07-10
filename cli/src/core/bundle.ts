@@ -256,7 +256,12 @@ export async function buildBundle(
       projectDir,
       tempRoot,
       join(".claude-plugin", "plugin.json"),
-      `${JSON.stringify({ name: safeName, description: BUNDLE_DESCRIPTION, version: VERSION }, null, 2)}\n`,
+      `${JSON.stringify({
+        name: safeName,
+        description: BUNDLE_DESCRIPTION,
+        version: VERSION,
+        author: { name: "gradient" },
+      }, null, 2)}\n`,
       relativeFiles,
     );
     await put(projectDir, tempRoot, join(".codex-plugin", "plugin.json"), codexPlugin(safeName), relativeFiles);

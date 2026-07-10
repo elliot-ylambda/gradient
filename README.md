@@ -95,6 +95,13 @@ private or proprietary text is removed; review the
 [data and trust boundaries](#data-and-trust-boundaries) before scanning
 sensitive history.
 
+When a frequent pattern is genuinely ambiguous, `review` asks one judge-authored
+multiple-choice question. The judge can propose only bounded, redacted labels;
+Gradient reconstructs each body from a fixed local authorization guard. Choosing
+an interpretation promotes the suggestion to high confidence, then shows the
+exact rendered artifact for separate approval. The private cache keeps the
+choice for `explain`; declining leaves it flagged and unapplied.
+
 ## Model use and billing
 
 gradient uses the selected assistant's non-interactive CLI for short text-only
@@ -138,7 +145,7 @@ npx gradient.md autopilot status  # what did it do while I was away?
 npx gradient.md autopilot off     # remove the hook
 ```
 
-Arbitrary-response `full` mode is disabled in `0.2.1` pending additional
+Arbitrary-response `full` mode is disabled in `0.3.1` pending additional
 prompt-injection hardening. Enabling nudge records consent for the canonical
 project path in private user config and installs the hook in
 `.claude/settings.local.json`. A stale or committed hook is inert without that
@@ -211,6 +218,17 @@ per-project consent, so a repository cannot activate it by committing a hook.
 `gradient stats` reports
 uses, last use, and retypes caught for each approved artifact, and suggests
 removing artifacts that remain unused for at least 30 days.
+
+## Attention hooks
+
+If Claude asked a question and waited at least five minutes for an answer in five
+or more sessions, `scan` adds one high-confidence Notification-hook suggestion.
+Approve it through the normal review flow to get a desktop ping for
+`permission_prompt` and `idle_prompt` notifications. `gradient notify` uses
+static text only—never transcript content—and fails open through macOS
+`osascript` or Linux `notify-send`. This hook is Claude Code-specific; Codex
+history remains part of shared habit mining but cannot produce a Claude
+lifecycle hook.
 
 ## Insights & continuity
 
@@ -324,6 +342,10 @@ target, tracks/removes each copy independently, mines both assistants into one
 shared evidence pool, and reports the approximate token cost of unautomated
 nudges, context re-explains, and repeated error pastes.
 
+Flagged-suggestion clarification and attention hooks complete the remaining
+Tier 2 review gaps: ambiguous intent is resolved offline during `review`, and
+repeated waiting-on-you gaps can become a narrowly matched desktop ping.
+
 The opt-in `gradient autopilot` Stop-hook responder also ships today. All five
 v2 phases are implemented.
 
@@ -339,6 +361,8 @@ v2 phases are implemented.
 - Phase E implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md)
 - Codex and cost design: [`docs/superpowers/specs/2026-07-09-gradient-codex-and-cost-design.md`](docs/superpowers/specs/2026-07-09-gradient-codex-and-cost-design.md)
 - Codex Stage 2 and cost plan: [`docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md`](docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md)
+- Review clarification and attention design: [`docs/superpowers/specs/2026-07-09-gradient-review-clarify-design.md`](docs/superpowers/specs/2026-07-09-gradient-review-clarify-design.md)
+- Review clarification and attention plan: [`docs/superpowers/plans/2026-07-09-gradient-review-clarify.md`](docs/superpowers/plans/2026-07-09-gradient-review-clarify.md)
 
 ## License
 

@@ -50,10 +50,24 @@ export async function runBinary(argv: string[], io: BinaryIo = {}): Promise<numb
     return 0;
   }
 
+  if (argv.length === 1 && argv[0] === "notify") {
+    try {
+      const [{ notify }] = await Promise.all([
+        import("./commands/notify.js"),
+        (io.readStdin ?? readStdinJson)(),
+      ]);
+      await notify();
+    } catch {
+      // Fail open and silent: desktop notification support is advisory.
+    }
+    return 0;
+  }
+
   const { main } = await import("./cli.js");
   return main(argv, {
     log: line => write(`${line}\n`),
     readStdin: io.readStdin,
+    home: io.home,
   });
 }
 

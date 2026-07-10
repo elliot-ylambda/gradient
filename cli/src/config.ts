@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { Assistant, Config } from "./core/types.js";
@@ -47,7 +48,14 @@ export function configPath(home?: string): string {
 }
 
 export function projectKey(projectDir: string): string {
-  return resolve(projectDir);
+  const absolute = resolve(projectDir);
+  try {
+    return realpathSync.native(absolute);
+  } catch {
+    // Status/help may be asked before a path exists; the resolved absolute path
+    // is still a safe fail-closed key in that case.
+    return absolute;
+  }
 }
 
 export function projectCacheKey(projectDir: string): string {

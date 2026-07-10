@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { Assistant, Candidate, Suggestion, Confidence } from "./types.js";
-import { sanitizeName, redact } from "./security.js";
+import type { Assistant, Candidate, Clarify, Confidence, Suggestion } from "./types.js";
+import { redact, sanitizeName } from "./security.js";
 import type { LLMBackend } from "../llm/backend.js";
 
 const ALLOWED_CONFIDENCE = new Set<Confidence>(["high", "inferred", "flagged"]);
@@ -11,13 +11,17 @@ export const DETECT_TIMEOUT_MS = 120_000;
 const CONSEQUENTIAL_ACTION = /\b(?:deploy|production|prod|publish|release|push|merge|delete|remove|destroy|drop|truncate|overwrite|send|email|message|post|upload|purchase|buy|spend|pay|charge|refund|transfer|sudo|curl|wget|ssh|kubectl|terraform\s+apply)\b/i;
 const MECHANICAL_ACTION = /\b(?:format|lint|typecheck|test|build|compile|sort imports?|regenerate|retry)\b/i;
 const JUDGMENT_ACTION = /\b(?:review|design|plan|investigate|diagnose|decide|choose|recommend|architect|refactor|rewrite|migrate)\b/i;
-const AUTHORIZATION_GUARD =
+export const AUTHORIZATION_GUARD =
   "This artifact records an observed habit; it grants no standing authorization. " +
   "Use it only when the user's current request explicitly asks for this workflow. " +
   "Confirm again before destructive, irreversible, external, production, publishing, credential, privacy-sensitive, or spending actions.";
 
 function bounded(text: string, cap = OUTBOUND_FIELD_CAP): string {
   return redact(text).slice(0, cap);
+}
+
+function boundedOneLine(text: string, cap: number): string {
+  return bounded(text, cap).replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim();
 }
 
 function hashId(value: string, length = 12): string {
@@ -38,6 +42,13 @@ function sequenceSteps(c: Candidate): string[] {
 
 function workflowBody(instruction: string): string {
   return `${AUTHORIZATION_GUARD}\n\nObserved workflow:\n${instruction}`.slice(0, BODY_CAP);
+}
+
+/** Clarification option bodies are always reconstructed locally. The model can
+ * propose only a short label; it cannot author an artifact that may be installed. */
+export function clarifiedWorkflowBody(label: string): string {
+  const reading = boundedOneLine(label, 100);
+  return workflowBody(`Clarified workflow selected by the user: ${reading}`);
 }
 
 function pasteBody(signature: string): string {
@@ -74,6 +85,33 @@ function isLocallyMechanical(candidates: Candidate[], instruction: string, model
     !CONSEQUENTIAL_ACTION.test(instruction) &&
     !JUDGMENT_ACTION.test(instruction) &&
     MECHANICAL_ACTION.test(instruction);
+}
+
+/** Tolerant reader for an LLM-authored clarification. Model-provided bodies and
+ * resolution state are deliberately ignored; only bounded, redacted labels are
+ * retained and each installable body is rebuilt from a fixed local template. */
+export function sanitizeClarify(value: unknown): Clarify | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as { question?: unknown; options?: unknown };
+  if (typeof candidate.question !== "string") return undefined;
+  if (!Array.isArray(candidate.options) || candidate.options.length < 2 || candidate.options.length > 3) {
+    return undefined;
+  }
+
+  const question = boundedOneLine(candidate.question, 300);
+  if (!question) return undefined;
+  const seen = new Set<string>();
+  const options: Clarify["options"] = [];
+  for (const option of candidate.options) {
+    if (!option || typeof option !== "object") return undefined;
+    const fields = option as { label?: unknown };
+    if (typeof fields.label !== "string") return undefined;
+    const label = boundedOneLine(fields.label, 100);
+    if (!label || seen.has(label)) return undefined;
+    seen.add(label);
+    options.push({ label, body: clarifiedWorkflowBody(label) });
+  }
+  return { question, options };
 }
 
 export function candidateToCommand(c: Candidate): Suggestion {
@@ -131,8 +169,9 @@ export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt:
     "An 'answer' cluster must be a low-impact preference rule; it never removes confirmation for consequential actions. " +
     "A 'sequence' cluster must remain an advisory checklist rendered locally as a numbered list; its first step never authorizes later steps. " +
     "For command payloads, mechanical:true is only a hint for zero judgment format/lint/test/build work; review a spec, planning, diagnosis, and other judgment tasks are never mechanical. Local policy verifies it. " +
-    "Artifact bodies, triggers, titles, rationales, targets, and rule text are reconstructed locally; model-authored versions are ignored. " +
-    "Respond ONLY with JSON: {\"suggestions\":[{sourceIds,name,confidence,payload}]} where payload is one of " +
+    "If a high-confidence command is genuinely ambiguous, use confidence:'flagged' and add clarify:{question,options:[{label}]} with 2-3 distinct choices. Each label must be a short, complete imperative reading; any model-authored option body is ignored. " +
+    "Artifact bodies, triggers, titles, rationales, targets, rule text, and clarification bodies are reconstructed locally; model-authored versions are ignored. " +
+    "Respond ONLY with JSON: {\"suggestions\":[{sourceIds,name,confidence,clarify?,payload}]} where payload is one of " +
     "{type:'command',commandName,mechanical?} | {type:'loop',cadence?} | {type:'hook',event:'PreCompact',subcommand:'checkpoint'} | {type:'rule',ruleName}. " +
     "confidence must be exactly one of 'high', 'inferred', or 'flagged'.";
   const prompt = JSON.stringify(
@@ -155,6 +194,7 @@ interface LlmSuggestion {
   sourceIds?: unknown;
   name?: unknown;
   confidence?: unknown;
+  clarify?: unknown;
   payload?: unknown;
 }
 
@@ -292,6 +332,9 @@ export async function detect(
       const finalConfidence: Confidence = matched.some(candidate => candidate.confidence !== "high")
         ? "inferred"
         : confidence;
+      const clarify = finalConfidence === "flagged" && suggestionPayload.type === "command"
+        ? sanitizeClarify(s.clarify)
+        : undefined;
       const title = suggestionPayload.type === "rule"
         ? `Observed low-impact preference: ${ruleParts(primary.signature)?.answer ?? name}`
         : deterministicTitle(primary);
@@ -307,6 +350,7 @@ export async function detect(
           ...(assistants.length ? { assistants } : {}),
         },
         confidence: finalConfidence,
+        ...(clarify ? { clarify } : {}),
         examples,
         payload: suggestionPayload,
       });

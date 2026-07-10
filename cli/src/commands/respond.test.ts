@@ -1,12 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { join as pjoin } from "node:path";
 import { respond, type RespondDeps, type StopHookInput } from "./respond.js";
 import { loadState, saveState, freshState } from "../core/state.js";
 import type { LLMBackend } from "../llm/backend.js";
 import type { Config } from "../core/types.js";
+import { projectKey } from "../config.js";
 
 const tmpHome = () => mkdtemp(join(tmpdir(), "grad-home-"));
 
@@ -29,7 +30,7 @@ const transcript = (tools: number): string[] => [
 const input: StopHookInput = { session_id: "sess1", transcript_path: "t.jsonl", cwd: "/nonexistent-repo" };
 const consent = (cwd: string, mode: "nudge" | "full" | "off" = "nudge", extra: Partial<Config> = {}): Config => ({
   ...extra,
-  autopilotProjects: { [resolve(cwd)]: mode },
+  autopilotProjects: { [projectKey(cwd)]: mode },
 });
 
 async function run(over: Partial<RespondDeps> & { home: string; tools?: number }) {

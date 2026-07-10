@@ -30,6 +30,25 @@ describe("emit", () => {
     expect(r.settingsPatch).toContain("PreCompact");
     expect(r.settingsPatch).toContain("gradient checkpoint");
   });
+  it("carries a Notification matcher when the hook declares one", () => {
+    const s: Suggestion = {
+      ...base,
+      name: "notify-hook",
+      payload: {
+        type: "hook",
+        event: "Notification",
+        matcher: "permission_prompt|idle_prompt",
+        subcommand: "notify",
+        description: "desktop ping",
+      },
+    };
+    const result = emit(s);
+    if (result.kind !== "hook") throw new Error("wrong kind");
+    expect(JSON.parse(result.settingsPatch).hooks.Notification[0]).toMatchObject({
+      matcher: "permission_prompt|idle_prompt",
+      hooks: [{ type: "command", command: "gradient notify" }],
+    });
+  });
   it("refuses to emit a hook with an unknown subcommand", () => {
     const s: Suggestion = { ...base, name: "bad", payload: { type: "hook", event: "PreCompact", subcommand: "rm-rf", description: "x" } };
     expect(() => emit(s)).toThrow();

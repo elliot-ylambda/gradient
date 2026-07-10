@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { basename, relative } from "node:path";
 import { scan } from "./commands/scan.js";
-import { review, readlinePrompter } from "./commands/review.js";
+import { review, readlineClarifier, readlinePrompter } from "./commands/review.js";
 import { applyByIds } from "./commands/apply.js";
 import { list } from "./commands/list.js";
 import { remove } from "./commands/remove.js";
@@ -24,6 +24,7 @@ import { insights, writeInsightsHtml } from "./commands/insights.js";
 import { continuityStatus, setContinuity } from "./commands/continuity.js";
 import { recap } from "./commands/recap.js";
 import { bundleCommand } from "./commands/bundle.js";
+import { notify } from "./commands/notify.js";
 import type { Assistant } from "./core/types.js";
 import { stripUnsafeControls } from "./core/security.js";
 
@@ -40,6 +41,7 @@ Usage:
   gradient review               approve cached suggestions
   gradient apply <id|name>...   generate specific suggestions
   gradient explain <id|name>    show the evidence behind a suggestion
+  gradient notify               (hook target) desktop ping when Claude needs input
   gradient list                 show generated artifacts
   gradient remove <name>        delete a generated artifact
   gradient migrate [--dry-run]  convert generated commands to skills
@@ -114,7 +116,11 @@ function initTargets(flag: string | boolean | undefined): Assistant[] | undefine
 
 export async function main(
   argv: string[],
-  io: { log?: (s: string) => void; readStdin?: () => Promise<Record<string, unknown>> } = {},
+  io: {
+    log?: (s: string) => void;
+    readStdin?: () => Promise<Record<string, unknown>>;
+    home?: string;
+  } = {},
 ): Promise<number> {
   const log = io.log ?? ((s: string) => process.stdout.write(s + "\n"));
   const readStdin = io.readStdin ?? readStdinJson;
@@ -172,7 +178,7 @@ export async function main(
           return 0;
         }
         log(banner(VERSION));
-        const config = await loadConfig();
+        const config = await loadConfig(io.home);
         const resolved = resolveScanScope(
           { user: !!flags.user, all: !!flags.all, since: sinceDays(flags.since) },
           config,
@@ -185,6 +191,7 @@ export async function main(
             sinceDays: resolved.sinceDays,
             limit: flags.limit ? Number(flags.limit) : undefined,
             maxPrompts: flags["max-prompts"] ? Number(flags["max-prompts"]) : undefined,
+            home: io.home,
           },
           { log, config },
         );
@@ -200,11 +207,11 @@ export async function main(
         return 0;
       }
       case "review": {
-        const config = await loadConfig();
+        const config = await loadConfig(io.home);
         const applied = await review(projectDir, readlinePrompter({
           targets: resolveTargets(config),
           cheapModel: resolveCheapModel(config),
-        }), { onSkip: log });
+        }), { home: io.home, onSkip: log, clarifier: readlineClarifier() });
         log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
         for (const a of applied) {
           for (const write of a.writes) {
@@ -217,7 +224,7 @@ export async function main(
         return 0;
       }
       case "apply": {
-        const applied = await applyByIds(positionals, projectDir, { onSkip: log });
+        const applied = await applyByIds(positionals, projectDir, { home: io.home, onSkip: log });
         for (const a of applied) {
           for (const write of a.writes) {
             log(`${c.ok("wrote")} ${c.muted(terminalSafeLine(write.path))}${write.target === "codex" ? c.dim(" [codex]") : ""}`);
@@ -229,7 +236,7 @@ export async function main(
         return 0;
       }
       case "explain": {
-        const s = await explain(projectDir, positionals[0] ?? "", { onSkip: log });
+        const s = await explain(projectDir, positionals[0] ?? "", { home: io.home, onSkip: log });
         if (!s) {
           log(c.coral(`no suggestion matching: ${positionals[0] ?? "(none given)"}`));
           return 1;
@@ -241,6 +248,13 @@ export async function main(
           : "";
         log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions${sources}`));
         for (const ex of s.examples ?? []) log(`  ${c.muted("·")} ${c.muted(terminalSafeLine(ex))}`);
+        if (s.clarify) {
+          log(c.dim(`clarify: ${terminalSafeLine(s.clarify.question)}`));
+          for (const option of s.clarify.options) {
+            const mark = s.clarify.chosen === option.label ? c.ok("✓") : c.muted("·");
+            log(`  ${mark} ${terminalSafeLine(option.label)}`);
+          }
+        }
         return 0;
       }
       case "list": {
@@ -436,6 +450,16 @@ export async function main(
           await checkpoint(input as { transcript_path?: string }, projectDir);
         } catch {
           // Fail open: compaction proceeds without a checkpoint.
+        }
+        return 0;
+      }
+      case "notify": {
+        // Notification-hook target: static text only, silent and fail-open.
+        try {
+          await readStdin();
+          await notify();
+        } catch {
+          // The host assistant must never observe notification failures.
         }
         return 0;
       }
