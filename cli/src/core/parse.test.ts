@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseLines, parseFile } from "./parse.js";
+import { parseLines, parseFile, parseDialogueLines } from "./parse.js";
 
 const userString = JSON.stringify({
   type: "user", isSidechain: false, sessionId: "s1", cwd: "/p/x",
@@ -57,5 +57,31 @@ describe("parseFile", () => {
     await writeFile(file, line + "\r\n"); // CRLF on purpose — exercises the split fix
     const turns = await parseFile(file);
     expect(turns.map(t => t.text)).toEqual(["hello world"]);
+  });
+});
+
+describe("parseDialogueLines", () => {
+  const mk = (value: object) => JSON.stringify(value);
+
+  it("yields assistant text turns alongside user turns, in order", () => {
+    const lines = [
+      mk({ type: "user", sessionId: "s", timestamp: "t1", cwd: "/p", message: { role: "user", content: "hi" } }),
+      mk({ type: "assistant", sessionId: "s", timestamp: "t2", message: { role: "assistant", content: [{ type: "text", text: "Which db?" }, { type: "tool_use", name: "Bash" }] } }),
+      mk({ type: "user", sessionId: "s", timestamp: "t3", cwd: "/p", message: { role: "user", content: "postgres" } }),
+    ];
+    const out = parseDialogueLines(lines);
+    expect(out.map(turn => [turn.role, turn.text])).toEqual([
+      ["user", "hi"],
+      ["assistant", "Which db?"],
+      ["user", "postgres"],
+    ]);
+  });
+
+  it("skips sidechains and tool-only assistant turns", () => {
+    const lines = [
+      mk({ type: "assistant", isSidechain: true, sessionId: "s", message: { role: "assistant", content: [{ type: "text", text: "side" }] } }),
+      mk({ type: "assistant", sessionId: "s", message: { role: "assistant", content: [{ type: "tool_use", name: "Bash" }] } }),
+    ];
+    expect(parseDialogueLines(lines)).toEqual([]);
   });
 });
