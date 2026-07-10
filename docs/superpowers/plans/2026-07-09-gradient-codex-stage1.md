@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **Execute after Spec 4 Phase A merges** — this plan modifies A3's `emit/skill.ts` + `emit/index.ts` (`emit(s, { target })`) and A4's `applySuggestion(s, projectDir, opts)`.
-- **Codex skills path (spec §8 open question):** pinned as the exported const `CODEX_SKILLS_DIR = ".codex/skills"`. **Executor: verify against current Codex docs (developers.openai.com/codex) before Task X2; if the documented per-repo skills directory differs, change the constant and the two path assertions in its tests — nothing else references the path.**
+- **Codex skills path (verified 2026-07-09):** current Codex docs specify repository skills under `.agents/skills`; the implementation exports `CODEX_SKILLS_DIR = ".agents/skills"`. The earlier `.codex/skills` assumption was not implemented.
 - **Config keys:** `targets?: ("claude-code" | "codex")[]` (default `["claude-code"]`; unknown values are a load-time error); `cheapSkillModel?: string` (default `"haiku"` via `DEFAULT_CHEAP_SKILL_MODEL`; empty string disables).
 - Codex artifacts: **command→skill payloads only**; loop/hook payloads never emit for codex. `model:` frontmatter is never written to Codex files.
 - Manifest identity is **(name, target)**; entries without `target` mean `claude-code` (tolerant reader, no migration).

@@ -1,7 +1,7 @@
 # gradient — Second Assistant (Codex) & Cost-Aware Artifacts — Design
 
 **Date:** 2026-07-09
-**Status:** Draft (proposed; awaiting user review)
+**Status:** Approved and in implementation
 **Scope:** Spec 10. Two components: (1) **Codex as a second emit target** —
 staged multi-assistant support, exercising the emitter pluggability Spec 4
 Decision 9 reserved; (2) **cost-aware artifacts** — mechanical skills get a
@@ -49,9 +49,8 @@ workflow available in both agents.
   record one manifest entry per (name, target). A failure on the second
   target rolls back nothing — each entry stands alone and `remove` cleans
   whichever exist (apply reports per-target results).
-- Path: Codex skills directory (repo-level `.codex/skills/<name>/SKILL.md`
-  assumed; **verify against current Codex docs at plan time** — open
-  question, like Spec 4's B1 schema caveat).
+- Path: Codex's documented repository Agent Skills directory,
+  `.agents/skills/<name>/SKILL.md` (verified 2026-07-09).
 - `review` shows the target list on the approve prompt when it is more
   than the default, so approving is informed consent for both writes.
 

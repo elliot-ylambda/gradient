@@ -22,8 +22,9 @@ npx gradient.md bundle team-kit # package approved artifacts as a plugin
    locally (no LLM) into candidate patterns. Pasted bodies are discarded.
 3. Sends only the top candidates to an LLM (the `claude` CLI by default, with an
    Anthropic API-key fallback) to name and type them.
-4. You approve; it writes `.claude/skills/<name>/SKILL.md` and project rules
-   under `.claude/rules/`, prints `/loop` or user-rule instructions, or proposes
+4. You approve; it writes `.claude/skills/<name>/SKILL.md`, portable Codex
+   skills under `.agents/skills/<name>/SKILL.md`, and project rules under
+   `.claude/rules/`, prints `/loop` or user-rule instructions, or proposes
    `settings.json` hooks that call `gradient` subcommands.
 
 Skills are the default because Claude Code can invoke them from their mined
@@ -31,6 +32,12 @@ trigger descriptions. Set `emitTarget` to `"command"` in the gradient config
 for legacy `.claude/commands/*.md` output. `gradient migrate --dry-run` previews
 conversion of manifest-tracked commands; `gradient migrate` performs it without
 touching hand-written files.
+
+Configure `"targets": ["claude-code", "codex"]` to fan approved skills out to
+both assistants. The default remains `["claude-code"]`. Mechanical Claude Code
+skills use `"cheapSkillModel": "haiku"` by default; set it to `""` to disable
+model frontmatter. Codex output stays portable and contains only the Agent
+Skills `name` and `description` metadata.
 
 `gradient recall on` installs an LLM-free `UserPromptSubmit` hook. Its local
 index covers project and user-level commands and skills; its adoption log stores

@@ -36,6 +36,15 @@ describe("review", () => {
     const [applied] = await review(dir, async () => "approve", { home });
     expect(applied.written).toBe(join(dir, ".claude", "commands", "ship.md"));
   });
+
+  it("fans approval out to every configured assistant target", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await seed(dir, ["ship"]);
+    await saveConfig({ targets: ["claude-code", "codex"] }, home);
+    const [applied] = await review(dir, async () => "approve", { home });
+    expect(applied.writes.map(write => write.target)).toEqual(["claude-code", "codex"]);
+  });
 });
 
 describe("nudge hint", () => {

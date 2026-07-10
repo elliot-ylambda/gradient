@@ -18,7 +18,7 @@ import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
 import { spawnDetached } from "./core/spawn.js";
 import { resolveScanScope } from "./core/scope.js";
 import { isNudge } from "./core/playbook.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, resolveCheapModel, resolveTargets } from "./config.js";
 import { VERSION } from "./version.js";
 import { insights, writeInsightsHtml } from "./commands/insights.js";
 import { continuityStatus, setContinuity } from "./commands/continuity.js";
@@ -169,17 +169,31 @@ export async function main(
         return 0;
       }
       case "review": {
-        const applied = await review(projectDir, readlinePrompter(), { onSkip: log });
+        const config = await loadConfig();
+        const applied = await review(projectDir, readlinePrompter({
+          targets: resolveTargets(config),
+          cheapModel: resolveCheapModel(config),
+        }), { onSkip: log });
         log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
         for (const a of applied) {
+          for (const write of a.writes) {
+            log(`${c.ok("wrote")} ${c.muted(write.path)}${write.target === "codex" ? c.dim(" [codex]") : ""}`);
+          }
           if (a.printed) log(`  ${c.dim("run:")} ${a.printed}`);
+          for (const failure of a.failures) log(c.coral(`  ${failure.target}: ${failure.error}`));
+          for (const target of a.skippedTargets) log(c.muted(`  skipped ${target}: artifact type is not portable`));
         }
         return 0;
       }
       case "apply": {
         const applied = await applyByIds(positionals, projectDir, { onSkip: log });
         for (const a of applied) {
-          log(a.written ? `${c.ok("wrote")} ${c.muted(a.written)}` : `${c.dim("run:")} ${a.printed}`);
+          for (const write of a.writes) {
+            log(`${c.ok("wrote")} ${c.muted(write.path)}${write.target === "codex" ? c.dim(" [codex]") : ""}`);
+          }
+          if (a.printed) log(`${c.dim("run:")} ${a.printed}`);
+          for (const failure of a.failures) log(c.coral(`${failure.target}: ${failure.error}`));
+          for (const target of a.skippedTargets) log(c.muted(`skipped ${target}: artifact type is not portable`));
         }
         return 0;
       }
@@ -196,8 +210,11 @@ export async function main(
         return 0;
       }
       case "list": {
-        for (const e of await list(projectDir)) {
-          log(`  ${c.bold(e.name)}\t${kindLabel(e.type)}\t${c.muted(e.path || "(printed)")}\t${c.dim(e.createdAt)}`);
+        const entries = await list(projectDir);
+        const showTargets = entries.some(entry => entry.target === "codex");
+        for (const e of entries) {
+          const target = showTargets ? `\t${c.dim(e.target ?? "claude-code")}` : "";
+          log(`  ${c.bold(e.name)}\t${kindLabel(e.type)}${target}\t${c.muted(e.path || "(printed)")}\t${c.dim(e.createdAt)}`);
         }
         return 0;
       }

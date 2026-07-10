@@ -2,7 +2,7 @@
 
 # gradient
 
-**The prompts you keep retyping into Claude Code, compiled into skills.**
+**The prompts you keep retyping into Claude Code and Codex, compiled into skills.**
 
 `gradient` reads your own Claude Code history, finds repeated prompts, error
 pastes, and answers, then generates the automations to stop — **skills, rules,
@@ -66,6 +66,20 @@ project but bounds it to a recent window (last 7 days, set via `userScopeDays`
 in config or `--since`), so it stays fast. A recency cap (`--max-prompts`,
 default 1500) protects the clustering step from very large histories and reports
 anything it drops.
+
+Approved skills can be written for both assistants. Add this to
+`~/.config/gradient/config.json`:
+
+```json
+{
+  "targets": ["claude-code", "codex"],
+  "cheapSkillModel": "haiku"
+}
+```
+
+Claude Code skills go to `.claude/skills`; portable Codex skills go to the
+documented repository location `.agents/skills`. `cheapSkillModel` is used only
+for workflows the judge marks mechanical, and an empty string disables it.
 
 The default backend reuses your existing `claude` CLI auth — no API key required.
 Clustering is local and LLM-free; only short candidate snippets ever reach a model
@@ -235,6 +249,10 @@ Phase D adds the LLM-free behavior report and the opt-in continuity pack:
 `gradient continuity on` preserves a redacted checkpoint across compaction and
 resumed sessions. Phase E closes the v2 funnel by packaging approved artifacts
 as validated team plugins, with hooks opt-in and personal evidence stripped.
+
+The multi-assistant stage writes each approved skill for every configured
+target and tracks/removes each copy independently. Codex transcript mining is
+implemented in the following stage of the same spec.
 
 The opt-in `gradient autopilot` Stop-hook responder also ships today. All five
 v2 phases are implemented.
