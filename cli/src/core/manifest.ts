@@ -26,15 +26,20 @@ async function save(projectDir: string, entries: ManifestEntry[]): Promise<void>
 }
 
 export async function addEntry(projectDir: string, e: ManifestEntry): Promise<void> {
-  const entries = (await loadManifest(projectDir)).filter(x => x.name !== e.name);
+  const entries = (await loadManifest(projectDir)).filter(x => keyOf(x) !== keyOf(e));
   entries.push(e);
   await save(projectDir, entries);
 }
 
-export async function removeEntry(projectDir: string, name: string): Promise<ManifestEntry | undefined> {
+function keyOf(entry: Pick<ManifestEntry, "name" | "target">): string {
+  return `${entry.name}\u0000${entry.target ?? "claude-code"}`;
+}
+
+/** Remove every assistant target for an artifact name. */
+export async function removeEntries(projectDir: string, name: string): Promise<ManifestEntry[]> {
   const entries = await loadManifest(projectDir);
-  const found = entries.find(x => x.name === name);
-  if (!found) return undefined;
+  const found = entries.filter(x => x.name === name);
+  if (found.length === 0) return [];
   await save(projectDir, entries.filter(x => x.name !== name));
   return found;
 }

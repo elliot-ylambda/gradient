@@ -27,6 +27,9 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
         throw new Error("command payload triggers must be an array of strings");
       }
     }
+    if (payload.mechanical !== undefined && typeof payload.mechanical !== "boolean") {
+      throw new Error("command payload mechanical must be a boolean");
+    }
   }
   if (payload.type === "hook") {
     if (typeof payload.event !== "string" || typeof payload.subcommand !== "string") {

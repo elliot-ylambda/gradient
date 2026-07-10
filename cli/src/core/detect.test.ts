@@ -218,3 +218,10 @@ it("omits kind for unknown candidates (prompt stays unchanged for them)", () => 
     count: 5, sessions: 3, sessionIds: ["a"], confidence: "high" as const };
   expect(JSON.parse(buildDetectPrompt([c]).prompt)[0].kind).toBeUndefined();
 });
+
+it("briefs the model to flag only zero-judgment mechanical workflows", () => {
+  const { system } = buildDetectPrompt([]);
+  expect(system).toContain("mechanical:true");
+  expect(system).toContain("zero judgment");
+  expect(system).toContain("review a spec");
+});

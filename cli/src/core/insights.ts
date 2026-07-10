@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import type { Turn, AutopilotMode } from "./types.js";
 import { classifyPrompt } from "./filter.js";
-import { extractPasteKey } from "./paste.js";
+import { extractPasteKey, PASTE_MIN_COUNT } from "./paste.js";
 import { cleanupStale, loadState, stateDir } from "./state.js";
 
 const NUDGE_RE = /^(continue|go on|keep going|next|what'?s next|proceed|yes|y|ok|okay|do it|go|sure|yep|good|great|perfect|lgtm|looks good|approved?|ship it|sounds good)[.!?]*$/i;
@@ -91,6 +91,79 @@ export interface Recommendation {
   line: string;
 }
 
+export interface CostRow {
+  metric: "nudges" | "continuations" | "pastes";
+  tokens: number;
+  prompts: number;
+  line: string;
+}
+
+function tokensFor(turn: Turn): number {
+  if (typeof turn.usageTokens === "number" && Number.isFinite(turn.usageTokens) && turn.usageTokens > 0) {
+    return Math.round(turn.usageTokens);
+  }
+  return Math.ceil((turn.text?.length ?? 0) / 4);
+}
+
+function costLine(tokens: number, prompts: number, label: string, action: string): string {
+  return `≈${tokens.toLocaleString("en-US")} tokens · ${prompts} ${label} · ${action}`;
+}
+
+/** Token-attributed cost of habits gradient can remove. Tokens stay approximate:
+ * recorded model-turn usage is attributable but not necessarily incremental,
+ * while older transcripts use the conventional chars/4 fallback. */
+export function buildCostRows(turns: Turn[], ignore: RegExp[] = []): CostRow[] {
+  const pasteCounts = new Map<string, number>();
+  for (const turn of turns) {
+    if (turn.role !== "user" || !turn.text) continue;
+    const key = extractPasteKey(turn.text);
+    if (key) pasteCounts.set(key, (pasteCounts.get(key) ?? 0) + 1);
+  }
+
+  const totals = {
+    nudges: { tokens: 0, prompts: 0 },
+    continuations: { tokens: 0, prompts: 0 },
+    pastes: { tokens: 0, prompts: 0 },
+  };
+  for (const turn of turns) {
+    if (turn.role !== "user" || !turn.text) continue;
+    const classification = classifyPrompt(turn.text, ignore);
+    if (classification === "continuation") {
+      totals.continuations.prompts++;
+      totals.continuations.tokens += tokensFor(turn);
+      continue;
+    }
+    if (classification !== "human") continue;
+    if (isNudgeText(turn.text)) {
+      totals.nudges.prompts++;
+      totals.nudges.tokens += tokensFor(turn);
+    }
+    const key = extractPasteKey(turn.text);
+    if (key && (pasteCounts.get(key) ?? 0) >= PASTE_MIN_COUNT) {
+      totals.pastes.prompts++;
+      totals.pastes.tokens += tokensFor(turn);
+    }
+  }
+
+  const rows: CostRow[] = [];
+  if (totals.nudges.prompts > 0) rows.push({
+    metric: "nudges",
+    ...totals.nudges,
+    line: costLine(totals.nudges.tokens, totals.nudges.prompts, "nudge prompt(s)", "gradient autopilot nudge"),
+  });
+  if (totals.continuations.prompts > 0) rows.push({
+    metric: "continuations",
+    ...totals.continuations,
+    line: costLine(totals.continuations.tokens, totals.continuations.prompts, "context re-explain(s)", "gradient continuity on"),
+  });
+  if (totals.pastes.prompts > 0) rows.push({
+    metric: "pastes",
+    ...totals.pastes,
+    line: costLine(totals.pastes.tokens, totals.pastes.prompts, "repeated error paste(s)", "gradient scan"),
+  });
+  return rows;
+}
+
 export function buildRecommendations(
   metrics: InsightsMetrics,
   context: {
@@ -166,6 +239,7 @@ export function renderInsightsHtml(report: {
   avoided: number;
   metrics: InsightsMetrics;
   recommendations: Recommendation[];
+  costs?: CostRow[];
 }): string {
   const metrics = report.metrics;
   const rows: Array<[string, number]> = [
@@ -190,6 +264,8 @@ export function renderInsightsHtml(report: {
 <h1>gradient insights</h1>
 <p class="label">${escapeHtml(report.label)} · autopilot avoided ${report.avoided} nudge(s)</p>
 <dl>${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${value}</dd>`).join("")}</dl>
+${report.costs?.length ? `<h1>cost of unautomated habits</h1>
+<ul>${report.costs.map(cost => `<li>${escapeHtml(cost.line)}</li>`).join("")}</ul>` : ""}
 <h1>next</h1>
 <ul>${report.recommendations.map(recommendation => `<li>${escapeHtml(recommendation.line)}</li>`).join("")}</ul>
 </body></html>\n`;

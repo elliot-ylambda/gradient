@@ -1,9 +1,21 @@
 #!/usr/bin/env node
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 export interface BinaryIo {
   readStdin?: () => Promise<Record<string, unknown>>;
   write?: (chunk: string) => void;
+}
+
+/** npm exposes package binaries through symlinks. Compare filesystem identity
+ * instead of URL spelling so direct and symlinked invocations both run. */
+export function isMainModule(moduleUrl: string, argvPath?: string): boolean {
+  if (!argvPath) return false;
+  try {
+    return realpathSync(argvPath) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
 }
 
 async function readStdinJson(): Promise<Record<string, unknown>> {
@@ -50,7 +62,7 @@ export async function runBinary(argv: string[], io: BinaryIo = {}): Promise<numb
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   runBinary(process.argv.slice(2)).then(code => {
     process.exitCode = code;
   });

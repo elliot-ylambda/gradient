@@ -24,6 +24,39 @@ describe("init", () => {
     const r = await init({ installSkill: false, home }, { backend: null, skillSource: "x" });
     expect(r.backend).toBe("none");
     expect(r.skillInstalled).toBe(false);
+    expect(r.skillPaths).toEqual([]);
+  });
+
+  it("installs the portable skill for Codex and persists the target", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-"));
+    const result = await init(
+      { installSkill: true, home, targets: ["codex"] },
+      { backend: { name: "codex-cli", available: async () => true, complete: async () => "" }, skillSource: "# portable\n" },
+    );
+    expect(result.skillPaths).toEqual([join(home, ".agents", "skills", "gradient", "SKILL.md")]);
+    expect(await readFile(result.skillPaths[0], "utf8")).toContain("portable");
+    const config = JSON.parse(await readFile(join(home, ".config", "gradient", "config.json"), "utf8"));
+    expect(config).toMatchObject({ backend: "codex-cli", targets: ["codex"] });
+  });
+
+  it("installs both copies for the both-assistant target", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-"));
+    const result = await init(
+      { installSkill: true, home, targets: ["claude-code", "codex"] },
+      { backend: null, skillSource: "# portable\n" },
+    );
+    expect(result.skillPaths).toEqual([
+      join(home, ".claude", "skills", "gradient", "SKILL.md"),
+      join(home, ".agents", "skills", "gradient", "SKILL.md"),
+    ]);
+  });
+
+  it("rejects Claude-only session hooks for a Codex-only target", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-"));
+    await expect(init(
+      { installSkill: false, sessionScan: true, home, targets: ["codex"] },
+      { backend: null },
+    )).rejects.toThrow(/requires the claude-code target/);
   });
   it("installs a SessionStart scan hook and sets the config flag when sessionScan is on", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-init-home-"));

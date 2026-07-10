@@ -10,6 +10,12 @@ const INJECTED_PATTERNS: RegExp[] = [
   /^Caveat:/i,
   /^<local-command-caveat>/i, // the /^Caveat:/ anchor misses these — the tag comes first
   /^<task-notification>/i,
+  /^<environment_context>/i,
+  /^<permissions instructions>/i,
+  /^<skills_instructions>/i,
+  /^<apps_instructions>/i,
+  /^<plugins_instructions>/i,
+  /^<multi_agent_mode>/i,
   /^\[Request interrupted/i,
 ];
 

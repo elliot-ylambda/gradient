@@ -83,4 +83,20 @@ describe("manage commands", () => {
     expect(await remove(dir, "prefer-recommended")).toBe(true);
     await expect(access(applied.written!)).rejects.toThrow();
   });
+
+  it("applies and removes a skill for both configured assistants", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await seed(dir);
+    await saveConfig({ targets: ["claude-code", "codex"] }, home);
+    const [applied] = await applyByIds(["id-ship"], dir, { home });
+    expect(applied.writes.map(write => write.target)).toEqual(["claude-code", "codex"]);
+    await expect(access(join(dir, ".claude", "skills", "ship", "SKILL.md"))).resolves.toBeUndefined();
+    await expect(access(join(dir, ".agents", "skills", "ship", "SKILL.md"))).resolves.toBeUndefined();
+
+    expect(await remove(dir, "ship")).toBe(true);
+    await expect(stat(join(dir, ".claude", "skills", "ship"))).rejects.toThrow();
+    await expect(stat(join(dir, ".agents", "skills", "ship"))).rejects.toThrow();
+    expect(await list(dir)).toEqual([]);
+  });
 });

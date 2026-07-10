@@ -21,7 +21,13 @@ export function similarity(a: string, b: string): number {
   return union === 0 ? 0 : inter / union;
 }
 
-interface Bucket { signature: string; examples: string[]; count: number; sessions: Set<string> }
+interface Bucket {
+  signature: string;
+  examples: string[];
+  count: number;
+  sessions: Set<string>;
+  assistants: Set<"claude-code" | "codex">;
+}
 
 export function cluster(
   turns: Turn[],
@@ -37,9 +43,13 @@ export function cluster(
     const norm = normalize(t.text);
     if (norm.length < 2) continue;
     let b = exact.get(norm);
-    if (!b) { b = { signature: norm, examples: [], count: 0, sessions: new Set() }; exact.set(norm, b); }
+    if (!b) {
+      b = { signature: norm, examples: [], count: 0, sessions: new Set(), assistants: new Set() };
+      exact.set(norm, b);
+    }
     b.count++;
     b.sessions.add(t.sessionId);
+    b.assistants.add(t.assistant ?? "claude-code");
     if (b.examples.length < 5) b.examples.push(t.text);
   }
 
@@ -63,10 +73,11 @@ export function cluster(
       const host = merged[hostIdx];
       host.count += b.count;
       for (const s of b.sessions) host.sessions.add(s);
+      for (const assistant of b.assistants) host.assistants.add(assistant);
       for (const ex of b.examples) if (host.examples.length < 5) host.examples.push(ex);
       fuzzyMember[hostIdx] = true;
     } else {
-      merged.push({ ...b, sessions: new Set(b.sessions) });
+      merged.push({ ...b, sessions: new Set(b.sessions), assistants: new Set(b.assistants) });
       const idx = merged.length - 1;
       fuzzyMember[idx] = false;
       for (const k of keys) {
@@ -89,6 +100,7 @@ export function cluster(
       sessions: b.sessions.size,
       sessionIds: [...b.sessions],
       confidence,
+      assistants: [...b.assistants],
     });
   });
   return candidates.sort((a, b) => b.count - a.count);

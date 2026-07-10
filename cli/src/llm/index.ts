@@ -2,7 +2,9 @@ import { tmpdir } from "node:os";
 import type { LLMBackend } from "./backend.js";
 import { ClaudeCliBackend } from "./claudeCli.js";
 import { AnthropicBackend } from "./anthropic.js";
+import { CodexCliBackend } from "./codexCli.js";
 import type { Config } from "../core/types.js";
+import { resolveTargets } from "../config.js";
 
 /** Default backend candidates. Every gradient-spawned claude child carries the
  * autopilot recursion guard: if a project's Stop hook runs `gradient respond`
@@ -13,14 +15,19 @@ import type { Config } from "../core/types.js";
  * next `gradient scan` mines gradient's own candidates JSON back as a user
  * prompt — the analysis engine feeding on its own output. */
 export function defaultCandidates(config?: Config): LLMBackend[] {
-  return [
-    new ClaudeCliBackend({
+  const claude = new ClaudeCliBackend({
       model: config?.model,
       spawnCwd: tmpdir(),
       extraEnv: { GRADIENT_AUTOPILOT_CHILD: "1" },
-    }),
-    new AnthropicBackend({ model: config?.model }),
-  ];
+    });
+  const codex = new CodexCliBackend({ model: config?.codexModel, spawnCwd: tmpdir() });
+  const anthropic = new AnthropicBackend({ model: config?.model });
+  const targets = resolveTargets(config ?? {});
+  if (config?.backend === "codex-cli" || (targets.includes("codex") && !targets.includes("claude-code"))) {
+    return [codex, claude, anthropic];
+  }
+  if (targets.includes("codex")) return [claude, codex, anthropic];
+  return [claude, anthropic];
 }
 
 export async function selectBackend(

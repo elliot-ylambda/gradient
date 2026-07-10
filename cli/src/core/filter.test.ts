@@ -23,6 +23,8 @@ describe("isInjected", () => {
     expect(isInjected("Caveat: The messages below were generated")).toBe(true);
     expect(isInjected("[Request interrupted by user]")).toBe(true);
     expect(isInjected("local-command-stdout here")).toBe(true);
+    expect(isInjected("<environment_context><cwd>/repo</cwd></environment_context>")).toBe(true);
+    expect(isInjected("<skills_instructions>generated catalog</skills_instructions>")).toBe(true);
   });
   it("keeps genuine prompts", () => {
     expect(isInjected("push and create a pull request")).toBe(false);

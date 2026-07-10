@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runBinary } from "./bin.js";
+import { pathToFileURL } from "node:url";
+import { isMainModule, runBinary } from "./bin.js";
 import { saveRecallIndex } from "./core/recall.js";
 
 describe("binary bootstrap", () => {
+  it("recognizes an npm-style symlink as the main module", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-bin-symlink-"));
+    const target = join(dir, "dist-bin.js");
+    const link = join(dir, "gradient");
+    await writeFile(target, "");
+    await symlink(target, link);
+
+    expect(isMainModule(pathToFileURL(target).href, link)).toBe(true);
+  });
+
   it("uses the lightweight recall path for exact hook invocation", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-bin-recall-"));
     await saveRecallIndex(dir, {

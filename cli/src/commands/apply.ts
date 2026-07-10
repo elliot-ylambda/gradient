@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Suggestion } from "../core/types.js";
 import { gradientDir } from "../core/manifest.js";
 import { applySuggestion, type ApplyResult } from "../core/apply.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, resolveCheapModel, resolveTargets } from "../config.js";
 import { refreshRecallIndex } from "./recall.js";
 import { validateSuggestion } from "../core/validate.js";
 
@@ -38,8 +38,12 @@ export async function applyByIds(
   const wanted = all.filter(s => ids.includes(s.id) || ids.includes(s.name));
   const config = await loadConfig(opts.home);
   const emitTarget = config.emitTarget ?? "skill";
+  const targets = resolveTargets(config);
+  const cheapModel = resolveCheapModel(config);
   const out: ApplyResult[] = [];
-  for (const s of wanted) out.push(await applySuggestion(s, projectDir, { emitTarget }));
+  for (const s of wanted) {
+    out.push(await applySuggestion(s, projectDir, { emitTarget, targets, cheapModel }));
+  }
   if (out.length > 0) await refreshRecallIndex(projectDir, opts.home);
   return out;
 }

@@ -43,6 +43,21 @@ describe("parseLines", () => {
     const turns = parseLines(["not json", "", userString]);
     expect(turns.length).toBe(1);
   });
+  it("attributes recorded assistant usage to the preceding user turn", () => {
+    const usage = JSON.stringify({
+      type: "assistant",
+      sessionId: "s1",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: { input_tokens: 10, cache_read_input_tokens: 20, output_tokens: 5 },
+      },
+    });
+    expect(parseLines([userString, usage])[0]).toMatchObject({
+      assistant: "claude-code",
+      usageTokens: 35,
+    });
+  });
 });
 
 describe("parseFile", () => {
