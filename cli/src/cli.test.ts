@@ -2,10 +2,16 @@ import { describe, it, expect, vi } from "vitest";
 import { parseCliArgs, main } from "./cli.js";
 import { spawnDetached } from "./core/spawn.js";
 import { migrate } from "./commands/migrate.js";
+import { recallHook, recallStatus, setRecall } from "./commands/recall.js";
 
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
 vi.mock("./commands/migrate.js", () => ({
   migrate: vi.fn(async () => ({ migrated: ["ship"], skipped: ["ghost"] })),
+}));
+vi.mock("./commands/recall.js", () => ({
+  recallHook: vi.fn(async () => ({ context: "use the installed skill" })),
+  recallStatus: vi.fn(async () => ({ installed: true, entries: 2, builtAt: "2026-07-09T00:00:00Z" })),
+  setRecall: vi.fn(async (on: boolean) => ({ installed: on, settingsPath: "/repo/.claude/settings.json" })),
 }));
 
 describe("parseCliArgs", () => {
@@ -154,5 +160,56 @@ describe("respond dispatch", () => {
     const code = await main(["respond"], { log: s => lines.push(s), readStdin: async () => ({}) });
     expect(code).toBe(0);
     expect(lines).toEqual([]);
+  });
+});
+
+describe("recall dispatch", () => {
+  it("lists the recall manager in help", async () => {
+    const lines: string[] = [];
+    await main([], { log: line => lines.push(line) });
+    expect(lines.join("\n")).toContain("gradient recall <on|off|status>");
+  });
+
+  it("prints only structured UserPromptSubmit JSON when the hook hints", async () => {
+    vi.mocked(recallHook).mockResolvedValueOnce({ context: "use the installed skill" });
+    const lines: string[] = [];
+    const input = { prompt: "prepare this pull request for shipping", cwd: "/repo" };
+    const code = await main(["recall"], { log: line => lines.push(line), readStdin: async () => input });
+    expect(code).toBe(0);
+    expect(vi.mocked(recallHook)).toHaveBeenCalledWith(input);
+    expect(lines).toEqual([
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "UserPromptSubmit",
+          additionalContext: "use the installed skill",
+        },
+      }),
+    ]);
+  });
+
+  it("is silent and exits zero when the hook has no hint", async () => {
+    vi.mocked(recallHook).mockResolvedValueOnce({});
+    const lines: string[] = [];
+    expect(await main(["recall"], { log: line => lines.push(line), readStdin: async () => ({}) })).toBe(0);
+    expect(lines).toEqual([]);
+  });
+
+  it("manages on, off, and status explicitly", async () => {
+    vi.mocked(setRecall).mockClear();
+    expect(await main(["recall", "on"], { log: () => {} })).toBe(0);
+    expect(await main(["recall", "off"], { log: () => {} })).toBe(0);
+    expect(vi.mocked(setRecall)).toHaveBeenNthCalledWith(1, true, expect.any(String));
+    expect(vi.mocked(setRecall)).toHaveBeenNthCalledWith(2, false, expect.any(String));
+
+    const lines: string[] = [];
+    expect(await main(["recall", "status"], { log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(recallStatus)).toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("2 artifacts");
+  });
+
+  it("rejects unknown manager actions", async () => {
+    const lines: string[] = [];
+    expect(await main(["recall", "sideways"], { log: line => lines.push(line) })).toBe(2);
+    expect(lines.join("\n")).toContain("unknown recall action");
   });
 });

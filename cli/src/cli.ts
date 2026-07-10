@@ -12,6 +12,7 @@ import { explain } from "./commands/explain.js";
 import { respond, type StopHookInput } from "./commands/respond.js";
 import { setAutopilotMode, autopilotStatus } from "./commands/autopilot.js";
 import { migrate } from "./commands/migrate.js";
+import { recallHook, recallStatus, setRecall, type RecallHookInput } from "./commands/recall.js";
 import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
 import { spawnDetached } from "./core/spawn.js";
 import { resolveScanScope } from "./core/scope.js";
@@ -34,6 +35,8 @@ Usage:
   gradient list                 show generated artifacts
   gradient remove <name>        delete a generated artifact
   gradient migrate [--dry-run]  convert generated commands to skills
+  gradient recall <on|off|status>
+                                hint when a prompt matches an artifact
   gradient stats                show your most-repeated patterns + coverage
   gradient autopilot <off|nudge|full>
                                 auto-respond when Claude stops (opt-in)
@@ -198,6 +201,49 @@ export async function main(
         }
         for (const name of result.skipped) log(c.muted(`skipped ${name}`));
         log(c.dim(`${result.migrated.length} command(s) ${dryRun ? "ready to migrate" : "migrated"}; ${result.skipped.length} skipped`));
+        return 0;
+      }
+      case "recall": {
+        const action = positionals[0];
+        if (action === "on" || action === "off") {
+          const result = await setRecall(action === "on", projectDir);
+          log(
+            result.installed
+              ? `${c.ok("recall hook installed")} ${c.muted(result.settingsPath)}`
+              : `${c.muted("recall hook removed:")} ${result.settingsPath}`,
+          );
+          return 0;
+        }
+        if (action === "status") {
+          const status = await recallStatus(projectDir);
+          const built = status.builtAt ? ` (built ${status.builtAt})` : "";
+          log(
+            `${c.muted("recall:")} ${status.installed ? c.ok("on") : "off"}  ` +
+            c.dim(`index: ${status.entries} artifacts${built}`),
+          );
+          return 0;
+        }
+        if (action !== undefined) {
+          log(c.coral(`unknown recall action: ${action} (use on|off|status)`));
+          return 2;
+        }
+
+        // UserPromptSubmit hook mode. Exit 0 always and keep stdout empty
+        // unless returning the structured additionalContext payload.
+        try {
+          const input = await readStdin();
+          const result = await recallHook(input as RecallHookInput);
+          if (result.context) {
+            log(JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: "UserPromptSubmit",
+                additionalContext: result.context,
+              },
+            }));
+          }
+        } catch {
+          // Fail open: Claude processes the original prompt unchanged.
+        }
         return 0;
       }
       case "stats": {
