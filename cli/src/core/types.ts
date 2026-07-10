@@ -59,9 +59,13 @@ export interface Config {
   maxPrompts?: number;
   /** When true, a SessionStart hook runs `gradient scan --detach`. */
   scanOnSessionStart?: boolean;
-  /** Auto-responder mode. Absent = off. Mode is user-global; the Stop hook is per-project. */
+  /** Legacy global mode. Ignored by 0.1.1+; users must re-consent per project. */
   autopilot?: AutopilotMode;
-  /** Max auto-responses per session. Defaults to 10. */
+  /** Canonical project path -> locally consented mode. */
+  autopilotProjects?: Record<string, AutopilotMode>;
+  /** Canonical project paths where recall is locally consented. */
+  recallProjects?: string[];
+  /** Max paid judge attempts per session. Defaults to 10. */
   autopilotBudget?: number;
   /** Judge model (fast by design; the judge sits in the user's stop path). Defaults to "haiku". */
   autopilotModel?: string;
@@ -85,6 +89,7 @@ export interface AutopilotLogEntry {
 /** Per-session autopilot state (~/.config/gradient/state/<session_id>.json). */
 export interface SessionState {
   count: number;           // auto-responses sent this session
+  attempts: number;        // paid judge calls attempted this session
   lastFingerprint: string; // tool-activity fingerprint at our last decision
   stoodDown: boolean;      // latched when a nudge produced no progress
   log: AutopilotLogEntry[];

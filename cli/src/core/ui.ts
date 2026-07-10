@@ -2,6 +2,7 @@
 // Ported from the marketing-site-era CLI scaffold; adapted to gradient's
 // real Confidence / ArtifactType label sets.
 import type { Confidence, ArtifactType } from "./types.js";
+import { stripUnsafeControls } from "./security.js";
 
 // Resolved once at load: color only when attached to a real terminal and the
 // user hasn't opted out (NO_COLOR convention) or asked for a dumb terminal.
@@ -11,10 +12,12 @@ const COLOR =
   process.env.TERM !== "dumb";
 
 function wrap(open: string, s: string): string {
-  return COLOR ? `\x1b[${open}m${s}\x1b[0m` : s;
+  const safe = stripUnsafeControls(s);
+  return COLOR ? `\x1b[${open}m${safe}\x1b[0m` : safe;
 }
 function rgb(r: number, g: number, b: number, s: string): string {
-  return COLOR ? `\x1b[38;2;${r};${g};${b}m${s}\x1b[0m` : s;
+  const safe = stripUnsafeControls(s);
+  return COLOR ? `\x1b[38;2;${r};${g};${b}m${safe}\x1b[0m` : safe;
 }
 
 // Brand stops: violet (high confidence) -> coral (flagged).

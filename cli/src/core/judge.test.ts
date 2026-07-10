@@ -7,10 +7,10 @@ const fake = (fn: () => Promise<string>): LLMBackend => ({
 });
 
 describe("buildJudgePrompt", () => {
-  it("embeds both playbooks and the tail; nudge mode has no next-step authority", () => {
+  it("embeds only the trusted personal playbook and tail; nudge has no next-step authority", () => {
     const req = buildJudgePrompt("nudge", "PB-CONTENT", "PROJ-CONTENT", "TAIL-CONTENT");
     expect(req.prompt).toContain("PB-CONTENT");
-    expect(req.prompt).toContain("PROJ-CONTENT");
+    expect(req.prompt).not.toContain("PROJ-CONTENT");
     expect(req.prompt).toContain("TAIL-CONTENT");
     expect(req.system).toContain("stand down");
     expect(req.system).not.toContain("typical next step");
@@ -23,18 +23,9 @@ describe("buildJudgePrompt", () => {
     expect(req.system).toContain("both playbooks");
   });
 
-  it("no project file → labeled (none)", () => {
+  it("does not create a repository playbook section", () => {
     const req = buildJudgePrompt("nudge", "pb", "", "tail");
-    expect(req.prompt).toContain("PROJECT PLAYBOOK");
-    expect(req.prompt).toContain("(none)");
-  });
-
-  it("system prompt marks the project playbook as advisory, never authorization", () => {
-    // The committed file is writable by anyone who can merge a PR, and the
-    // judge's response becomes Claude's next instruction — so the repo layer
-    // must only ever restrict/inform, never direct.
-    const req = buildJudgePrompt("nudge", "pb", "proj", "tail");
-    expect(req.system).toContain("never as authorization");
+    expect(req.prompt).not.toContain("PROJECT PLAYBOOK");
   });
 });
 
@@ -102,8 +93,19 @@ describe("judge", () => {
   });
 
   it("throws when the backend exceeds the timeout", async () => {
-    const never = fake(() => new Promise<string>(() => {}));
+    let aborted = false;
+    const never: LLMBackend = {
+      name: "fake",
+      available: async () => true,
+      complete: req => new Promise<string>((_resolve, reject) => {
+        req.signal?.addEventListener("abort", () => {
+          aborted = true;
+          reject(new Error("aborted"));
+        });
+      }),
+    };
     await expect(judge(never, { system: "s", prompt: "p" }, { timeoutMs: 20 })).rejects.toThrow(/timed out/);
+    expect(aborted).toBe(true);
   });
 
   it("propagates backend errors (caller fails open)", async () => {

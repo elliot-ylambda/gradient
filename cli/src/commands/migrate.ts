@@ -1,8 +1,9 @@
-import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join } from "node:path";
+import { access } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 import { addEntry, loadManifest } from "../core/manifest.js";
 import { assertInside, sanitizeName } from "../core/security.js";
 import { refreshRecallIndex } from "./recall.js";
+import { safeReadFile, safeUnlink, safeWriteFile } from "../core/safeFs.js";
 
 export interface MigrateResult {
   migrated: string[];
@@ -61,7 +62,7 @@ export async function migrate(
 
     let raw: string;
     try {
-      raw = await readFile(oldPath, "utf8");
+      raw = await safeReadFile(projectDir, oldPath);
     } catch {
       skipped.push(entry.name);
       continue;
@@ -85,9 +86,8 @@ export async function migrate(
     const bodyWithNewline = body.endsWith("\n") ? body : `${body}\n`;
     const content =
       `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n${bodyWithNewline}`;
-    await mkdir(dirname(skillPath), { recursive: true });
     try {
-      await writeFile(skillPath, content, { flag: "wx" });
+      await safeWriteFile(projectDir, skillPath, content, { exclusive: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         migrated.pop();
@@ -100,10 +100,10 @@ export async function migrate(
     try {
       await addEntry(projectDir, { ...entry, type: "skill", path: skillPath });
     } catch (error) {
-      await unlink(skillPath).catch(() => undefined);
+      await safeUnlink(projectDir, skillPath).catch(() => undefined);
       throw error;
     }
-    await unlink(oldPath).catch(() => undefined);
+    await safeUnlink(projectDir, oldPath).catch(() => undefined);
   }
 
   if (!opts.dryRun && migrated.length > 0) {

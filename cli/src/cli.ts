@@ -38,9 +38,9 @@ Usage:
   gradient recall <on|off|status>
                                 hint when a prompt matches an artifact
   gradient stats                show pattern coverage + artifact adoption
-  gradient autopilot <off|nudge|full>
+  gradient autopilot <off|nudge>
                                 auto-respond when Claude stops (opt-in)
-  gradient autopilot status     mode, budget, and recent auto-responses
+  gradient autopilot status     mode, budget, and recent decisions
 `;
 
 export function parseCliArgs(argv: string[]): {
@@ -179,7 +179,7 @@ export async function main(
         log(`${confidenceChip(s.confidence)} ${c.bold(s.name)}  ${c.muted(s.title)}`);
         log(c.dim(s.rationale));
         log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions`));
-        for (const ex of s.examples ?? []) log(`  ${c.muted("·")} ${ex}`);
+        for (const ex of s.examples ?? []) log(`  ${c.muted("·")} ${c.muted(ex)}`);
         return 0;
       }
       case "list": {
@@ -290,13 +290,13 @@ export async function main(
           return 0;
         }
         if (arg !== "status") {
-          log(c.coral(`unknown autopilot mode: ${arg} (use off|nudge|full|status)`));
+          log(c.coral(`unknown autopilot mode: ${arg} (use off|nudge|status)`));
           return 2;
         }
         const s = await autopilotStatus(projectDir);
         log(banner(VERSION));
         log(`${c.muted("mode:")} ${c.bold(s.mode)}${s.effectiveMode !== s.mode ? c.dim(` → ${s.effectiveMode} here (clamped by project gradient.md)`) : ""}`);
-        log(`${c.muted("budget:")} ${s.budget} auto-responses/session${s.effectiveBudget !== s.budget ? c.dim(` → ${s.effectiveBudget} here (clamped by project gradient.md)`) : ""}`);
+        log(`${c.muted("budget:")} ${s.budget} judge attempts/session${s.effectiveBudget !== s.budget ? c.dim(` → ${s.effectiveBudget} here (clamped by project gradient.md)`) : ""}`);
         log(`${c.muted("gradient.md:")} ${s.playbookPath}${s.playbookExists ? "" : c.dim(" (not yet generated — run gradient scan)")}`);
         log(
           `${c.muted("project gradient.md:")} ${s.projectPlaybookExists
@@ -334,7 +334,10 @@ export async function main(
 async function readStdinJson(): Promise<Record<string, unknown>> {
   if (process.stdin.isTTY) return {};
   let data = "";
-  for await (const chunk of process.stdin) data += chunk;
+  for await (const chunk of process.stdin) {
+    data += chunk;
+    if (data.length > 1_000_000) return {};
+  }
   try {
     return JSON.parse(data) as Record<string, unknown>;
   } catch {

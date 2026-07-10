@@ -12,10 +12,11 @@ artifacts you approve.
 
 Run the CLI and show the user the results:
 
-- `gradient scan` — analyze recent history, print + cache suggestions (read-only).
+- `gradient scan` — analyze history, send bounded/redacted candidates to the configured model, and cache suggestions.
 - `gradient review` — walk through cached suggestions and approve them.
 - `gradient apply <id>` — generate a specific suggestion non-interactively.
 - `gradient list` / `gradient remove <name>` — manage what was generated.
 
-Always run `gradient scan` first, summarize the suggestions for the user, and
-let them choose which to apply. Never apply without explicit approval.
+Always explain that candidate snippets leave the machine, run `gradient scan`,
+summarize the suggestions, and let the user inspect the exact preview before
+choosing what to apply. Never apply without explicit approval.

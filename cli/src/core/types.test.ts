@@ -20,7 +20,7 @@ describe("types", () => {
 describe("autopilot types", () => {
   it("SessionState and Config autopilot keys compile with expected shapes", () => {
     const entry: AutopilotLogEntry = { ts: "2026-07-01T00:00:00Z", action: "continue", why: "unfinished", excerpt: "keep going" };
-    const s: SessionState = { count: 1, lastFingerprint: "tools:3", stoodDown: false, log: [entry] };
+    const s: SessionState = { count: 1, attempts: 1, lastFingerprint: "tools:3", stoodDown: false, log: [entry] };
     const c: Config = { autopilot: "nudge", autopilotBudget: 10, autopilotModel: "haiku" };
     expect(s.log[0].action).toBe("continue");
     expect(c.autopilot).toBe("nudge");

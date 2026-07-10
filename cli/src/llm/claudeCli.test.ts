@@ -3,7 +3,7 @@ import { ClaudeCliBackend } from "./claudeCli.js";
 
 describe("ClaudeCliBackend", () => {
   it("reports available when `claude` is on PATH", async () => {
-    const b = new ClaudeCliBackend({ whichFn: async () => "/usr/bin/claude", runFn: async () => ({ code: 0, stdout: "", stderr: "" }) });
+    const b = new ClaudeCliBackend({ whichFn: async () => process.execPath, runFn: async () => ({ code: 0, stdout: "", stderr: "" }) });
     expect(await b.available()).toBe(true);
   });
   it("reports unavailable when `claude` missing", async () => {
@@ -13,14 +13,14 @@ describe("ClaudeCliBackend", () => {
   it("extracts the .result field from --output-format json", async () => {
     const wrapper = JSON.stringify({ type: "result", result: '{"suggestions":[]}' });
     const b = new ClaudeCliBackend({
-      whichFn: async () => "/usr/bin/claude",
+      whichFn: async () => process.execPath,
       runFn: async () => ({ code: 0, stdout: wrapper, stderr: "" }),
     });
     expect(await b.complete({ system: "sys", prompt: "p" })).toBe('{"suggestions":[]}');
   });
   it("throws when the claude CLI exits nonzero", async () => {
     const b = new ClaudeCliBackend({
-      whichFn: async () => "/usr/bin/claude",
+      whichFn: async () => process.execPath,
       runFn: async () => ({ code: 1, stdout: "", stderr: "boom" }),
     });
     await expect(b.complete({ system: "s", prompt: "p" })).rejects.toThrow("boom");
@@ -31,6 +31,7 @@ describe("spawn options", () => {
   it("threads spawnCwd and extraEnv through to the run function", async () => {
     let captured: { cwd?: string; env?: NodeJS.ProcessEnv } | undefined;
     const backend = new ClaudeCliBackend({
+      whichFn: async () => process.execPath,
       runFn: async (_cmd, _args, _input, opts) => {
         captured = opts;
         return { code: 0, stdout: JSON.stringify({ result: "ok" }), stderr: "" };
@@ -47,6 +48,7 @@ describe("spawn options", () => {
   it("passes no env override when extraEnv is not set", async () => {
     let captured: { cwd?: string; env?: NodeJS.ProcessEnv } | undefined;
     const backend = new ClaudeCliBackend({
+      whichFn: async () => process.execPath,
       runFn: async (_cmd, _args, _input, opts) => {
         captured = opts;
         return { code: 0, stdout: "{}", stderr: "" };
@@ -61,7 +63,7 @@ describe("system prompt mode", () => {
   const capture = async (system: string) => {
     let seen: string[] = [];
     const b = new ClaudeCliBackend({
-      whichFn: async () => "/usr/bin/claude",
+      whichFn: async () => process.execPath,
       runFn: async (_cmd, args) => { seen = args; return { code: 0, stdout: '{"result":"{}"}', stderr: "" }; },
     });
     await b.complete({ system, prompt: "p" });
@@ -83,30 +85,33 @@ describe("system prompt mode", () => {
   });
 });
 
-describe("the child never gets tools", () => {
+describe("the child is isolated from tools and user customizations", () => {
   const capture = async () => {
     let seen: string[] = [];
+    let input = "";
     const b = new ClaudeCliBackend({
-      whichFn: async () => "/usr/bin/claude",
-      runFn: async (_cmd, args) => { seen = args; return { code: 0, stdout: '{"result":"{}"}', stderr: "" }; },
+      whichFn: async () => process.execPath,
+      runFn: async (_cmd, args, stdin) => {
+        seen = args;
+        input = stdin;
+        return { code: 0, stdout: '{"result":"{}"}', stderr: "" };
+      },
     });
-    await b.complete({ system: "s", prompt: "p" });
-    return seen;
+    await b.complete({ system: "s", prompt: "private prompt" });
+    return { args: seen, input };
   };
 
-  // Measured: without this, `claude -p` grants the child Claude Code's full
-  // toolset and it WILL use it (a Glob-seeking prompt ran in 3 turns).
-  // --allowed-tools "" and a sentinel whitelist both fail to block; only an
-  // explicit deny list does. Neither caller (scan's classifier, autopilot's
-  // judge) is anything but a text->text call.
-  it("passes --disallowed-tools", async () => {
-    expect(await capture()).toContain("--disallowed-tools");
+  it("uses fail-closed isolation flags and disables every built-in tool", async () => {
+    const { args } = await capture();
+    for (const flag of ["--safe-mode", "--strict-mcp-config", "--disable-slash-commands", "--no-chrome", "--no-session-persistence"]) {
+      expect(args).toContain(flag);
+    }
+    expect(args[args.indexOf("--tools") + 1]).toBe("");
   });
 
-  it("denies the filesystem, shell, and network tools", async () => {
-    const args = await capture();
-    for (const t of ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "Task"]) {
-      expect(args).toContain(t);
-    }
+  it("sends private prompt text over stdin, never argv", async () => {
+    const { args, input } = await capture();
+    expect(args).not.toContain("private prompt");
+    expect(input).toBe("private prompt");
   });
 });

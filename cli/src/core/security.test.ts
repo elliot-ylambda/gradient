@@ -33,4 +33,22 @@ describe("redact", () => {
     expect(redact("ghp_" + "a".repeat(36))).toContain("[REDACTED]");
     expect(redact("api_key=hunter2value")).toContain("[REDACTED]");
   });
+  it("masks common cloud, package, bearer, JWT, database, and private-key credentials", () => {
+    const samples = [
+      `AWS_ACCESS_KEY_ID=${"AKIA" + "A".repeat(16)}`,
+      `npm_${"a".repeat(36)}`,
+      `xoxb-${"a".repeat(24)}`,
+      `Authorization: Bearer ${"a".repeat(32)}`,
+      `eyJ${"a".repeat(12)}.${"b".repeat(12)}.${"c".repeat(12)}`,
+      "postgres://user:password@example.com/db",
+      "-----BEGIN PRIVATE KEY-----\nsecret material\n-----END PRIVATE KEY-----",
+    ];
+    for (const sample of samples) {
+      expect(redact(sample)).toContain("[REDACTED]");
+      expect(redact(sample)).not.toContain("secret material");
+    }
+  });
+  it("strips terminal control sequences from untrusted text", () => {
+    expect(redact("safe\u001b]52;c;payload\u0007text")).not.toContain("\u001b");
+  });
 });

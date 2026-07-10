@@ -49,7 +49,7 @@ describe("triggers validation", () => {
     expect(() => validateSuggestion(s)).toThrow(/triggers/);
   });
   it("accepts string triggers and absent triggers", () => {
-    const base = { id: "1", name: "n", title: "t", rationale: "r", confidence: "high",
+    const base = { id: "1", name: "n", title: "t", rationale: "r", confidence: "high", evidence: { count: 1, sessions: 1 },
       payload: { type: "command", commandName: "n", body: "b" } };
     expect(() => validateSuggestion(base)).not.toThrow();
     expect(() => validateSuggestion({ ...base, payload: { ...base.payload, triggers: ["x"] } })).not.toThrow();

@@ -1,5 +1,5 @@
 import { access } from "node:fs/promises";
-import { loadConfig, saveConfig, DEFAULT_AUTOPILOT_BUDGET } from "../config.js";
+import { loadConfig, saveConfig, DEFAULT_AUTOPILOT_BUDGET, projectKey } from "../config.js";
 import { installHook, removeHook, hookInstalled } from "../core/settings.js";
 import { latestState } from "../core/state.js";
 import { playbookPath, projectPlaybookPath, loadProjectPlaybook, clampMode } from "../core/playbook.js";
@@ -17,20 +17,38 @@ export interface SetModeResult {
   settingsPath: string;
 }
 
-/** Mode is user-global (config); the Stop hook is per-project (settings.json). Spec §3.1. */
+/** Consent is local and per-project. A committed/stale hook is inert unless the
+ * canonical project path is present in the private user config. */
 export async function setAutopilotMode(
   mode: AutopilotMode,
   projectDir: string,
   opts: { home?: string } = {},
 ): Promise<SetModeResult> {
+  if (mode === "full") {
+    throw new Error("autopilot full is disabled pending additional security hardening; use nudge");
+  }
   const config = await loadConfig(opts.home);
-  config.autopilot = mode;
-  await saveConfig(config, opts.home);
+  const projects = { ...(config.autopilotProjects ?? {}) };
+  const key = projectKey(projectDir);
   if (mode === "off") {
+    delete projects[key];
+    config.autopilotProjects = projects;
+    delete config.autopilot;
+    // Revoke consent first: a hook-removal failure must leave the hook inert.
+    await saveConfig(config, opts.home);
     const settingsPath = await removeHook(projectDir, "Stop", RESPOND_HOOK_COMMAND);
     return { mode, hookInstalled: false, settingsPath };
   }
   const settingsPath = await installHook(projectDir, "Stop", RESPOND_HOOK_COMMAND, { timeout: HOOK_TIMEOUT_S });
+  projects[key] = mode;
+  config.autopilotProjects = projects;
+  delete config.autopilot;
+  try {
+    await saveConfig(config, opts.home);
+  } catch (error) {
+    await removeHook(projectDir, "Stop", RESPOND_HOOK_COMMAND).catch(() => undefined);
+    throw error;
+  }
   return { mode, hookInstalled: true, settingsPath };
 }
 
@@ -61,7 +79,7 @@ export async function autopilotStatus(
     playbookExists = false;
   }
 
-  const mode = (config.autopilot ?? "off") as AutopilotMode;
+  const mode = (config.autopilotProjects?.[projectKey(projectDir)] ?? "off") as AutopilotMode;
   const project = await loadProjectPlaybook(projectDir);
   let effectiveMode = mode;
   let projectMalformed = false;

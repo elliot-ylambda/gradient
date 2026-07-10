@@ -1,8 +1,10 @@
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { normalize, similarity } from "./cluster.js";
-import { gradientDir } from "./manifest.js";
+import { projectCacheDir } from "../config.js";
+import { safeReadFile, safeWriteFile } from "./safeFs.js";
+import { sanitizeName, stripUnsafeControls } from "./security.js";
 
 export interface RecallEntry {
   name: string;
@@ -21,8 +23,8 @@ export interface RecallIndex {
 export const RECALL_THRESHOLD = 0.55;
 export const NEAR_MISS_THRESHOLD = 0.4;
 
-export function recallIndexPath(projectDir: string): string {
-  return join(gradientDir(projectDir), "recall.json");
+export function recallIndexPath(projectDir: string, home?: string): string {
+  return join(projectCacheDir(projectDir, home), "recall.json");
 }
 
 export function extractTriggers(description: string): string[] {
@@ -67,10 +69,11 @@ async function entryFrom(
   path: string,
   name: string,
   kind: "skill" | "command",
+  base: string,
 ): Promise<RecallEntry | null> {
   let raw: string;
   try {
-    raw = await readFile(path, "utf8");
+    raw = await safeReadFile(base, path);
   } catch {
     return null;
   }
@@ -86,7 +89,7 @@ async function entryFrom(
   };
 }
 
-async function scanRoot(root: string, kind: "skill" | "command"): Promise<RecallEntry[]> {
+async function scanRoot(base: string, root: string, kind: "skill" | "command"): Promise<RecallEntry[]> {
   let names: string[];
   try {
     names = (await readdir(root)).sort();
@@ -97,9 +100,9 @@ async function scanRoot(root: string, kind: "skill" | "command"): Promise<Recall
   const entries: RecallEntry[] = [];
   for (const name of names) {
     const entry = kind === "skill"
-      ? await entryFrom(join(root, name, "SKILL.md"), name, "skill")
+      ? await entryFrom(join(root, name, "SKILL.md"), name, "skill", base)
       : name.endsWith(".md")
-        ? await entryFrom(join(root, name), name.slice(0, -3), "command")
+        ? await entryFrom(join(root, name), name.slice(0, -3), "command", base)
         : null;
     if (entry) entries.push(entry);
   }
@@ -109,51 +112,60 @@ async function scanRoot(root: string, kind: "skill" | "command"): Promise<Recall
 function artifactRoots(
   projectDir: string,
   home?: string,
-): Array<{ root: string; kind: "skill" | "command" }> {
+): Array<{ base: string; root: string; kind: "skill" | "command" }> {
   const userHome = home ?? homedir();
   return [
-    { root: join(projectDir, ".claude", "skills"), kind: "skill" },
-    { root: join(projectDir, ".claude", "commands"), kind: "command" },
-    { root: join(userHome, ".claude", "skills"), kind: "skill" },
-    { root: join(userHome, ".claude", "commands"), kind: "command" },
+    { base: projectDir, root: join(projectDir, ".claude", "skills"), kind: "skill" },
+    { base: projectDir, root: join(projectDir, ".claude", "commands"), kind: "command" },
+    { base: userHome, root: join(userHome, ".claude", "skills"), kind: "skill" },
+    { base: userHome, root: join(userHome, ".claude", "commands"), kind: "command" },
   ];
 }
 
 export async function buildRecallIndex(projectDir: string, home?: string): Promise<RecallIndex> {
   const entries: RecallEntry[] = [];
-  for (const { root, kind } of artifactRoots(projectDir, home)) {
-    entries.push(...(await scanRoot(root, kind)));
+  for (const { base, root, kind } of artifactRoots(projectDir, home)) {
+    entries.push(...(await scanRoot(base, root, kind)));
   }
-  return { builtAt: new Date().toISOString(), entries };
+  return { builtAt: new Date().toISOString(), entries: entries.filter(validEntry).slice(0, 1_000) };
 }
 
-export async function saveRecallIndex(projectDir: string, index: RecallIndex): Promise<void> {
-  const path = recallIndexPath(projectDir);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(index));
+export async function saveRecallIndex(projectDir: string, index: RecallIndex, home?: string): Promise<void> {
+  const builtAt = Date.parse(index.builtAt);
+  if (!Number.isFinite(builtAt) || builtAt > Date.now() + 5 * 60_000 ||
+    index.entries.length > 1_000 || !index.entries.every(validEntry)) {
+    throw new Error("refusing invalid recall index");
+  }
+  const userHome = home ?? homedir();
+  await safeWriteFile(userHome, recallIndexPath(projectDir, userHome), JSON.stringify(index));
 }
 
 function validEntry(entry: unknown): entry is RecallEntry {
   if (!entry || typeof entry !== "object") return false;
   const candidate = entry as Partial<RecallEntry>;
   return (
-    typeof candidate.name === "string" &&
+    typeof candidate.name === "string" && candidate.name.length <= 40 &&
+    sanitizeName(candidate.name) === candidate.name && stripUnsafeControls(candidate.name) === candidate.name &&
     (candidate.kind === "skill" || candidate.kind === "command") &&
-    typeof candidate.invocation === "string" &&
+    candidate.invocation === `/${candidate.name}` &&
     Array.isArray(candidate.triggers) &&
-    candidate.triggers.every(trigger => typeof trigger === "string") &&
-    typeof candidate.signature === "string" &&
-    typeof candidate.description === "string"
+    candidate.triggers.length <= 20 &&
+    candidate.triggers.every(trigger => typeof trigger === "string" && trigger.length <= 1_000 && stripUnsafeControls(trigger) === trigger) &&
+    typeof candidate.signature === "string" && candidate.signature.length <= 200 && stripUnsafeControls(candidate.signature) === candidate.signature &&
+    typeof candidate.description === "string" && candidate.description.length <= 2_000 && stripUnsafeControls(candidate.description) === candidate.description
   );
 }
 
-export async function loadRecallIndex(projectDir: string): Promise<RecallIndex | null> {
+export async function loadRecallIndex(projectDir: string, home?: string): Promise<RecallIndex | null> {
   try {
-    const index = JSON.parse(await readFile(recallIndexPath(projectDir), "utf8")) as Partial<RecallIndex>;
+    const userHome = home ?? homedir();
+    const index = JSON.parse(await safeReadFile(userHome, recallIndexPath(projectDir, userHome))) as Partial<RecallIndex>;
+    const builtAt = typeof index.builtAt === "string" ? Date.parse(index.builtAt) : Number.NaN;
     if (
       typeof index.builtAt !== "string" ||
-      !Number.isFinite(Date.parse(index.builtAt)) ||
+      !Number.isFinite(builtAt) || builtAt > Date.now() + 5 * 60_000 ||
       !Array.isArray(index.entries) ||
+      index.entries.length > 1_000 ||
       !index.entries.every(validEntry)
     ) {
       return null;
@@ -170,7 +182,7 @@ export async function recallIndexFresh(
   home?: string,
 ): Promise<boolean> {
   const builtAt = Date.parse(index.builtAt);
-  if (!Number.isFinite(builtAt)) return false;
+  if (!Number.isFinite(builtAt) || builtAt > Date.now() + 5 * 60_000) return false;
   for (const { root, kind } of artifactRoots(projectDir, home)) {
     try {
       // ISO timestamps have millisecond precision while stat() can expose

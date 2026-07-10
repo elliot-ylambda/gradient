@@ -1,7 +1,8 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import type { Suggestion, AutopilotMode } from "./types.js";
+import { safeReadFile, safeWriteFile } from "./safeFs.js";
 
 export const MINED_START = "<!-- gradient:mined:start -->";
 export const MINED_END = "<!-- gradient:mined:end -->";
@@ -67,25 +68,26 @@ export function generatePlaybook(suggestions: Suggestion[], existing?: string): 
 }
 
 export async function writePlaybook(suggestions: Suggestion[], home?: string): Promise<string | null> {
+  const userHome = home ?? homedir();
   const path = playbookPath(home);
   let existing: string | undefined;
   try {
-    existing = await readFile(path, "utf8");
+    existing = await safeReadFile(userHome, path);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") return null; // unreadable — leave it alone
     existing = undefined; // ENOENT → first run
   }
   const next = generatePlaybook(suggestions, existing);
   if (next === null) return null;
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, next);
+  await safeWriteFile(userHome, path, next);
   return path;
 }
 
 /** The judge's playbook. Built-in defaults when no file exists — autopilot works before the first scan. */
 export async function loadPlaybook(home?: string): Promise<string> {
+  const userHome = home ?? homedir();
   try {
-    return await readFile(playbookPath(home), "utf8");
+    return await safeReadFile(userHome, playbookPath(userHome));
   } catch {
     return DEFAULT_PLAYBOOK;
   }

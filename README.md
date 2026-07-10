@@ -6,7 +6,7 @@
 
 `gradient` reads your own Claude Code history, finds the workflows you repeat,
 and generates the automations to stop — **skills, loops, and hooks** —
-through a read-only **scan** → approve **review** → reversible **apply** flow.
+through a local-mining **scan** → approve **review** → reversible **apply** flow.
 It only ever suggests: nothing runs without you turning it on.
 
 [gradient.md](https://gradient.md) · open source · MIT
@@ -64,8 +64,11 @@ default 1500) protects the clustering step from very large histories and reports
 anything it drops.
 
 The default backend reuses your existing `claude` CLI auth — no API key required.
-Clustering is local and LLM-free; only short candidate snippets ever reach a model
-— never whole transcripts — and a redaction pass strips secrets first.
+Clustering is local and LLM-free. `scan` sends bounded candidate snippets—not
+whole transcripts—to the selected model after redacting common credential
+formats. Redaction is defense in depth, not a guarantee that arbitrary private
+or proprietary text is removed; review the [data and trust boundaries](#data-and-trust-boundaries)
+before scanning sensitive history.
 
 ## Usage and billing
 
@@ -75,8 +78,9 @@ or Max plan — a separate allowance from your interactive Claude Code usage. Tw
 things draw on it:
 
 - **`scan`** — one call per run, to name and rank the mined clusters.
-- **`autopilot`** — one call per stop, bounded by `autopilotBudget` (default 10
-  per session, and clampable per repo in `gradient.md`).
+- **`autopilot`** — at most `autopilotBudget` judge attempts per session
+  (default 10, clampable lower per repo in `gradient.md`). Stand-downs and
+  failed or timed-out calls consume the budget too.
 
 An always-on autopilot is therefore a recurring cost, not a free one. If that
 matters, lower the budget or set `max-mode: off` in the repos you don't want it
@@ -85,7 +89,8 @@ running in.
 **For CI or anything shared, use an API key.** Anthropic's guidance is that
 shared production automation should run on the Claude Platform with a key rather
 than a personal subscription. gradient supports that path — set
-`ANTHROPIC_API_KEY` and pin the backend:
+`ANTHROPIC_API_KEY` and pin the backend. Pinned backends fail closed when
+unavailable; Gradient never silently switches identity or billing path:
 
 ```json
 // ~/.config/gradient/config.json
@@ -100,16 +105,21 @@ either way.)
 
 The most-mined pattern in every history is the nudge — `continue`, `what's
 next?` — typed hundreds of times. `gradient autopilot` automates exactly that:
-a `Stop` hook that answers the way *you* would, using the phrasings mined into
-your `gradient.md` (`~/.config/gradient/gradient.md`, yours to edit — `scan`
-refreshes only its marked region).
+a local `Stop` hook whose isolated judge can return only the fixed nudge
+`Continue.`. Approved patterns are recorded in your private
+`~/.config/gradient/gradient.md`; unapproved scan output never reaches it.
 
 ```bash
 npx gradient.md autopilot nudge   # opt in (this project): push unfinished work forward
-npx gradient.md autopilot full    # also answer routine questions / start your usual next step
 npx gradient.md autopilot status  # what did it do while I was away?
 npx gradient.md autopilot off     # remove the hook
 ```
+
+Arbitrary-response `full` mode is disabled in `0.1.1` pending additional
+prompt-injection hardening. Enabling nudge records consent for the canonical
+project path in private user config and installs the hook in
+`.claude/settings.local.json`. A stale or committed hook is inert without that
+local consent.
 
 Bounded by design — see [How the loop is bounded](#how-the-loop-is-bounded) below.
 
@@ -120,15 +130,16 @@ it can only *lower* it, never raise your global setting:
 ```yaml
 ---
 autopilot:
-  max-mode: nudge   # ceiling here: off | nudge | full
-  budget: 5         # max auto-responses per session in this repo
+  max-mode: nudge   # ceiling here: off | nudge
+  budget: 5         # max judge attempts per session in this repo
 ---
 ## Rules
 - Never push, deploy, or publish from autopilot in this repo.
 ```
 
-Everything below the frontmatter is prose the auto-responder reads as context.
-Trailing `#` comments are descriptive and ignored. Anything else the parser
+Only the structured frontmatter clamps are read by autopilot. Repository prose
+is never passed to the judge as instructions. Trailing `#` comments are
+descriptive and ignored. Anything else the parser
 can't read — an unclosed block, `max-mode: turbo` — turns autopilot off for that
 repo rather than guessing; `gradient autopilot status` shows the effective mode.
 
@@ -142,7 +153,7 @@ per session and never again.
 
 Three other bounds replace it, and each is independent:
 
-- **Budget** — a hard cap on auto-responses per session (default 10), clampable
+- **Budget** — a hard cap on judge attempts per session (default 10), clampable
   further per repo.
 - **Progress gate** — if Claude stops again having done no tool work since the
   last nudge, autopilot latches off for the session rather than nudging into a
@@ -150,8 +161,10 @@ Three other bounds replace it, and each is independent:
 - **Fail-open** — any error (no backend, judge timeout, unparseable reply) means
   the stop simply stands. Autopilot's failure mode is "off", never "loops".
 
-The judge also runs with every tool denied, so it can only decide — never act.
-Your permission prompts still gate dangerous tools; autopilot cannot answer them.
+The judge runs in Claude safe mode, with built-in tools, skills, plugins, hooks,
+MCP servers, Chrome, and session persistence disabled. Prompt text is sent over
+stdin rather than process arguments. The model's response text is never relayed;
+only its continue/stand-down decision is used, and continue maps to `Continue.`.
 
 ## Recall & adoption
 
@@ -167,11 +180,34 @@ npx gradient.md recall status  # hook state, artifact count, and index timestamp
 npx gradient.md recall off     # remove only the recall hook
 ```
 
-The index lives at `.gradient/recall.json`. Matching and near-miss events append
-to `.gradient/adoption.jsonl` as artifact name, timestamp, similarity, and
-whether a hint was shown. Prompt text is never logged. `gradient stats` reports
+The index and adoption log live in private `0600` files under
+`~/.config/gradient/projects/`, keyed by project path—not in the repository.
+Matching events contain only artifact name, timestamp, similarity, and whether
+a hint was shown; prompt text is never logged. Recall also requires local
+per-project consent, so a repository cannot activate it by committing a hook.
+`gradient stats` reports
 uses, last use, and retypes caught for each approved artifact, and suggests
 removing artifacts that remain unused for at least 30 days.
+
+## Data and trust boundaries
+
+- `scan` reads user-authored turns from local Claude Code transcripts, writes a
+  private per-project cache under `~/.config/gradient/projects/`, and sends only capped/redacted
+  candidate snippets to the selected model. `--user --since` filters individual
+  turn timestamps; every scope keeps the default 1,500-prompt processing cap.
+- Suggestions must map to exact local source candidates. Executable skill and
+  loop instructions are reconstructed locally from redacted source text, and
+  `review` shows the exact rendered artifact before approval.
+- Project writes reject symlinked ancestors and final targets. Caches and user
+  state use private modes and atomic writes. Hooks default to
+  `.claude/settings.local.json`.
+- Autopilot is opt-in per project and sends a bounded recent user/assistant tail
+  plus the private personal playbook to the judge. Do not enable it for session
+  content you are unwilling to send to the configured model.
+- No API key is stored by Gradient. `ANTHROPIC_API_KEY` is read from the process
+  environment by the official SDK.
+
+See [SECURITY.md](SECURITY.md) for supported versions and vulnerability reports.
 
 ## Develop
 

@@ -1,9 +1,9 @@
-import { writeFile, mkdir } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { Suggestion, ManifestEntry, ArtifactType } from "./types.js";
 import { emit, type EmitTarget } from "./emit/index.js";
 import { assertInside } from "./security.js";
 import { addEntry, loadManifest } from "./manifest.js";
+import { safeWriteFile } from "./safeFs.js";
 
 export interface ApplyResult {
   suggestion: Suggestion;
@@ -33,12 +33,11 @@ export async function applySuggestion(
   if (result.kind === "command" || result.kind === "skill") {
     const abs = join(projectDir, result.path);
     assertInside(join(projectDir, ".claude"), abs);
-    await mkdir(dirname(abs), { recursive: true });
     if (await isTrackedTarget(projectDir, s.name, abs)) {
-      await writeFile(abs, result.content);
+      await safeWriteFile(projectDir, abs, result.content, { mode: 0o600 });
     } else {
       try {
-        await writeFile(abs, result.content, { flag: "wx" });
+        await safeWriteFile(projectDir, abs, result.content, { exclusive: true, mode: 0o600 });
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "EEXIST") {
           throw new Error(`refusing to overwrite untracked artifact: ${abs}`);

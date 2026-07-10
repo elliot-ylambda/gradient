@@ -1,9 +1,9 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { assertInside } from "./security.js";
+import { safeReadFile, safeWriteFile } from "./safeFs.js";
 
 export function settingsPath(projectDir: string): string {
-  return join(projectDir, ".claude", "settings.json");
+  return join(projectDir, ".claude", "settings.local.json");
 }
 
 interface HookGroup { hooks: { type: string; command: string; timeout?: number }[] }
@@ -61,7 +61,7 @@ export async function installHook(
   assertInside(join(projectDir, ".claude"), path);
   let existing: Record<string, any> = {};
   try {
-    existing = JSON.parse(await readFile(path, "utf8"));
+    existing = JSON.parse(await safeReadFile(projectDir, path));
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
       throw new Error(`refusing to overwrite unreadable ${path}: ${(e as Error).message}`);
@@ -69,8 +69,7 @@ export async function installHook(
     // ENOENT → no existing settings; start fresh
   }
   const merged = mergeHookIntoSettings(existing, event, command, opts);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(merged, null, 2));
+  await safeWriteFile(projectDir, path, JSON.stringify(merged, null, 2));
   return path;
 }
 
@@ -80,19 +79,19 @@ export async function removeHook(projectDir: string, event: string, command: str
   assertInside(join(projectDir, ".claude"), path);
   let existing: Record<string, any>;
   try {
-    existing = JSON.parse(await readFile(path, "utf8"));
+    existing = JSON.parse(await safeReadFile(projectDir, path));
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return path; // nothing to remove
     throw new Error(`refusing to overwrite unreadable ${path}: ${(e as Error).message}`);
   }
   const merged = removeHookFromSettings(existing, event, command);
-  await writeFile(path, JSON.stringify(merged, null, 2));
+  await safeWriteFile(projectDir, path, JSON.stringify(merged, null, 2));
   return path;
 }
 
 export async function hookInstalled(projectDir: string, event: string, command: string): Promise<boolean> {
   try {
-    const parsed = JSON.parse(await readFile(settingsPath(projectDir), "utf8"));
+    const parsed = JSON.parse(await safeReadFile(projectDir, settingsPath(projectDir)));
     const groups: HookGroup[] = Array.isArray(parsed?.hooks?.[event]) ? parsed.hooks[event] : [];
     return groups.some(g => g.hooks?.some(h => h.command === command));
   } catch {

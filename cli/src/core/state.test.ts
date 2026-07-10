@@ -10,7 +10,7 @@ const tmpHome = () => mkdtemp(join(tmpdir(), "grad-home-"));
 describe("session state", () => {
   it("returns fresh state for a missing file", async () => {
     const home = await tmpHome();
-    expect(await loadState("s1", home)).toEqual({ count: 0, lastFingerprint: "", stoodDown: false, log: [] });
+    expect(await loadState("s1", home)).toEqual({ count: 0, attempts: 0, lastFingerprint: "", stoodDown: false, log: [] });
   });
 
   it("returns fresh state for a corrupt file (bounded worst case: budget restarts)", async () => {
@@ -24,6 +24,7 @@ describe("session state", () => {
     const home = await tmpHome();
     const s: SessionState = {
       count: 3,
+      attempts: 4,
       lastFingerprint: "tools:7",
       stoodDown: false,
       log: Array.from({ length: 25 }, (_, i) => ({ ts: `t${i}`, action: "continue" as const, why: "w", excerpt: "e" })),

@@ -3,7 +3,8 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scan } from "./scan.js";
-import { playbookPath, MINED_START } from "../core/playbook.js";
+import { playbookPath } from "../core/playbook.js";
+import { suggestionsPath } from "./apply.js";
 
 describe("scan", () => {
   it("sends up to DEFAULT_DETECT_WINDOW candidates to the llm", async () => {
@@ -21,9 +22,9 @@ describe("scan", () => {
     expect(logs.some(l => l.includes("top 24"))).toBe(true);
   });
 
-  it("disables the recency cap for --all but keeps it for project scope", async () => {
+  it("keeps a memory/cost cap for both --all and project scope", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    // 1600 > DEFAULT_MAX_PROMPTS (1500): project scope caps, --all must not.
+    // 1600 > DEFAULT_MAX_PROMPTS (1500): every scope remains bounded.
     const big = Array.from({ length: 1600 }, (_, i) => ({ ts: String(i).padStart(5, "0"), project: "p", role: "user" as const, text: "continue", sessionId: `s${i % 5}` }));
     const run = async (scope: "all" | "project") => {
       const logs: string[] = [];
@@ -33,8 +34,32 @@ describe("scan", () => {
       );
       return logs;
     };
-    expect((await run("all")).some(l => l.includes("capped to most recent"))).toBe(false);
+    expect((await run("all")).some(l => l.includes("capped to most recent"))).toBe(true);
     expect((await run("project")).some(l => l.includes("capped to most recent"))).toBe(true);
+  });
+
+  it("applies --since to individual turns, not only transcript file mtime", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-since-"));
+    const seen: string[] = [];
+    const backend = {
+      name: "fake", available: async () => true,
+      complete: async (request: { prompt: string }) => {
+        seen.push(request.prompt);
+        return JSON.stringify({ suggestions: [] });
+      },
+    };
+    await scan(
+      { scope: "all", projectPath: dir, sinceDays: 7, now: Date.parse("2026-07-09T00:00:00Z") },
+      {
+        backend,
+        collectFn: async () => ["recently-touched.jsonl"],
+        parseFn: async () => [
+          { ts: "2025-01-01T00:00:00Z", project: "p", role: "user", text: "OLD-CONFIDENTIAL-PROMPT", sessionId: "old" },
+          ...Array.from({ length: 3 }, (_, i) => ({ ts: `2026-07-0${7 + i}T00:00:00Z`, project: "p", role: "user" as const, text: "recent repeat", sessionId: `s${i}` })),
+        ],
+      },
+    );
+    expect(seen.join("\n")).not.toContain("OLD-CONFIDENTIAL-PROMPT");
   });
 
   it("runs the pipeline with a mock backend and caches suggestions", async () => {
@@ -61,7 +86,7 @@ describe("scan", () => {
       },
     );
     expect(out[0].name).toBe("ship");
-    const cached = JSON.parse(await readFile(join(projectDir, ".gradient", "suggestions.json"), "utf8"));
+    const cached = JSON.parse(await readFile(suggestionsPath(projectDir, home), "utf8"));
     expect(cached.length).toBe(1);
   });
 
@@ -85,7 +110,7 @@ describe("scan", () => {
     expect(logs.some(l => l.includes("coverage: 1 session(s)"))).toBe(true);
   });
 
-  it("writes the playbook after caching suggestions", async () => {
+  it("does not write unapproved model output into the autopilot playbook", async () => {
     const projectDir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const fakeBackend = {
@@ -108,9 +133,7 @@ describe("scan", () => {
           })),
       },
     );
-    const pb = await readFile(playbookPath(home), "utf8");
-    expect(pb).toContain(MINED_START);
-    expect(pb).toContain('"continue until actually done" (seen 3× · 3 sessions)');
+    await expect(readFile(playbookPath(home), "utf8")).rejects.toThrow();
   });
 
   it("excludes template floods from detection and logs the exclusion", async () => {

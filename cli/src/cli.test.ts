@@ -12,7 +12,7 @@ vi.mock("./commands/migrate.js", () => ({
 vi.mock("./commands/recall.js", () => ({
   recallHook: vi.fn(async () => ({ context: "use the installed skill" })),
   recallStatus: vi.fn(async () => ({ installed: true, entries: 2, builtAt: "2026-07-09T00:00:00Z" })),
-  setRecall: vi.fn(async (on: boolean) => ({ installed: on, settingsPath: "/repo/.claude/settings.json" })),
+  setRecall: vi.fn(async (on: boolean) => ({ installed: on, settingsPath: "/repo/.claude/settings.local.json" })),
 }));
 vi.mock("./commands/stats.js", () => ({
   stats: vi.fn(async () => ({
@@ -160,7 +160,7 @@ describe("autopilot dispatch", () => {
   it("help text lists autopilot", async () => {
     const lines: string[] = [];
     await main([], { log: s => lines.push(s) });
-    expect(lines.join("\n")).toContain("gradient autopilot <off|nudge|full>");
+    expect(lines.join("\n")).toContain("gradient autopilot <off|nudge>");
   });
 
   it("rejects an unknown autopilot mode", async () => {

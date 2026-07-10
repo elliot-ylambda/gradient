@@ -1,12 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { stats } from "./stats.js";
 import { addEntry } from "../core/manifest.js";
 import { appendAdoption } from "./recall.js";
+import { suggestionsPath } from "./apply.js";
 
-async function seed(): Promise<string> {
+async function seed(home: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "grad-stats-"));
   await mkdir(join(dir, ".gradient"), { recursive: true });
   const suggestions = [
@@ -14,7 +15,9 @@ async function seed(): Promise<string> {
     { id: "bbb", name: "plan", title: "Plan", rationale: "r", evidence: { count: 4, sessions: 2 }, confidence: "inferred", payload: { type: "command", commandName: "plan", body: "y" } },
   ];
   const manifest = [{ name: "ship", type: "command", path: ".claude/commands/ship.md", createdAt: "2026-07-01", suggestionId: "aaa" }];
-  await writeFile(join(dir, ".gradient", "suggestions.json"), JSON.stringify(suggestions));
+  const path = suggestionsPath(dir, home);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(suggestions));
   await writeFile(join(dir, ".gradient", "manifest.json"), JSON.stringify(manifest));
   return dir;
 }
@@ -22,7 +25,7 @@ async function seed(): Promise<string> {
 describe("stats", () => {
   it("reports coverage and top patterns sorted by frequency", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
-    const report = await stats(await seed(), { home });
+    const report = await stats(await seed(home), { home });
     expect(report.total).toBe(2);
     expect(report.covered).toBe(1);
     expect(report.coveragePct).toBe(50);
@@ -70,13 +73,13 @@ describe("stats", () => {
       artifact: "ship",
       similarity: 0.8,
       hinted: true,
-    });
+    }, home);
     await appendAdoption(dir, {
       ts: "2026-07-02T00:00:00Z",
       artifact: "ship",
       similarity: 0.45,
       hinted: false,
-    });
+    }, home);
 
     const report = await stats(dir, {
       home,

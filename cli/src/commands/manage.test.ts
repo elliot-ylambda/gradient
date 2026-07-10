@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile, access, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { applyByIds } from "./apply.js";
+import { dirname, join } from "node:path";
+import { applyByIds, suggestionsPath } from "./apply.js";
 import { list } from "./list.js";
 import { remove } from "./remove.js";
 import type { Suggestion } from "../core/types.js";
@@ -14,16 +14,17 @@ const ship: Suggestion = {
   payload: { type: "command", commandName: "ship", body: "do it" },
 };
 
-async function seed(dir: string) {
-  await mkdir(join(dir, ".gradient"), { recursive: true });
-  await writeFile(join(dir, ".gradient", "suggestions.json"), JSON.stringify([ship]));
+async function seed(dir: string, home: string) {
+  const path = suggestionsPath(dir, home);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify([ship]));
 }
 
 describe("manage commands", () => {
   it("remove deletes the skill file and its emptied directory", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    await seed(dir);
+    await seed(dir, home);
     await applyByIds(["id-ship"], dir, { home });
     expect(await remove(dir, "ship")).toBe(true);
     await expect(stat(join(dir, ".claude", "skills", "ship"))).rejects.toThrow();
@@ -32,7 +33,7 @@ describe("manage commands", () => {
   it("apply honors the configured command emit target", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    await seed(dir);
+    await seed(dir, home);
     await saveConfig({ emitTarget: "command" }, home);
     const [applied] = await applyByIds(["id-ship"], dir, { home });
     expect(applied.written).toBe(join(dir, ".claude", "commands", "ship.md"));
@@ -41,7 +42,7 @@ describe("manage commands", () => {
   it("applies by id, lists, then removes (unlinking the file)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    await seed(dir);
+    await seed(dir, home);
     const applied = await applyByIds(["id-ship"], dir, { home });
     expect(applied.length).toBe(1);
     expect(applied[0].written).toBe(join(dir, ".claude", "skills", "ship", "SKILL.md"));
@@ -62,5 +63,6 @@ describe("manage commands", () => {
     ]));
     await expect(remove(dir, "evil")).rejects.toThrow();
     await expect(access(victim)).resolves.toBeUndefined(); // victim must survive
+    expect((await list(dir)).map(entry => entry.name)).toEqual(["evil"]); // validation happens before manifest mutation
   });
 });

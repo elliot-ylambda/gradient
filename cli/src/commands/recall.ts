@@ -1,17 +1,18 @@
-import { appendFile, mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import {
   buildRecallIndex,
   loadRecallIndex,
   matchPrompt,
   NEAR_MISS_THRESHOLD,
   RECALL_THRESHOLD,
+  recallIndexPath,
   recallIndexFresh,
   saveRecallIndex,
   type RecallIndex,
 } from "../core/recall.js";
-import { gradientDir } from "../core/manifest.js";
 import { hookInstalled, installHook, removeHook } from "../core/settings.js";
+import { loadConfig, projectKey, saveConfig } from "../config.js";
+import { safeAppendFile } from "../core/safeFs.js";
 
 export interface RecallHookInput {
   prompt?: string;
@@ -26,10 +27,13 @@ export interface AdoptionEvent {
   hinted: boolean;
 }
 
-export async function appendAdoption(projectDir: string, event: AdoptionEvent): Promise<void> {
-  const path = join(gradientDir(projectDir), "adoption.jsonl");
-  await mkdir(dirname(path), { recursive: true });
-  await appendFile(path, `${JSON.stringify(event)}\n`);
+export function adoptionPath(projectDir: string, home?: string): string {
+  return recallIndexPath(projectDir, home).replace(/\.json$/, ".adoption.jsonl");
+}
+
+export async function appendAdoption(projectDir: string, event: AdoptionEvent, home?: string): Promise<void> {
+  const userHome = home ?? homedir();
+  await safeAppendFile(userHome, adoptionPath(projectDir, userHome), `${JSON.stringify(event)}\n`);
 }
 
 /** Fail-open, local-only UserPromptSubmit hook. Every failure returns no hint. */
@@ -39,15 +43,17 @@ export async function recallHook(
 ): Promise<{ context?: string }> {
   try {
     const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
-    if (prompt.length < 15 || prompt.startsWith("/")) return {};
+    if (prompt.length < 15 || prompt.length > 8_000 || prompt.startsWith("/")) return {};
     const projectDir = typeof input.cwd === "string" && input.cwd.trim()
       ? input.cwd
       : process.cwd();
+    const config = await loadConfig(deps.home);
+    if (!(config.recallProjects ?? []).includes(projectKey(projectDir))) return {};
 
-    let index: RecallIndex | null = await loadRecallIndex(projectDir);
+    let index: RecallIndex | null = await loadRecallIndex(projectDir, deps.home);
     if (!index || !(await recallIndexFresh(index, projectDir, deps.home))) {
       index = await buildRecallIndex(projectDir, deps.home);
-      await saveRecallIndex(projectDir, index).catch(() => undefined);
+      await saveRecallIndex(projectDir, index, deps.home).catch(() => undefined);
     }
 
     const match = matchPrompt(prompt, index);
@@ -60,11 +66,11 @@ export async function recallHook(
       similarity: Number(match.score.toFixed(3)),
       hinted,
     };
-    await appendAdoption(projectDir, event).catch(() => undefined);
+    await appendAdoption(projectDir, event, deps.home).catch(() => undefined);
     if (!hinted) return {};
 
     return {
-      context: `The user's prompt closely matches their installed ${match.entry.kind} "${match.entry.invocation}" (mined from their own history). Prefer following that ${match.entry.kind}'s workflow.`,
+      context: `The user's prompt closely matches their installed ${match.entry.kind} "/${match.entry.name}". Consider using that ${match.entry.kind}'s workflow.`,
     };
   } catch {
     return {};
@@ -76,26 +82,43 @@ export async function setRecall(
   projectDir: string,
   home?: string,
 ): Promise<{ installed: boolean; settingsPath: string }> {
+  const config = await loadConfig(home);
+  const key = projectKey(projectDir);
+  const projects = new Set(config.recallProjects ?? []);
   if (on) {
-    await saveRecallIndex(projectDir, await buildRecallIndex(projectDir, home));
+    await saveRecallIndex(projectDir, await buildRecallIndex(projectDir, home), home);
     const settingsPath = await installHook(
       projectDir,
       "UserPromptSubmit",
       "gradient recall",
       { timeout: 5 },
     );
+    projects.add(key);
+    config.recallProjects = [...projects].sort();
+    try {
+      await saveConfig(config, home);
+    } catch (error) {
+      await removeHook(projectDir, "UserPromptSubmit", "gradient recall").catch(() => undefined);
+      throw error;
+    }
     return { installed: true, settingsPath };
   }
 
+  projects.delete(key);
+  config.recallProjects = [...projects].sort();
+  await saveConfig(config, home);
   const settingsPath = await removeHook(projectDir, "UserPromptSubmit", "gradient recall");
   return { installed: false, settingsPath };
 }
 
 export async function recallStatus(
   projectDir: string,
+  home?: string,
 ): Promise<{ installed: boolean; entries: number; builtAt?: string }> {
-  const installed = await hookInstalled(projectDir, "UserPromptSubmit", "gradient recall");
-  const index = await loadRecallIndex(projectDir);
+  const config = await loadConfig(home);
+  const installed = (config.recallProjects ?? []).includes(projectKey(projectDir)) &&
+    await hookInstalled(projectDir, "UserPromptSubmit", "gradient recall");
+  const index = await loadRecallIndex(projectDir, home);
   return {
     installed,
     entries: index?.entries.length ?? 0,
@@ -107,7 +130,9 @@ export async function recallStatus(
  * because the recall cache cannot be written. */
 export async function refreshRecallIndex(projectDir: string, home?: string): Promise<void> {
   try {
-    await saveRecallIndex(projectDir, await buildRecallIndex(projectDir, home));
+    const config = await loadConfig(home);
+    if (!(config.recallProjects ?? []).includes(projectKey(projectDir))) return;
+    await saveRecallIndex(projectDir, await buildRecallIndex(projectDir, home), home);
   } catch {
     // The hook can rebuild inline later; the artifact operation remains valid.
   }

@@ -1,7 +1,8 @@
-import { readFile, writeFile, mkdir, readdir, stat, unlink } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { SessionState } from "./types.js";
+import { safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
 
 const LOG_CAP = 20;
 const STALE_MS = 7 * 24 * 3600 * 1000;
@@ -11,7 +12,7 @@ export function stateDir(home?: string): string {
 }
 
 export function freshState(): SessionState {
-  return { count: 0, lastFingerprint: "", stoodDown: false, log: [] };
+  return { count: 0, attempts: 0, lastFingerprint: "", stoodDown: false, log: [] };
 }
 
 function fileFor(sessionId: string, home?: string): string {
@@ -22,19 +23,20 @@ function fileFor(sessionId: string, home?: string): string {
 }
 
 export async function loadState(sessionId: string, home?: string): Promise<SessionState> {
+  const userHome = home ?? homedir();
   try {
-    const raw = JSON.parse(await readFile(fileFor(sessionId, home), "utf8")) as SessionState;
+    const raw = JSON.parse(await safeReadFile(userHome, fileFor(sessionId, userHome))) as SessionState;
     if (typeof raw?.count !== "number" || !Array.isArray(raw.log)) return freshState();
-    return { ...freshState(), ...raw };
+    return { ...freshState(), ...raw, attempts: typeof raw.attempts === "number" ? raw.attempts : 0 };
   } catch {
     return freshState(); // missing or corrupt → fresh; worst case the budget restarts, still bounded
   }
 }
 
 export async function saveState(sessionId: string, s: SessionState, home?: string): Promise<void> {
-  await mkdir(stateDir(home), { recursive: true });
+  const userHome = home ?? homedir();
   const capped: SessionState = { ...s, log: s.log.slice(-LOG_CAP) };
-  await writeFile(fileFor(sessionId, home), JSON.stringify(capped, null, 2));
+  await safeWriteFile(userHome, fileFor(sessionId, userHome), JSON.stringify(capped, null, 2));
 }
 
 /** Delete state files older than 7 days. Best-effort: every error is swallowed. */
@@ -44,7 +46,7 @@ export async function cleanupStale(home?: string, now: number = Date.now()): Pro
     for (const f of await readdir(dir)) {
       try {
         const st = await stat(join(dir, f));
-        if (now - st.mtimeMs > STALE_MS) await unlink(join(dir, f));
+        if (now - st.mtimeMs > STALE_MS) await safeUnlink(home ?? homedir(), join(dir, f));
       } catch {
         // ignore per-file races
       }

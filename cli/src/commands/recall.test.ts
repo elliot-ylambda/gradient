@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { recallHook, recallStatus, setRecall } from "./recall.js";
-import { loadRecallIndex, saveRecallIndex } from "../core/recall.js";
+import { dirname, join } from "node:path";
+import { adoptionPath, recallHook, recallStatus, setRecall } from "./recall.js";
+import { loadRecallIndex, recallIndexPath, saveRecallIndex } from "../core/recall.js";
 import { applyByIds } from "./apply.js";
 import { migrate } from "./migrate.js";
 import { remove } from "./remove.js";
 import { review } from "./review.js";
 import { scan } from "./scan.js";
 import { addEntry } from "../core/manifest.js";
+import { projectKey, saveConfig } from "../config.js";
+import { suggestionsPath } from "./apply.js";
 
 let dir: string;
 let home: string;
@@ -20,7 +22,7 @@ beforeEach(async () => {
 });
 
 const INDEX = {
-  builtAt: new Date(Date.now() + 3_600_000).toISOString(),
+  builtAt: new Date().toISOString(),
   entries: [{
     name: "ship",
     kind: "skill" as const,
@@ -32,15 +34,29 @@ const INDEX = {
 };
 
 describe("recallHook", () => {
+  beforeEach(async () => {
+    await saveConfig({ recallProjects: [projectKey(dir)] }, home);
+  });
+
+  it("is inert without private per-project consent", async () => {
+    await saveConfig({}, home);
+    await saveRecallIndex(dir, INDEX, home);
+    expect(await recallHook(
+      { prompt: "push and create a pull request and then review it", cwd: dir },
+      { home },
+    )).toEqual({});
+    await expect(access(adoptionPath(dir, home))).rejects.toThrow();
+  });
+
   it("hints on a matching prompt and logs only adoption metadata", async () => {
-    await saveRecallIndex(dir, INDEX);
+    await saveRecallIndex(dir, INDEX, home);
     const result = await recallHook(
       { prompt: "push and create a pull request and then review it.", cwd: dir, session_id: "s1" },
       { home, now: () => "2026-07-09T12:00:00Z" },
     );
     expect(result.context).toContain('skill "/ship"');
 
-    const line = (await readFile(join(dir, ".gradient", "adoption.jsonl"), "utf8")).trim();
+    const line = (await readFile(adoptionPath(dir, home), "utf8")).trim();
     const event = JSON.parse(line);
     expect(event).toEqual({
       ts: "2026-07-09T12:00:00Z",
@@ -52,20 +68,20 @@ describe("recallHook", () => {
   });
 
   it("logs a near miss without hinting", async () => {
-    await saveRecallIndex(dir, INDEX);
+    await saveRecallIndex(dir, INDEX, home);
     expect(await recallHook({ prompt: "push and open a pull request", cwd: dir }, { home })).toEqual({});
-    const event = JSON.parse((await readFile(join(dir, ".gradient", "adoption.jsonl"), "utf8")).trim());
+    const event = JSON.parse((await readFile(adoptionPath(dir, home), "utf8")).trim());
     expect(event).toMatchObject({ artifact: "ship", hinted: false });
     expect(event.similarity).toBeGreaterThanOrEqual(0.4);
     expect(event.similarity).toBeLessThan(0.55);
   });
 
   it("stays silent on short, slash-prefixed, and unrelated prompts", async () => {
-    await saveRecallIndex(dir, INDEX);
+    await saveRecallIndex(dir, INDEX, home);
     expect(await recallHook({ prompt: "continue", cwd: dir }, { home })).toEqual({});
     expect(await recallHook({ prompt: "/ship the thing now please", cwd: dir }, { home })).toEqual({});
     expect(await recallHook({ prompt: "explain the auth middleware design to me", cwd: dir }, { home })).toEqual({});
-    await expect(access(join(dir, ".gradient", "adoption.jsonl"))).rejects.toThrow();
+    await expect(access(adoptionPath(dir, home))).rejects.toThrow();
   });
 
   it("builds a missing index inline and can hint immediately", async () => {
@@ -82,16 +98,16 @@ describe("recallHook", () => {
   });
 
   it("rebuilds a corrupt index instead of crashing", async () => {
-    await mkdir(join(dir, ".gradient"), { recursive: true });
-    await writeFile(join(dir, ".gradient", "recall.json"), "{broken");
+    await mkdir(dirname(recallIndexPath(dir, home)), { recursive: true });
+    await writeFile(recallIndexPath(dir, home), "{broken");
     await expect(
       recallHook({ prompt: "a valid but unmatched prompt", cwd: dir }, { home }),
     ).resolves.toEqual({});
   });
 
   it("still returns the hint when adoption logging fails", async () => {
-    await saveRecallIndex(dir, INDEX);
-    await mkdir(join(dir, ".gradient", "adoption.jsonl"));
+    await saveRecallIndex(dir, INDEX, home);
+    await mkdir(adoptionPath(dir, home));
     const result = await recallHook(
       { prompt: "push and create a pull request and then review it", cwd: dir },
       { home },
@@ -111,25 +127,25 @@ describe("setRecall / recallStatus", () => {
   it("installs UserPromptSubmit with timeout 5 and builds the index", async () => {
     const result = await setRecall(true, dir, home);
     expect(result.installed).toBe(true);
-    const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.json"), "utf8"));
+    const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.local.json"), "utf8"));
     expect(settings.hooks.UserPromptSubmit[0].hooks[0]).toEqual({
       type: "command",
       command: "gradient recall",
       timeout: 5,
     });
-    expect(await recallStatus(dir)).toMatchObject({ installed: true, entries: 0 });
-    expect((await recallStatus(dir)).builtAt).toBeTruthy();
+    expect(await recallStatus(dir, home)).toMatchObject({ installed: true, entries: 0 });
+    expect((await recallStatus(dir, home)).builtAt).toBeTruthy();
   });
 
   it("removes only the recall hook", async () => {
     await setRecall(true, dir, home);
     await setRecall(false, dir, home);
-    expect((await recallStatus(dir)).installed).toBe(false);
+    expect((await recallStatus(dir, home)).installed).toBe(false);
   });
 
   it("upgrades an existing recall hook to timeout 5", async () => {
     await mkdir(join(dir, ".claude"), { recursive: true });
-    await writeFile(join(dir, ".claude", "settings.json"), JSON.stringify({
+    await writeFile(join(dir, ".claude", "settings.local.json"), JSON.stringify({
       hooks: {
         UserPromptSubmit: [{
           hooks: [{ type: "command", command: "gradient recall" }],
@@ -137,14 +153,15 @@ describe("setRecall / recallStatus", () => {
       },
     }));
     await setRecall(true, dir, home);
-    const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.json"), "utf8"));
+    const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.local.json"), "utf8"));
     expect(settings.hooks.UserPromptSubmit[0].hooks[0].timeout).toBe(5);
   });
 });
 
 async function seedSuggestion(name: string): Promise<void> {
-  await mkdir(join(dir, ".gradient"), { recursive: true });
-  await writeFile(join(dir, ".gradient", "suggestions.json"), JSON.stringify([{
+  const path = suggestionsPath(dir, home);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify([{
     id: `id-${name}`,
     name,
     title: `Run ${name}`,
@@ -161,19 +178,23 @@ async function seedSuggestion(name: string): Promise<void> {
 }
 
 describe("recall index synchronization", () => {
+  beforeEach(async () => {
+    await setRecall(true, dir, home);
+  });
+
   it("apply and remove keep the index synchronized", async () => {
     await seedSuggestion("ship");
     await applyByIds(["id-ship"], dir, { home });
-    expect((await loadRecallIndex(dir))?.entries.some(entry => entry.name === "ship")).toBe(true);
+    expect((await loadRecallIndex(dir, home))?.entries.some(entry => entry.name === "ship")).toBe(true);
 
     await remove(dir, "ship", { home });
-    expect((await loadRecallIndex(dir))?.entries.some(entry => entry.name === "ship")).toBe(false);
+    expect((await loadRecallIndex(dir, home))?.entries.some(entry => entry.name === "ship")).toBe(false);
   });
 
   it("review refreshes the index after approving a suggestion", async () => {
     await seedSuggestion("reviewed");
     await review(dir, async () => "approve", { home });
-    expect((await loadRecallIndex(dir))?.entries.some(entry => entry.name === "reviewed")).toBe(true);
+    expect((await loadRecallIndex(dir, home))?.entries.some(entry => entry.name === "reviewed")).toBe(true);
   });
 
   it("migrate refreshes the index after converting a command", async () => {
@@ -189,7 +210,7 @@ describe("recall index synchronization", () => {
     });
 
     await migrate(dir, { home });
-    expect((await loadRecallIndex(dir))?.entries).toContainEqual(expect.objectContaining({
+    expect((await loadRecallIndex(dir, home))?.entries).toContainEqual(expect.objectContaining({
       name: "legacy",
       kind: "skill",
     }));
@@ -205,6 +226,6 @@ describe("recall index synchronization", () => {
       { scope: "project", projectPath: dir, home },
       { backend: null, collectFn: async () => [], config: {} },
     );
-    expect((await loadRecallIndex(dir))?.entries.some(entry => entry.name === "hand-written")).toBe(true);
+    expect((await loadRecallIndex(dir, home))?.entries.some(entry => entry.name === "hand-written")).toBe(true);
   });
 });

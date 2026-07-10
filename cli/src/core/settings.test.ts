@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, readFile, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mergeHookIntoSettings, installHook, removeHookFromSettings, removeHook, hookInstalled } from "./settings.js";
@@ -18,7 +18,7 @@ describe("mergeHookIntoSettings", () => {
 });
 
 describe("installHook", () => {
-  it("writes the hook into project .claude/settings.json", async () => {
+  it("writes the hook into project-local .claude/settings.local.json", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-settings-"));
     const p = await installHook(dir, "SessionStart", "gradient scan --detach");
     const written = JSON.parse(await readFile(p, "utf8"));
@@ -29,10 +29,18 @@ describe("installHook", () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-settings-corrupt-"));
     const cdir = join(dir, ".claude");
     await mkdir(cdir, { recursive: true });
-    const file = join(cdir, "settings.json");
+    const file = join(cdir, "settings.local.json");
     await writeFile(file, "{ this is not valid json");
     await expect(installHook(dir, "SessionStart", "gradient scan --detach")).rejects.toThrow();
     expect(await readFile(file, "utf8")).toBe("{ this is not valid json"); // untouched, not clobbered
+  });
+
+  it("refuses a repository-controlled .claude symlink", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-settings-link-"));
+    const outside = await mkdtemp(join(tmpdir(), "grad-settings-victim-"));
+    await symlink(outside, join(dir, ".claude"));
+    await expect(installHook(dir, "Stop", "gradient respond")).rejects.toThrow(/symlink/);
+    await expect(readFile(join(outside, "settings.local.json"), "utf8")).rejects.toThrow();
   });
 });
 
@@ -74,13 +82,13 @@ describe("removeHookFromSettings", () => {
 describe("removeHook / hookInstalled (fs round-trip)", () => {
   it("removeHook is a no-op when settings.json does not exist", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-set-"));
-    await expect(removeHook(dir, "Stop", "gradient respond")).resolves.toContain("settings.json");
+    await expect(removeHook(dir, "Stop", "gradient respond")).resolves.toContain("settings.local.json");
   });
 
   it("removeHook refuses to touch a corrupt settings.json", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-set-"));
     await mkdir(join(dir, ".claude"), { recursive: true });
-    await writeFile(join(dir, ".claude", "settings.json"), "{ not json");
+    await writeFile(join(dir, ".claude", "settings.local.json"), "{ not json");
     await expect(removeHook(dir, "Stop", "gradient respond")).rejects.toThrow(/refusing/);
   });
 

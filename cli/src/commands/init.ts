@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { selectBackend } from "../llm/index.js";
 import { installHook } from "../core/settings.js";
 import type { LLMBackend } from "../llm/backend.js";
 import type { Config } from "../core/types.js";
+import { safeWriteFile } from "../core/safeFs.js";
 
 export interface InitResult {
   backend: string;
@@ -40,8 +41,7 @@ export async function init(
   if (opts.installSkill) {
     const source = deps.skillSource ?? (await defaultSkillSource());
     const dest = join(home, ".claude", "skills", "gradient", "SKILL.md");
-    await mkdir(dirname(dest), { recursive: true });
-    await writeFile(dest, source);
+    await safeWriteFile(home, dest, source);
     skillInstalled = true;
   }
 

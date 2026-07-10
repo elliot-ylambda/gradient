@@ -3,6 +3,10 @@ dist/
 .gradient/
 *.log
 .DS_Store
+.env
+.env.*
+!.env.example
+.npmrc
 .worktrees/
 
 # Claude Code state. gradient generates into these paths itself: `apply` writes

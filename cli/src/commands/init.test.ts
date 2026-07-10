@@ -35,7 +35,7 @@ describe("init", () => {
     expect(r.sessionScanInstalled).toBe(true);
     const cfg = JSON.parse(await readFile(join(home, ".config", "gradient", "config.json"), "utf8"));
     expect(cfg.scanOnSessionStart).toBe(true);
-    const settings = JSON.parse(await readFile(join(projectDir, ".claude", "settings.json"), "utf8"));
+    const settings = JSON.parse(await readFile(join(projectDir, ".claude", "settings.local.json"), "utf8"));
     expect(settings.hooks.SessionStart[0].hooks[0].command).toBe("gradient scan --detach");
   });
   it("preserves existing config keys instead of clobbering them (init doesn't disable autopilot)", async () => {

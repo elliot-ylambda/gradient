@@ -1,15 +1,22 @@
 #!/usr/bin/env node
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 export interface BinaryIo {
   readStdin?: () => Promise<Record<string, unknown>>;
   write?: (chunk: string) => void;
+  home?: string;
 }
+
+const STDIN_MAX_CHARS = 1_000_000;
 
 async function readStdinJson(): Promise<Record<string, unknown>> {
   if (process.stdin.isTTY) return {};
   let data = "";
-  for await (const chunk of process.stdin) data += chunk;
+  for await (const chunk of process.stdin) {
+    data += chunk;
+    if (data.length > STDIN_MAX_CHARS) return {};
+  }
   try {
     return JSON.parse(data) as Record<string, unknown>;
   } catch {
@@ -28,7 +35,7 @@ export async function runBinary(argv: string[], io: BinaryIo = {}): Promise<numb
         import("./commands/recall.js"),
         (io.readStdin ?? readStdinJson)(),
       ]);
-      const result = await recallHook(input);
+      const result = await recallHook(input, { home: io.home });
       if (result.context) {
         write(`${JSON.stringify({
           hookSpecificOutput: {
@@ -50,7 +57,18 @@ export async function runBinary(argv: string[], io: BinaryIo = {}): Promise<numb
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/** npm launches bins through a symlink in node_modules/.bin. Compare canonical
+ * paths so the installed command actually enters the dispatcher on Unix. */
+export function isEntrypoint(moduleUrl: string, argv1: string | undefined): boolean {
+  if (!argv1) return false;
+  try {
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(argv1);
+  } catch {
+    return false;
+  }
+}
+
+if (isEntrypoint(import.meta.url, process.argv[1])) {
   runBinary(process.argv.slice(2)).then(code => {
     process.exitCode = code;
   });

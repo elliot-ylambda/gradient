@@ -1,5 +1,4 @@
-import { writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { homedir } from "node:os";
 import type { Suggestion, Turn, Config } from "../core/types.js";
 import { collect } from "../core/collect.js";
 import { parseFile } from "../core/parse.js";
@@ -9,13 +8,13 @@ import { DEFAULT_MAX_PROMPTS, DEFAULT_DETECT_WINDOW } from "../core/scope.js";
 import { cluster } from "../core/cluster.js";
 import { detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
-import { gradientDir } from "../core/manifest.js";
-import { writePlaybook } from "../core/playbook.js";
 import { findHusks, findMissingSessions } from "../core/coverage.js";
 import { selectBackend } from "../llm/index.js";
 import { loadConfig } from "../config.js";
 import type { LLMBackend } from "../llm/backend.js";
 import { refreshRecallIndex } from "./recall.js";
+import { safeWriteFile } from "../core/safeFs.js";
+import { suggestionsPath } from "./apply.js";
 
 export interface ScanOptions {
   scope: "project" | "all";
@@ -25,6 +24,7 @@ export interface ScanOptions {
   /** Ceiling on prompts entering clustering; older ones are dropped. */
   maxPrompts?: number;
   home?: string;
+  now?: number;
 }
 
 export interface ScanDeps {
@@ -50,7 +50,15 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   for (const f of files) {
     const t = await parseFn(f);
     userTurnCounts.set(f, t.length);
-    turns.push(...t);
+    if (opts.sinceDays === undefined) {
+      turns.push(...t);
+    } else {
+      const cutoff = (opts.now ?? Date.now()) - opts.sinceDays * 86_400_000;
+      turns.push(...t.filter(turn => {
+        const ts = Date.parse(turn.ts);
+        return Number.isFinite(ts) && ts >= cutoff;
+      }));
+    }
   }
 
   const projectDir = opts.projectPath ?? process.cwd();
@@ -78,8 +86,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const ignore = compileIgnorePatterns(config.ignorePatterns);
   const prompts = filterPrompts(turns, ignore);
   log(`prompts: ${prompts.length} after filtering injected text`);
-  const isAll = opts.scope === "all";
-  const max = opts.maxPrompts ?? config.maxPrompts ?? (isAll ? 0 : DEFAULT_MAX_PROMPTS);
+  const max = opts.maxPrompts ?? config.maxPrompts ?? DEFAULT_MAX_PROMPTS;
   const { kept, dropped } = capByRecency(prompts, max);
   if (dropped > 0) {
     log(`capped to most recent ${max} prompts; ${dropped} older dropped (raise with --max-prompts)`);
@@ -108,17 +115,9 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     }
   }
 
-  const gdir = gradientDir(projectDir);
-  await mkdir(gdir, { recursive: true });
-  await writeFile(join(gdir, "suggestions.json"), JSON.stringify(valid, null, 2));
+  const userHome = opts.home ?? homedir();
+  await safeWriteFile(userHome, suggestionsPath(projectDir, userHome), JSON.stringify(valid, null, 2));
   log(`found ${valid.length} suggestions → cached`);
-
-  try {
-    const pb = await writePlaybook(valid, opts.home);
-    log(pb ? `gradient.md updated → ${pb}` : "gradient.md markers missing — left untouched");
-  } catch (e) {
-    log(`gradient.md update failed: ${(e as Error).message}`); // never fails the scan
-  }
 
   await refreshRecallIndex(projectDir, opts.home);
 

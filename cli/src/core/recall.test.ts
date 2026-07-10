@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   buildRecallIndex,
   extractTriggers,
@@ -84,9 +84,9 @@ describe("save/load/freshness", () => {
   it("round-trips and reports stale after an artifact root changes", async () => {
     await seed();
     const index = await buildRecallIndex(dir, home);
-    await saveRecallIndex(dir, index);
-    expect(recallIndexPath(dir)).toBe(join(dir, ".gradient", "recall.json"));
-    expect(await loadRecallIndex(dir)).toEqual(index);
+    await saveRecallIndex(dir, index, home);
+    expect(recallIndexPath(dir, home)).toContain(join(home, ".config", "gradient", "projects"));
+    expect(await loadRecallIndex(dir, home)).toEqual(index);
     expect(await recallIndexFresh(index, dir, home)).toBe(true);
 
     const future = new Date(Date.parse(index.builtAt) + 60_000);
@@ -103,18 +103,26 @@ describe("save/load/freshness", () => {
   });
 
   it("returns null for absent, corrupt, or structurally invalid indexes", async () => {
-    expect(await loadRecallIndex(dir)).toBeNull();
-    await mkdir(join(dir, ".gradient"), { recursive: true });
-    await writeFile(recallIndexPath(dir), "{nope");
-    expect(await loadRecallIndex(dir)).toBeNull();
-    await writeFile(recallIndexPath(dir), JSON.stringify({ builtAt: 3, entries: {} }));
-    expect(await loadRecallIndex(dir)).toBeNull();
+    expect(await loadRecallIndex(dir, home)).toBeNull();
+    await mkdir(dirname(recallIndexPath(dir, home)), { recursive: true });
+    await writeFile(recallIndexPath(dir, home), "{nope");
+    expect(await loadRecallIndex(dir, home)).toBeNull();
+    await writeFile(recallIndexPath(dir, home), JSON.stringify({ builtAt: 3, entries: {} }));
+    expect(await loadRecallIndex(dir, home)).toBeNull();
   });
 
-  it("writes valid JSON under .gradient", async () => {
+  it("writes valid JSON in the private user cache", async () => {
     const index = await buildRecallIndex(dir, home);
-    await saveRecallIndex(dir, index);
-    expect(JSON.parse(await readFile(recallIndexPath(dir), "utf8"))).toEqual(index);
+    await saveRecallIndex(dir, index, home);
+    expect(JSON.parse(await readFile(recallIndexPath(dir, home), "utf8"))).toEqual(index);
+  });
+
+  it("rejects a cache timestamp from the future", async () => {
+    const index = { builtAt: new Date(Date.now() + 60 * 60_000).toISOString(), entries: [] };
+    await mkdir(dirname(recallIndexPath(dir, home)), { recursive: true });
+    await writeFile(recallIndexPath(dir, home), JSON.stringify(index));
+    expect(await loadRecallIndex(dir, home)).toBeNull();
+    expect(await recallIndexFresh(index, dir, home)).toBe(false);
   });
 });
 

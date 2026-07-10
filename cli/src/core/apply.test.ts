@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applySuggestion } from "./apply.js";
-import { loadManifest } from "./manifest.js";
+import { addEntry, loadManifest } from "./manifest.js";
 import type { Suggestion } from "./types.js";
 
 const base = { id: "x", title: "t", rationale: "r", evidence: { count: 3, sessions: 2 }, confidence: "high" as const };
@@ -57,6 +57,23 @@ describe("applySuggestion", () => {
     await applySuggestion(first, dir);
     await applySuggestion({ ...first, payload: { ...first.payload, body: "updated body" } }, dir);
     expect(await readFile(join(dir, ".claude", "skills", "ship", "SKILL.md"), "utf8")).toContain("updated body");
+  });
+
+  it("refuses a tracked artifact symlink without touching its victim", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const outside = await mkdtemp(join(tmpdir(), "grad-victim-"));
+    const victim = join(outside, "victim.txt");
+    const path = join(dir, ".claude", "skills", "ship", "SKILL.md");
+    await writeFile(victim, "keep me");
+    await mkdir(join(dir, ".claude", "skills", "ship"), { recursive: true });
+    await symlink(victim, path);
+    await addEntry(dir, { name: "ship", type: "skill", path, createdAt: "2026-07-01", suggestionId: "x" });
+    const suggestion: Suggestion = {
+      ...base, name: "ship",
+      payload: { type: "command", commandName: "ship", body: "replace victim" },
+    };
+    await expect(applySuggestion(suggestion, dir)).rejects.toThrow(/symlink/);
+    expect(await readFile(victim, "utf8")).toBe("keep me");
   });
 
   it("prints (does not write) a loop suggestion but still records it", async () => {

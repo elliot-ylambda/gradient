@@ -1,12 +1,13 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { ArtifactType, Confidence, Turn } from "../core/types.js";
-import { gradientDir, loadManifest } from "../core/manifest.js";
+import { loadManifest } from "../core/manifest.js";
 import { loadSuggestions } from "./apply.js";
 import { loadConfig } from "../config.js";
 import { collect } from "../core/collect.js";
 import { parseFile } from "../core/parse.js";
 import { countArtifactUses } from "../core/usage.js";
+import { adoptionPath } from "./recall.js";
+import { safeReadFile } from "../core/safeFs.js";
+import { homedir } from "node:os";
 
 export interface StatPattern {
   name: string;
@@ -48,10 +49,12 @@ export interface StatsOptions {
 async function readRetypes(
   projectDir: string,
   since: Map<string, string>,
+  home?: string,
 ): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   try {
-    const raw = await readFile(join(gradientDir(projectDir), "adoption.jsonl"), "utf8");
+    const userHome = home ?? homedir();
+    const raw = await safeReadFile(userHome, adoptionPath(projectDir, userHome));
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue;
       try {
@@ -73,7 +76,7 @@ async function readRetypes(
 }
 
 export async function stats(projectDir: string, opts: StatsOptions = {}): Promise<StatsReport> {
-  const suggestions = await loadSuggestions(projectDir);
+  const suggestions = await loadSuggestions(projectDir, opts.home);
   const manifest = await loadManifest(projectDir);
   const coveredIds = new Set(manifest.map(m => m.suggestionId));
   const config = await loadConfig(opts.home);
@@ -102,7 +105,7 @@ export async function stats(projectDir: string, opts: StatsOptions = {}): Promis
 
   const since = new Map(manifest.map(entry => [entry.name, entry.createdAt]));
   const uses = countArtifactUses(turns, since);
-  const retypes = await readRetypes(projectDir, since);
+  const retypes = await readRetypes(projectDir, since, opts.home);
   const now = opts.now ?? Date.now();
   const adoption: AdoptionRow[] = manifest.map(entry => {
     const usage = uses.get(entry.name) ?? { uses: 0, lastUsed: undefined };
