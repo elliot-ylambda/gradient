@@ -36,7 +36,7 @@ export async function applySuggestion(
   let printed: string | undefined;
 
   for (const target of targets) {
-    if (target === "codex" && s.payload.type !== "command") {
+    if (target === "codex" && s.payload.type !== "command" && s.payload.type !== "rule") {
       skippedTargets.push(target);
       continue;
     }
@@ -71,13 +71,13 @@ export async function applySuggestion(
         writes.push({ target, path: abs });
         type = result.kind;
       } else if (result.kind === "loop") {
-        printed = result.command;
+        printed = [printed, result.command].filter(Boolean).join("\n");
         type = "loop";
       } else if (result.kind === "rule-print") {
-        printed = result.text;
+        printed = [printed, result.text].filter(Boolean).join("\n");
         type = "rule";
       } else {
-        printed = result.settingsPatch;
+        printed = [printed, result.settingsPatch].filter(Boolean).join("\n");
         type = "hook";
       }
 

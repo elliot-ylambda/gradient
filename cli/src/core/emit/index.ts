@@ -5,6 +5,7 @@ import { emitHook } from "./hook.js";
 import { emitSkill } from "./skill.js";
 import { emitRule } from "./rule.js";
 import { emitCodexSkill } from "./codex-skill.js";
+import { emitCodexRule } from "./codex-rule.js";
 
 export type EmitTarget = "skill" | "command";
 export interface EmitOpts {
@@ -24,8 +25,8 @@ export { emitSkill };
 
 export function emit(s: Suggestion, opts: EmitOpts = {}): EmitResult {
   const assistant = opts.assistant ?? "claude-code";
-  if (assistant === "codex" && s.payload.type !== "command") {
-    throw new Error("codex target supports command-to-skill payloads only");
+  if (assistant === "codex" && s.payload.type !== "command" && s.payload.type !== "rule") {
+    throw new Error("codex target supports skills and print-only rules");
   }
   switch (s.payload.type) {
     case "command":
@@ -38,6 +39,9 @@ export function emit(s: Suggestion, opts: EmitOpts = {}): EmitResult {
     case "loop": return { kind: "loop", ...emitLoop(s) };
     case "hook": return { kind: "hook", ...emitHook(s) };
     case "rule": {
+      if (assistant === "codex") {
+        return { kind: "rule-print", text: emitCodexRule(s).printed };
+      }
       const result = emitRule(s);
       return "path" in result
         ? { kind: "rule", ...result }

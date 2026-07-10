@@ -122,7 +122,11 @@ describe("Codex Agent Skills emitter", () => {
       expect(result.path.startsWith(".agents/skills/")).toBe(true);
       expect(result.content).not.toContain("model:");
     }
-    expect(() => emit(ruleSug("project"), { assistant: "codex" })).toThrow(/codex/);
+    const rule = emit(ruleSug("project"), { assistant: "codex" });
+    expect(rule.kind).toBe("rule-print");
+    if (rule.kind === "rule-print") expect(rule.text).toContain("AGENTS.md");
+    const loop = { ...mechanicalSkill, payload: { type: "loop" as const, instruction: "continue" } };
+    expect(() => emit(loop, { assistant: "codex" })).toThrow(/codex/);
   });
 });
 

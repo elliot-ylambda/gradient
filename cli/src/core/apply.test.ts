@@ -161,4 +161,23 @@ describe("applySuggestion", () => {
     expect(await readFile(join(dir, ".agents", "skills", "ship", "SKILL.md"), "utf8")).toBe("hand-written\n");
     expect(await readFile(join(dir, ".claude", "skills", "ship", "SKILL.md"), "utf8")).toContain("Generated.");
   });
+
+  it("writes a Claude project rule but keeps the Codex AGENTS.md step print-only", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const suggestion: Suggestion = {
+      ...base,
+      name: "prefer-pnpm",
+      payload: {
+        type: "rule",
+        target: "project",
+        ruleName: "prefer-pnpm",
+        text: "Use pnpm without asking.",
+      },
+    };
+    const result = await applySuggestion(suggestion, dir, { targets: ["claude-code", "codex"] });
+    expect(result.writes).toHaveLength(1);
+    expect(result.printed).toContain("repository AGENTS.md");
+    expect(result.printed).toContain("Use pnpm without asking.");
+    expect(await loadManifest(dir)).toHaveLength(2);
+  });
 });

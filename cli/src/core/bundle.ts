@@ -77,7 +77,7 @@ export async function buildBundle(
     if (entry.type === "hook") continue;
     const key = `${entry.type}\u0000${entry.name}`;
     const existing = artifacts.get(key);
-    if (!existing || entry.target === "codex") artifacts.set(key, entry);
+    if (!existing || (entry.type === "skill" && entry.target === "codex")) artifacts.set(key, entry);
   }
 
   for (const entry of artifacts.values()) {
