@@ -177,11 +177,17 @@ git commit -m "feat(detect): flagged suggestions carry a sanitized clarify quest
   - `review.ts`: `type Clarifier = (s: Suggestion) => Promise<string | null>`; `resolveClarify(s: Suggestion, label: string): Suggestion | null`; `review(projectDir, prompt, clarifier?)`; `readlineClarifier(): Clarifier`
   - `cli.ts`: review passes `readlineClarifier()`; `explain` prints question/options/chosen.
 
-- [ ] **Step 1: Write the failing tests** — append to `cli/src/commands/review.test.ts` (reuse its temp-dir + seeded-suggestions helpers):
+- [ ] **Step 1: Write the failing tests** — append to `cli/src/commands/review.test.ts` (self-contained temp dir; merge these imports with the file's existing ones):
 
 ```ts
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resolveClarify, review } from "./review.js";
 import { loadSuggestions, saveSuggestions } from "./apply.js";
+
+let dir: string;
+beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "grad-clarify-")); });
 
 const flagged = {
   id: "c1", name: "lgtm", title: "LGTM approval", rationale: "",
@@ -288,6 +294,11 @@ export async function review(projectDir: string, prompt: Prompter, clarifier?: C
   if (dirty) await saveSuggestions(projectDir, suggestions);
   return out;
 }
+```
+
+(Keep whatever `applySuggestion` options Phase A4 threads through here — e.g. `{ emitTarget }` — untouched; this task only changes *which suggestion object* is passed and adds the clarify block + persistence.)
+
+```ts
 
 export function readlineClarifier(): Clarifier {
   return async (s) => {
@@ -301,8 +312,6 @@ export function readlineClarifier(): Clarifier {
   };
 }
 ```
-
-(Note: `applySuggestion` keeps whatever options signature Phase A gave it — this plan changes only which suggestion object is passed.)
 
 `cli/src/cli.ts` — review case: `await review(projectDir, readlinePrompter(), readlineClarifier())`. Explain case, after the examples loop:
 
@@ -659,11 +668,12 @@ import { mineAttention, attentionSuggestion } from "../core/attention.js";
 ```ts
       case "notify": {
         await readStdin(); // drain hook stdin; content unused
-        const { notify } = await import("./commands/notify.js");
         await notify();
         return 0;
       }
 ```
+
+with a static import alongside the file's other command imports: `import { notify } from "./commands/notify.js";`
 
 HELP gains: `  gradient notify               (hook target) desktop ping — installed via a suggested Notification hook`
 
