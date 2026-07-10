@@ -15,9 +15,18 @@ export function mergeHookIntoSettings(
   opts: { timeout?: number } = {},
 ): Record<string, any> {
   const out = { ...existing, hooks: { ...(existing.hooks ?? {}) } };
-  const groups: HookGroup[] = Array.isArray(out.hooks[event]) ? [...out.hooks[event]] : [];
-  const already = groups.some(g => g.hooks?.some(h => h.command === command));
-  if (!already) {
+  let found = false;
+  const groups: HookGroup[] = Array.isArray(out.hooks[event])
+    ? out.hooks[event].map((group: HookGroup) => ({
+      ...group,
+      hooks: (group.hooks ?? []).map(hook => {
+        if (hook.command !== command) return hook;
+        found = true;
+        return opts.timeout === undefined ? hook : { ...hook, timeout: opts.timeout };
+      }),
+    }))
+    : [];
+  if (!found) {
     const hook: { type: string; command: string; timeout?: number } = { type: "command", command };
     if (opts.timeout !== undefined) hook.timeout = opts.timeout;
     groups.push({ hooks: [hook] });

@@ -50,6 +50,8 @@ npx gradient.md scan --all  # all projects, no time limit (thorough; can be slow
 npx gradient.md review      # inspect the ranked suggestions and their evidence
 npx gradient.md apply <id>  # generate an approved skill / loop / hook
 npx gradient.md migrate     # convert older generated commands into skills
+npx gradient.md recall on   # hint when a typed prompt matches an installed artifact
+npx gradient.md stats       # coverage plus artifact adoption
 ```
 
 The npm package is **`gradient.md`**; the command it installs is **`gradient`**.
@@ -151,6 +153,26 @@ Three other bounds replace it, and each is independent:
 The judge also runs with every tool denied, so it can only decide — never act.
 Your permission prompts still gate dangerous tools; autopilot cannot answer them.
 
+## Recall & adoption
+
+Generating a skill is only half the loop; remembering it at typing time is the
+other half. `gradient recall` installs a per-project, LLM-free
+`UserPromptSubmit` hook that compares a typed prompt with project and user-level
+commands and skills. A close match adds a one-line context hint so Claude can
+follow the installed workflow without rewriting or blocking the prompt.
+
+```bash
+npx gradient.md recall on      # install the hook and build its local index
+npx gradient.md recall status  # hook state, artifact count, and index timestamp
+npx gradient.md recall off     # remove only the recall hook
+```
+
+The index lives at `.gradient/recall.json`. Matching and near-miss events append
+to `.gradient/adoption.jsonl` as artifact name, timestamp, similarity, and
+whether a hint was shown. Prompt text is never logged. `gradient stats` reports
+uses, last use, and retypes caught for each approved artifact, and suggests
+removing artifacts that remain unused for at least 30 days.
+
 ## Develop
 
 ```bash
@@ -165,11 +187,13 @@ excluded from habit detection; approved command-type suggestions now become
 model-invoked Claude Code skills under `.claude/skills/` by default. Existing
 gradient-generated commands can be converted safely with `gradient migrate`
 (`--dry-run` previews the change). Set `emitTarget` to `"command"` in the
-gradient config only when legacy `.claude/commands/` output is required.
+gradient config only when legacy `.claude/commands/` output is required. Phase B
+adds local recall hints and artifact adoption reporting, closing the gap between
+generating a workflow and actually using it.
 
 The opt-in `gradient autopilot` Stop-hook responder also ships today. The next
-v2 phases close recall and adoption, add non-lexical detectors, surface local
-behavior insights, and package approved artifacts for teams.
+v2 phases add non-lexical detectors, surface local behavior insights, and
+package approved artifacts for teams.
 
 - Design spec: [`docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md`](docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md)
 - Implementation plan: [`docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md`](docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md)
@@ -177,6 +201,7 @@ behavior insights, and package approved artifacts for teams.
 - Autopilot implementation plan: [`docs/superpowers/plans/2026-07-01-gradient-auto-responder.md`](docs/superpowers/plans/2026-07-01-gradient-auto-responder.md)
 - v2 funnel design: [`docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md`](docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md)
 - Phase A implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md)
+- Phase B implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md)
 
 ## License
 

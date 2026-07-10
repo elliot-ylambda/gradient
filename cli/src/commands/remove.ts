@@ -2,8 +2,13 @@ import { rmdir, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { removeEntry } from "../core/manifest.js";
 import { assertInside } from "../core/security.js";
+import { refreshRecallIndex } from "./recall.js";
 
-export async function remove(projectDir: string, name: string): Promise<boolean> {
+export async function remove(
+  projectDir: string,
+  name: string,
+  opts: { home?: string } = {},
+): Promise<boolean> {
   const entry = await removeEntry(projectDir, name);
   if (!entry) return false;
   if (entry.path) {
@@ -16,5 +21,6 @@ export async function remove(projectDir: string, name: string): Promise<boolean>
       try { await rmdir(dirname(abs)); } catch { /* non-empty or already gone */ }
     }
   }
+  await refreshRecallIndex(projectDir, opts.home);
   return true;
 }

@@ -8,6 +8,8 @@ npx gradient.md scan      # read-only: find repeated workflows in your history
 npx gradient.md review    # approve the ones you want; gradient writes the artifacts
 npx gradient.md list      # see what it generated · npx gradient.md remove <name> to undo
 npx gradient.md migrate   # convert older generated commands into skills
+npx gradient.md recall on # hint when prompts match installed artifacts
+npx gradient.md stats     # coverage and artifact adoption
 ```
 
 ## How it works
@@ -24,6 +26,11 @@ trigger descriptions. Set `emitTarget` to `"command"` in the gradient config
 for legacy `.claude/commands/*.md` output. `gradient migrate --dry-run` previews
 conversion of manifest-tracked commands; `gradient migrate` performs it without
 touching hand-written files.
+
+`gradient recall on` installs an LLM-free `UserPromptSubmit` hook. Its local
+index covers project and user-level commands and skills; its adoption log stores
+only artifact names and match scores, never prompt text. `gradient stats` shows
+uses, last use, retypes caught, and stale-artifact removal suggestions.
 
 Nothing is written until you approve it in `review`, and everything written is
 tracked in `.gradient/manifest.json` so `remove` cleanly undoes it.

@@ -15,6 +15,7 @@ import { findHusks, findMissingSessions } from "../core/coverage.js";
 import { selectBackend } from "../llm/index.js";
 import { loadConfig } from "../config.js";
 import type { LLMBackend } from "../llm/backend.js";
+import { refreshRecallIndex } from "./recall.js";
 
 export interface ScanOptions {
   scope: "project" | "all";
@@ -118,6 +119,8 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   } catch (e) {
     log(`gradient.md update failed: ${(e as Error).message}`); // never fails the scan
   }
+
+  await refreshRecallIndex(projectDir, opts.home);
 
   return valid;
 }

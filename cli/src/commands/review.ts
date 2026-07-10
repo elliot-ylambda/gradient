@@ -4,6 +4,7 @@ import { applySuggestion, type ApplyResult } from "../core/apply.js";
 import { isNudge } from "../core/playbook.js";
 import { loadSuggestions } from "./apply.js";
 import { loadConfig } from "../config.js";
+import { refreshRecallIndex } from "./recall.js";
 
 export type Prompter = (s: Suggestion, index: number, total: number) => Promise<"approve" | "skip" | "quit">;
 
@@ -23,6 +24,7 @@ export async function review(
       out.push(await applySuggestion(suggestions[i], projectDir, { emitTarget }));
     }
   }
+  if (out.length > 0) await refreshRecallIndex(projectDir, opts.home);
   return out;
 }
 
