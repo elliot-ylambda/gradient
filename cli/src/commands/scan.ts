@@ -1,12 +1,13 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { Suggestion, Turn, Config } from "../core/types.js";
+import type { Suggestion, Turn, Config, Candidate } from "../core/types.js";
 import { collect } from "../core/collect.js";
 import { parseFile } from "../core/parse.js";
 import { filterPrompts } from "../core/filter.js";
 import { capByRecency } from "../core/cap.js";
 import { DEFAULT_MAX_PROMPTS, DEFAULT_DETECT_WINDOW } from "../core/scope.js";
-import { cluster } from "../core/cluster.js";
+import { cluster, normalize } from "../core/cluster.js";
+import { mineSequences } from "../core/sequence.js";
 import { detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
 import { gradientDir } from "../core/manifest.js";
@@ -88,9 +89,29 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const window = opts.limit ?? DEFAULT_DETECT_WINDOW;
   log(`clustering → ${candidates.length} candidate patterns; sending top ${window} to llm`);
 
+  // Sequence sink 1: chains join the detect window as candidates (spec §4).
+  const sigSet = new Set(candidates.map(c => c.signature));
+  const seq = mineSequences(kept, text => {
+    const n = normalize(text);
+    return sigSet.has(n) ? n : null;
+  });
+  if (seq.capped) log(`sequence pair cap hit — oldest pairs dropped (raise SEQ_MAX_BIGRAMS if this recurs)`);
+  if (seq.chains.length > 0) log(`sequences: ${seq.chains.length} recurring chain(s)`);
+  const seqCap = Math.ceil(window / 4);
+  if (seq.chains.length > seqCap) log(`sequence candidates capped to ${seqCap}; ${seq.chains.length - seqCap} dropped`);
+  const seqCandidates: Candidate[] = seq.chains.slice(0, seqCap).map(ch => ({
+    kind: "sequence",
+    signature: ch.steps.join(" → "),
+    examples: ch.examples.map(e => e.join(" ⏎ ")),
+    count: ch.count,
+    sessions: ch.sessions,
+    sessionIds: ch.sessionIds,
+    confidence: "high",
+  }));
+
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });
   if (!backend) log("no LLM backend available — degrading to exact-repeat command suggestions only");
-  const suggestions = await detect(candidates, backend, {
+  const suggestions = await detect([...candidates, ...seqCandidates], backend, {
     limit: window,
     onCap: dropped => log(`capped to top ${window}; ${dropped} lower-frequency candidates dropped`),
   });
@@ -110,7 +131,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   log(`found ${valid.length} suggestions → cached`);
 
   try {
-    const pb = await writePlaybook(valid, opts.home);
+    const pb = await writePlaybook(valid, opts.home, seq.chains);
     log(pb ? `gradient.md updated → ${pb}` : "gradient.md markers missing — left untouched");
   } catch (e) {
     log(`gradient.md update failed: ${(e as Error).message}`); // never fails the scan
