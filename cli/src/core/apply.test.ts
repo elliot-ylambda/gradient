@@ -107,4 +107,58 @@ describe("applySuggestion", () => {
     expect(result.printed).toContain("~/.claude/CLAUDE.md");
     expect((await loadManifest(dir))[0]).toMatchObject({ type: "rule", path: "" });
   });
+
+  it("fans command skills out to Claude Code and Codex", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const suggestion: Suggestion = {
+      ...base,
+      id: "multi",
+      name: "fix-push",
+      payload: {
+        type: "command",
+        commandName: "fix-push",
+        body: "Retarget and push.",
+        mechanical: true,
+      },
+    };
+    const result = await applySuggestion(suggestion, dir, {
+      targets: ["claude-code", "codex"],
+      cheapModel: "haiku",
+    });
+    expect(result.writes.map(write => write.target)).toEqual(["claude-code", "codex"]);
+    expect(result.writes[0].path).toBe(join(dir, ".claude", "skills", "fix-push", "SKILL.md"));
+    expect(result.writes[1].path).toBe(join(dir, ".agents", "skills", "fix-push", "SKILL.md"));
+    expect(await readFile(result.writes[0].path, "utf8")).toContain('model: "haiku"');
+    expect(await readFile(result.writes[1].path, "utf8")).not.toContain("model:");
+    expect(await loadManifest(dir)).toHaveLength(2);
+  });
+
+  it("skips Codex for non-skill payloads", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const suggestion: Suggestion = {
+      ...base,
+      name: "continue",
+      payload: { type: "loop", instruction: "Keep going until done." },
+    };
+    const result = await applySuggestion(suggestion, dir, { targets: ["claude-code", "codex"] });
+    expect(result.skippedTargets).toEqual(["codex"]);
+    expect(result.printed).toContain("/loop");
+    expect(await loadManifest(dir)).toHaveLength(1);
+  });
+
+  it("keeps successful target writes and reports another target's failure", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    await mkdir(join(dir, ".agents", "skills", "ship"), { recursive: true });
+    await writeFile(join(dir, ".agents", "skills", "ship", "SKILL.md"), "hand-written\n");
+    const suggestion: Suggestion = {
+      ...base,
+      name: "ship",
+      payload: { type: "command", commandName: "ship", body: "Generated." },
+    };
+    const result = await applySuggestion(suggestion, dir, { targets: ["claude-code", "codex"] });
+    expect(result.writes.map(write => write.target)).toEqual(["claude-code"]);
+    expect(result.failures[0]).toMatchObject({ target: "codex" });
+    expect(await readFile(join(dir, ".agents", "skills", "ship", "SKILL.md"), "utf8")).toBe("hand-written\n");
+    expect(await readFile(join(dir, ".claude", "skills", "ship", "SKILL.md"), "utf8")).toContain("Generated.");
+  });
 });
