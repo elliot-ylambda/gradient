@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { emit } from "./index.js";
 import { emitSkill } from "./skill.js";
 import { emitRule } from "./rule.js";
+import { CODEX_SKILLS_DIR, emitCodexSkill } from "./codex-skill.js";
 import type { Suggestion } from "../types.js";
 
 const base = { id: "x", title: "t", rationale: "r", evidence: { count: 3, sessions: 2 }, confidence: "high" as const };
@@ -89,6 +90,47 @@ describe("emit target dispatch", () => {
     const r = emit(skillSug, { target: "command" });
     expect(r.kind).toBe("command");
     if (r.kind === "command") expect(r.path).toBe(".claude/commands/lgtm.md");
+  });
+});
+
+const mechanicalSkill = {
+  ...skillSug,
+  name: "fix-push",
+  payload: {
+    ...skillSug.payload,
+    commandName: "fix-push",
+    body: "Retarget the remote and push again.",
+    mechanical: true,
+  },
+};
+
+describe("Codex Agent Skills emitter", () => {
+  it("writes repo skills under .agents/skills with portable frontmatter", () => {
+    const { path, content } = emitCodexSkill(mechanicalSkill);
+    expect(path).toBe(`${CODEX_SKILLS_DIR}/fix-push/SKILL.md`);
+    expect(content).toContain('name: "fix-push"');
+    expect(content).toContain("Use when the user says things like");
+    expect(content).not.toContain("model:");
+    expect(content.endsWith("Retarget the remote and push again.\n")).toBe(true);
+  });
+
+  it("dispatches command payloads to Codex and rejects unsupported payloads", () => {
+    const result = emit(mechanicalSkill, { assistant: "codex", cheapModel: "haiku" });
+    expect(result.kind).toBe("skill");
+    if (result.kind === "skill") {
+      expect(result.assistant).toBe("codex");
+      expect(result.path.startsWith(".agents/skills/")).toBe(true);
+      expect(result.content).not.toContain("model:");
+    }
+    expect(() => emit(ruleSug("project"), { assistant: "codex" })).toThrow(/codex/);
+  });
+});
+
+describe("cheap-model skill frontmatter", () => {
+  it("pins only mechanical Claude Code skills when a model is configured", () => {
+    expect(emitSkill(mechanicalSkill, { model: "haiku" }).content).toContain('model: "haiku"');
+    expect(emitSkill(mechanicalSkill).content).not.toContain("model:");
+    expect(emitSkill(skillSug, { model: "haiku" }).content).not.toContain("model:");
   });
 });
 
