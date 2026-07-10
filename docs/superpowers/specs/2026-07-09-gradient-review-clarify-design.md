@@ -42,7 +42,7 @@ user-approved **artifact**, same as any other suggestion.
 | # | Decision | Choice |
 |---|----------|--------|
 | 1 | Where disambiguation happens | **At detect time, resolved at review time.** The judge emits the clarifying question *and a complete replacement body per option* while it already has the evidence in context. `review` then just presents a choice — it stays LLM-free, offline, and deterministic. No new LLM call from `review`. |
-| 2 | Schema | Flagged suggestions may carry `clarify?: { question: string; options: [{ label: string; body: string }] }` (2–3 options). `judge.ts` validates strictly — missing/non-string fields reject the suggestion, same stance as the existing `why` validation. Suggestions without `clarify` review exactly as today. |
+| 2 | Schema | Flagged suggestions may carry `clarify?: { question: string; options: [{ label: string; body: string }] }` (2–3 options). A `sanitizeClarify` gate in `detect.ts` (the layer that maps the LLM response — not the autopilot judge in `judge.ts`) accepts a fully valid shape or drops the field: the suggestion survives as plain flagged, never rejected and never half-validated. Suggestions without `clarify` review exactly as today. |
 | 3 | Resolution semantics | Choosing an option **replaces the payload body and promotes `confidence` to `"high"`** (a human resolved the ambiguity), then the normal approve path runs. Declining to choose keeps the suggestion flagged and unapplied. The suggestion `id` is unchanged — identity comes from the mined pattern, not the chosen wording. |
 | 4 | Notification artifact | A **suggest-only hook**: Spec 6's generalized hook payload with `event: "Notification"`, `matcher: "permission_prompt\|idle_prompt"`, `subcommand: "notify"`. Emitted only when evidence crosses the floor (Decision 6). Never auto-installed — review → apply → manifest → removable, like everything. |
 | 5 | `gradient notify` | New subcommand: reads the hook's stdin JSON, fires a local OS notification — macOS `osascript`, Linux `notify-send` — with a short static message ("Claude Code is waiting on you"). **Always exits 0**; missing binaries, parse failures, unknown platforms all no-op silently (fail-open, `respond`'s contract). Notification content never includes transcript text — no redaction surface at all. |
@@ -58,9 +58,9 @@ user-approved **artifact**, same as any other suggestion.
   2–3 options, each with a full replacement body reflecting that reading.*
   The `lgtm` case becomes: "When you say 'lgtm', should gradient
   acknowledge, or approve-and-merge the PR?" with two complete bodies.
-- `judge.ts`: schema validation per Decision 2; a malformed `clarify` drops
-  the field (the suggestion survives as plain flagged), and the drop is
-  logged — never a crash, never a half-validated object.
+- `detect.ts`: `sanitizeClarify` per Decision 2; a malformed `clarify`
+  drops the field silently (unit-tested) and the suggestion survives as
+  plain flagged — never a crash, never a half-validated object.
 
 ### Review
 
@@ -75,8 +75,10 @@ user-approved **artifact**, same as any other suggestion.
 
 ## 4. Component 2 — attention hooks
 
-- `core/attention.ts`: computes attention gaps (Decision 6) from the same
-  parse pass scan already runs; reuses C2's opt-in assistant-turn mode.
+- `core/attention.ts`: computes attention gaps (Decision 6) with its own
+  small line scanner over the collected transcripts (the C2 lift-forward:
+  question-tail detection scoped to this module; it merges with Phase C2's
+  assistant-turn parse when Phase C lands).
 - Suggestion rendering in `review`: "You left Claude waiting ≥ 5 minutes in
   12 sessions (median 14 min). Install a desktop ping when it needs you?"
 - `commands/notify.ts`: per Decision 5. The hook payload's `subcommand`
