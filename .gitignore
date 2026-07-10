@@ -17,3 +17,7 @@ dist/
 # The marketing site lives in a separate private repo (gradient-web).
 # Guard against it being re-added to this public repo.
 webapp/
+
+# Claude Code transcript exports use a timestamped slug filename. Keep raw
+# sessions local: they can contain account details and unrelated conversation.
+/20??-??-??-??????-*.txt
