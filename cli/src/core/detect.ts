@@ -10,12 +10,13 @@ function idFor(signature: string): string {
 }
 
 export function candidateToCommand(c: Candidate): Suggestion {
-  const words = c.signature.split(" ").slice(0, 3).join(" ");
+  const safeSignature = redact(c.signature);
+  const words = safeSignature.split(" ").slice(0, 3).join(" ");
   const commandName = sanitizeName(words);
   return {
     id: idFor(c.signature),
     name: commandName,
-    title: `Reusable command for "${c.signature}"`,
+    title: `Reusable command for "${safeSignature}"`,
     rationale: `Repeated ${c.count}× across ${c.sessions} sessions.`,
     evidence: { count: c.count, sessions: c.sessions },
     confidence: c.confidence,
@@ -24,9 +25,9 @@ export function candidateToCommand(c: Candidate): Suggestion {
       type: "command",
       commandName,
       body: c.kind === "paste"
-        ? `Run \`${c.signature}\` yourself, read the failures, and fix them. Do not ask the user to paste output.`
-        : (c.examples[0] ?? c.signature),
-      triggers: [c.signature],
+        ? `Run \`${safeSignature}\` yourself, read the failures, and fix them. Do not ask the user to paste output.`
+        : redact(c.examples[0] ?? c.signature),
+      triggers: [safeSignature],
     },
   };
 }

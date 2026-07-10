@@ -25,6 +25,16 @@ describe("extractPasteKey", () => {
     expect(extractPasteKey("error: short")).toBeNull();
     expect(extractPasteKey("just a very long design discussion ".repeat(20))).toBeNull();
   });
+
+  it("rejects prose, markdown, and data delimiters as command heads", () => {
+    expect(extractPasteKey(errBody("Review this change for security vulnerabilities."))).toBeNull();
+    expect(extractPasteKey(errBody("# Autonomous loop tick"))).toBeNull();
+    expect(extractPasteKey(errBody("["))).toBeNull();
+  });
+
+  it("keeps an error header even when it is capitalized", () => {
+    expect(extractPasteKey(errBody("TypeError: cannot read property"))).toBe("TypeError: cannot read property");
+  });
 });
 
 describe("detectPasteCandidates", () => {
@@ -44,5 +54,15 @@ describe("detectPasteCandidates", () => {
     const prompts = [t("s1", errBody("make dev")), t("s2", errBody("make dev")), t("s3", errBody("make dev"))];
     const [candidate] = detectPasteCandidates(prompts);
     expect(candidate.examples).toEqual(["pasted output of: make dev"]);
+  });
+
+  it("keeps distinct command heads in distinct groups", () => {
+    const prompts = ["make dev", "xcodebuild -scheme App"].flatMap(head =>
+      ["s1", "s2", "s3"].map(session => t(`${head}-${session}`, errBody(head))),
+    );
+    expect(detectPasteCandidates(prompts).map(candidate => candidate.signature).sort()).toEqual([
+      "make dev",
+      "xcodebuild -scheme App",
+    ]);
   });
 });

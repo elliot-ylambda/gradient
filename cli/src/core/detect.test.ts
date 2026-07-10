@@ -17,6 +17,12 @@ describe("candidateToCommand", () => {
     const s = candidateToCommand(cand("lgtm", 5));
     expect(s.payload).toMatchObject({ type: "command", triggers: ["lgtm"] });
   });
+
+  it("redacts a signature everywhere in degraded suggestions", () => {
+    const suggestion = candidateToCommand(cand("ANTHROPIC_API_KEY=sk-ant-abc123 make dev", 3));
+    expect(JSON.stringify(suggestion)).not.toContain("sk-ant-abc123");
+    expect(JSON.stringify(suggestion)).toContain("[REDACTED]");
+  });
 });
 
 describe("buildDetectPrompt", () => {

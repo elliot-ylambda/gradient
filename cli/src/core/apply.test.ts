@@ -88,4 +88,23 @@ describe("applySuggestion", () => {
     expect(result.written).toBe(join(dir, ".claude", "rules", "gradient-prefer-recommended.md"));
     expect((await loadManifest(dir))[0]).toMatchObject({ name: "prefer-recommended", type: "rule" });
   });
+
+  it("prints a user rule without writing a file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const suggestion: Suggestion = {
+      ...base,
+      id: "r2",
+      name: "prefer-recommended-global",
+      payload: {
+        type: "rule",
+        target: "user",
+        ruleName: "prefer-recommended",
+        text: "Default to the recommended option.",
+      },
+    };
+    const result = await applySuggestion(suggestion, dir);
+    expect(result.written).toBeUndefined();
+    expect(result.printed).toContain("~/.claude/CLAUDE.md");
+    expect((await loadManifest(dir))[0]).toMatchObject({ type: "rule", path: "" });
+  });
 });

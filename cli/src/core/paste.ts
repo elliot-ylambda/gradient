@@ -6,11 +6,24 @@ export const PASTE_KEY_CHARS = 80;
 
 const ERROR_MARKERS = /error|exception|failed|fatal|traceback|cannot find|undefined is not|command not found/i;
 
+function isCommandOrErrorHead(head: string): boolean {
+  if (ERROR_MARKERS.test(head)) return true;
+  if (/[.!?]$/.test(head)) return false;
+  const command = head.replace(/^[>$]\s+/, "");
+  return (
+    /^[A-Za-z]:\\/.test(command) ||
+    /^[A-Z_][A-Z0-9_]*=/.test(command) ||
+    /^(?:\.{0,2}\/|~\/|[a-z0-9][\w@.+:/-]*)(?:\s|$)/.test(command)
+  );
+}
+
 /** Return the short command/header that identifies a long error-like paste. */
 export function extractPasteKey(text: string): string | null {
   if (text.length <= PASTE_MIN_CHARS || !ERROR_MARKERS.test(text)) return null;
   const first = text.split("\n").find(line => line.trim().length > 0);
-  return first ? first.trim().slice(0, PASTE_KEY_CHARS) : null;
+  if (!first) return null;
+  const head = first.trim();
+  return isCommandOrErrorHead(head) ? head.slice(0, PASTE_KEY_CHARS) : null;
 }
 
 /** Group repeated error pastes without retaining their potentially sensitive bodies. */
