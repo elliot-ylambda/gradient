@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { normalize } from "./cluster.js";
+import { normalize, similarity } from "./cluster.js";
 import { gradientDir } from "./manifest.js";
 
 export interface RecallEntry {
@@ -173,10 +173,34 @@ export async function recallIndexFresh(
   if (!Number.isFinite(builtAt)) return false;
   for (const { root } of artifactRoots(projectDir, home)) {
     try {
-      if ((await stat(root)).mtimeMs > builtAt) return false;
+      // ISO timestamps have millisecond precision while stat() can expose
+      // fractional milliseconds. Compare at the shared precision so a root
+      // created just before the index is not immediately considered stale.
+      if (Math.floor((await stat(root)).mtimeMs) > builtAt) return false;
     } catch {
       // Missing roots are valid and contribute no artifacts.
     }
   }
   return true;
+}
+
+export function matchPrompt(
+  prompt: string,
+  index: RecallIndex,
+): { entry: RecallEntry; score: number } | null {
+  const normalizedPrompt = normalize(prompt);
+  let best: { entry: RecallEntry; score: number } | null = null;
+
+  for (const entry of index.entries) {
+    const targets = [...entry.triggers, entry.signature, entry.description]
+      .map(normalize)
+      .filter(target => target.length > 0);
+    let score = 0;
+    for (const target of targets) {
+      score = Math.max(score, similarity(normalizedPrompt, target));
+    }
+    if (!best || score > best.score) best = { entry, score };
+  }
+
+  return best;
 }

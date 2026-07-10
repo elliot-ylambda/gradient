@@ -6,9 +6,12 @@ import {
   buildRecallIndex,
   extractTriggers,
   loadRecallIndex,
+  matchPrompt,
+  RECALL_THRESHOLD,
   recallIndexFresh,
   recallIndexPath,
   saveRecallIndex,
+  type RecallEntry,
 } from "./recall.js";
 
 let dir: string;
@@ -115,5 +118,60 @@ describe("extractTriggers", () => {
 
   it("unescapes quotes in trigger phrases", () => {
     expect(extractTriggers('T. Use when the user says things like: "say \\"go\\"".')).toEqual(['say "go"']);
+  });
+});
+
+const entry = (overrides: Partial<RecallEntry>): RecallEntry => ({
+  name: "x",
+  kind: "skill",
+  invocation: "/x",
+  triggers: [],
+  signature: "",
+  description: "",
+  ...overrides,
+});
+
+describe("matchPrompt", () => {
+  it("matches a retyped trigger phrase after normalization", () => {
+    const index = {
+      builtAt: "2026-07-09T00:00:00Z",
+      entries: [entry({ name: "lgtm", triggers: ["lgtm", "looks good"] })],
+    };
+    const match = matchPrompt("Looks good!", index);
+    expect(match?.entry.name).toBe("lgtm");
+    expect(match!.score).toBeGreaterThanOrEqual(RECALL_THRESHOLD);
+  });
+
+  it("matches a retyped prompt against the artifact body signature", () => {
+    const signature = "push and create a pull request and then review it";
+    const index = {
+      builtAt: "2026-07-09T00:00:00Z",
+      entries: [entry({ name: "ship", signature })],
+    };
+    const match = matchPrompt("push and create a pull request and then review it.", index);
+    expect(match?.entry.name).toBe("ship");
+    expect(match!.score).toBeGreaterThanOrEqual(RECALL_THRESHOLD);
+  });
+
+  it("compares the description as another recall signal", () => {
+    const index = {
+      builtAt: "2026-07-09T00:00:00Z",
+      entries: [entry({ name: "prep", description: "prepare the current pull request for shipping" })],
+    };
+    expect(matchPrompt("prepare this pull request for shipping", index)?.entry.name).toBe("prep");
+  });
+
+  it("returns the best entry even below the caller's threshold", () => {
+    const index = {
+      builtAt: "2026-07-09T00:00:00Z",
+      entries: [entry({ name: "ship", signature: "push and open a pr" })],
+    };
+    const match = matchPrompt("explain the auth middleware to me", index);
+    expect(match?.entry.name).toBe("ship");
+    expect(match!.score).toBeLessThan(RECALL_THRESHOLD);
+  });
+
+  it("returns null for an empty index", () => {
+    expect(matchPrompt("anything", { builtAt: "2026-07-09T00:00:00Z", entries: [] })).toBeNull();
   });
 });
