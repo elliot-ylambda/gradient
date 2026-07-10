@@ -143,7 +143,9 @@ export async function detect(
           .sort((a, b) => a === b ? 0 : a === "claude-code" ? -1 : 1);
         const examples = matched.flatMap(c => c.examples).map(redact).slice(0, 5);
         const confidence = ALLOWED_CONFIDENCE.has(s.confidence) ? s.confidence : "inferred";
-        const clarify = confidence === "flagged" ? sanitizeClarify(s.clarify) : undefined;
+        const clarify = confidence === "flagged" && s.payload.type === "command"
+          ? sanitizeClarify(s.clarify)
+          : undefined;
         return {
           id: idFor(s.payload.type === "command" ? (s.payload.commandName ?? s.name) : s.name),
           name: s.name,

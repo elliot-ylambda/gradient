@@ -48,7 +48,7 @@ export interface Candidate {
 export type SuggestionPayload =
   | { type: "command"; commandName: string; body: string; triggers?: string[]; mechanical?: boolean }
   | { type: "loop"; instruction: string; cadence?: string }
-  | { type: "hook"; event: string; subcommand: string; description: string }
+  | { type: "hook"; event: string; subcommand: string; description: string; matcher?: string }
   | { type: "rule"; target: "project" | "user"; ruleName: string; text: string };
 
 /** Post-LLM (or post-degradation), ready to present/emit. */

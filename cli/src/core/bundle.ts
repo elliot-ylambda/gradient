@@ -116,8 +116,11 @@ export async function buildBundle(
   if (opts.withHooks) {
     const suggestions = await loadSuggestions(projectDir);
     const byId = new Map(suggestions.map(suggestion => [suggestion.id, suggestion]));
-    const hookEvents: Record<string, Array<{ hooks: Array<{ type: string; command: string }> }>> =
-      Object.create(null) as Record<string, Array<{ hooks: Array<{ type: string; command: string }> }>>;
+    type HookGroup = {
+      matcher?: string;
+      hooks: Array<{ type: string; command: string }>;
+    };
+    const hookEvents: Record<string, HookGroup[]> = Object.create(null) as Record<string, HookGroup[]>;
 
     for (const entry of entries) {
       if (entry.type !== "hook") continue;
@@ -127,7 +130,7 @@ export async function buildBundle(
         // Reuse the applied-hook emitter as the trust boundary: it rejects
         // unknown lifecycle events and non-gradient subcommands.
         const emitted = JSON.parse(emitHook(suggestion).settingsPatch) as {
-          hooks?: Record<string, Array<{ hooks: Array<{ type: string; command: string }> }>>;
+          hooks?: Record<string, HookGroup[]>;
         };
         const event = Object.entries(emitted.hooks ?? {})[0];
         if (!event) throw new Error("empty hook patch");
@@ -135,8 +138,13 @@ export async function buildBundle(
         const target = hookEvents[eventName] ?? (hookEvents[eventName] = []);
         for (const group of groups) {
           const command = group.hooks?.[0]?.command;
-          if (!command || target.some(existing => existing.hooks[0]?.command === command)) continue;
-          target.push({ hooks: [{ type: "command", command }] });
+          if (!command || target.some(existing =>
+            existing.hooks[0]?.command === command && existing.matcher === group.matcher,
+          )) continue;
+          target.push({
+            ...(group.matcher ? { matcher: group.matcher } : {}),
+            hooks: [{ type: "command", command }],
+          });
         }
       } catch {
         skipped.push(entry.name);
