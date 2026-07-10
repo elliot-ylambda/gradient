@@ -2,9 +2,11 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import type { Suggestion, AutopilotMode } from "./types.js";
+import type { ChainFinding } from "./sequence.js";
 
 export const MINED_START = "<!-- gradient:mined:start -->";
 export const MINED_END = "<!-- gradient:mined:end -->";
+export const PLAYBOOK_MAX_CHAINS = 5;
 
 export const DEFAULT_PLAYBOOK = `# gradient.md — autopilot playbook
 
@@ -31,7 +33,13 @@ export function isNudge(s: Suggestion): boolean {
   return s.payload.type === "loop" && !s.payload.cadence;
 }
 
-export function renderMinedSection(suggestions: Suggestion[]): string {
+function chainLine(ch: ChainFinding): string {
+  const [first, second, third] = ch.steps;
+  const tail = third ? ` then "${third}"` : "";
+  return `- After "${first}", you usually follow with "${second}"${tail} (${ch.count}× · ${ch.sessions} sessions)`;
+}
+
+export function renderMinedSection(suggestions: Suggestion[], chains: ChainFinding[] = []): string {
   const nudgeLines = suggestions
     .filter(isNudge)
     .map(s => (s.payload.type === "loop"
@@ -41,6 +49,8 @@ export function renderMinedSection(suggestions: Suggestion[]): string {
   const cmdLines = suggestions
     .filter(s => s.payload.type === "command")
     .map(s => `- /${s.name} — ${s.title}`);
+  const chainLines = chains.slice(0, PLAYBOOK_MAX_CHAINS).map(chainLine);
+  const workflowLines = [...cmdLines, ...chainLines];
   return [
     "## How I nudge (mined)",
     "",
@@ -48,25 +58,25 @@ export function renderMinedSection(suggestions: Suggestion[]): string {
     "",
     "## My workflows (mined)",
     "",
-    ...(cmdLines.length ? cmdLines : ["_no workflow commands mined yet_"]),
+    ...(workflowLines.length ? workflowLines : ["_no workflow commands mined yet_"]),
   ].join("\n");
 }
 
 /** Splice the mined section into `existing` (or the default template). Returns
  * null when the markers are gone — the user owns the file, leave it alone. */
-export function generatePlaybook(suggestions: Suggestion[], existing?: string): string | null {
+export function generatePlaybook(suggestions: Suggestion[], existing?: string, chains: ChainFinding[] = []): string | null {
   const base = existing ?? DEFAULT_PLAYBOOK;
   const start = base.indexOf(MINED_START);
   const end = base.indexOf(MINED_END);
   if (start === -1 || end === -1 || end < start) return null;
   return (
     base.slice(0, start + MINED_START.length) +
-    "\n" + renderMinedSection(suggestions) + "\n" +
+    "\n" + renderMinedSection(suggestions, chains) + "\n" +
     base.slice(end)
   );
 }
 
-export async function writePlaybook(suggestions: Suggestion[], home?: string): Promise<string | null> {
+export async function writePlaybook(suggestions: Suggestion[], home?: string, chains: ChainFinding[] = []): Promise<string | null> {
   const path = playbookPath(home);
   let existing: string | undefined;
   try {
@@ -75,7 +85,7 @@ export async function writePlaybook(suggestions: Suggestion[], home?: string): P
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") return null; // unreadable — leave it alone
     existing = undefined; // ENOENT → first run
   }
-  const next = generatePlaybook(suggestions, existing);
+  const next = generatePlaybook(suggestions, existing, chains);
   if (next === null) return null;
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, next);

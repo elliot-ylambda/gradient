@@ -1,13 +1,14 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { Suggestion, Turn, Config } from "../core/types.js";
+import type { Suggestion, Turn, Config, Candidate } from "../core/types.js";
 import { collect } from "../core/collect.js";
 import { parseFile } from "../core/parse.js";
 import { parseDialogueFile, type DialogueTurn } from "../core/parse.js";
 import { filterPrompts, compileIgnorePatterns, hasTemplateFloodSupport, isTemplateFlood } from "../core/filter.js";
 import { capByRecency } from "../core/cap.js";
 import { DEFAULT_MAX_PROMPTS, DEFAULT_DETECT_WINDOW } from "../core/scope.js";
-import { cluster } from "../core/cluster.js";
+import { cluster, normalize } from "../core/cluster.js";
+import { mineSequences, SEQ_MAX_BIGRAMS } from "../core/sequence.js";
 import { detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
 import { gradientDir } from "../core/manifest.js";
@@ -110,9 +111,30 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   }
   const answers = mineAnswerCandidates(extractAnswerPairs(dialogue));
   if (answers.length > 0) log(`${answers.length} repeated-answer pattern(s) detected`);
-  const allCandidates = [...candidates, ...pastes, ...answers];
+  const nonSequenceCandidates = [...candidates, ...pastes, ...answers];
   const window = opts.limit ?? DEFAULT_DETECT_WINDOW;
-  log(`clustering → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);
+
+  // Sequence sink 1: chains join the detect window as candidates (spec §4).
+  const sigSet = new Set(candidates.map(c => c.signature));
+  const seq = mineSequences(kept, text => {
+    const n = normalize(text);
+    return sigSet.has(n) ? n : null;
+  });
+  if (seq.capped) log(`sequence pair cap hit (${SEQ_MAX_BIGRAMS} distinct pairs) — pairs first seen after the cap were ignored`);
+  if (seq.chains.length > 0) log(`sequences: ${seq.chains.length} recurring chain(s)`);
+  const seqCap = Math.ceil(window / 4);
+  if (seq.chains.length > seqCap) log(`sequence candidates capped to ${seqCap}; ${seq.chains.length - seqCap} dropped`);
+  const seqCandidates: Candidate[] = seq.chains.slice(0, seqCap).map(ch => ({
+    kind: "sequence",
+    signature: ch.steps.join(" → "),
+    examples: ch.examples.map(e => e.join(" ⏎ ")),
+    count: ch.count,
+    sessions: ch.sessions,
+    sessionIds: ch.sessionIds,
+    confidence: "high",
+  }));
+  const allCandidates = [...nonSequenceCandidates, ...seqCandidates];
+  log(`mining → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);
 
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });
   if (!backend) log("no LLM backend available — degrading to exact-repeat command suggestions only");
@@ -136,7 +158,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   log(`found ${valid.length} suggestions → cached`);
 
   try {
-    const pb = await writePlaybook(valid, opts.home);
+    const pb = await writePlaybook(valid, opts.home, seq.chains);
     log(pb ? `gradient.md updated → ${pb}` : "gradient.md markers missing — left untouched");
   } catch (e) {
     log(`gradient.md update failed: ${(e as Error).message}`); // never fails the scan

@@ -23,6 +23,20 @@ describe("candidateToCommand", () => {
     expect(JSON.stringify(suggestion)).not.toContain("sk-ant-abc123");
     expect(JSON.stringify(suggestion)).toContain("[REDACTED]");
   });
+
+  it("keeps degraded sequence steps ordered and triggers only on the first step", () => {
+    const sequence: Candidate = {
+      ...cand("review the spec → write the plan", 3),
+      kind: "sequence",
+      examples: ["review the spec ⏎ write the plan"],
+    };
+    const suggestion = candidateToCommand(sequence);
+    expect(suggestion.payload).toMatchObject({
+      type: "command",
+      triggers: ["review the spec"],
+      body: "1. review the spec\n2. write the plan",
+    });
+  });
 });
 
 describe("buildDetectPrompt", () => {
@@ -187,4 +201,20 @@ describe("detect", () => {
     expect(out[0].examples?.[0]).toContain("[REDACTED]");
     expect(out[0].examples?.[0]).not.toContain("sk-ant-abc123def");
   });
+});
+
+it("briefs the model on sequence candidates and forwards their kind", () => {
+  const seq = { kind: "sequence" as const, signature: "review the spec → write the plan",
+    examples: ["review the spec ⏎ write the plan"], count: 5, sessions: 3,
+    sessionIds: ["a", "b", "c"], confidence: "high" as const };
+  const { system, prompt } = buildDetectPrompt([seq]);
+  expect(system).toContain("sequence");
+  expect(system).toContain("numbered");
+  expect(JSON.parse(prompt)[0].kind).toBe("sequence");
+});
+
+it("omits kind for unknown candidates (prompt stays unchanged for them)", () => {
+  const c = { kind: "unknown" as const, signature: "lgtm", examples: ["lgtm"],
+    count: 5, sessions: 3, sessionIds: ["a"], confidence: "high" as const };
+  expect(JSON.parse(buildDetectPrompt([c]).prompt)[0].kind).toBeUndefined();
 });

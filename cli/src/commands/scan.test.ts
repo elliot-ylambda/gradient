@@ -263,4 +263,21 @@ describe("scan", () => {
     expect(JSON.parse(seenPrompt)).toEqual([]);
     expect(logs.join("\n")).toContain("excluded 1 machine-template pattern");
   });
+
+  it("mines sequences into candidates and logs the sequence count", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const seqTurns = Array.from({ length: 3 }, (_, i) => [
+      { ts: "2026-07-01T00:00:00Z", project: "p", role: "user" as const, sessionId: `s${i}`, text: "review the spec" },
+      { ts: "2026-07-01T00:01:00Z", project: "p", role: "user" as const, sessionId: `s${i}`, text: "write the plan" },
+    ]).flat();
+    const logs: string[] = [];
+    const out = await scan(
+      { scope: "project", projectPath: dir, home },
+      { backend: null, collectFn: async () => ["f"], parseFn: async () => seqTurns, log: m => logs.push(m) },
+    );
+    expect(logs.join("\n")).toContain("sequences: 1 recurring chain(s)");
+    // Degraded path: the sequence candidate surfaces as a high-confidence command suggestion.
+    expect(out.some(s => s.payload.type === "command" && /review the spec → write the plan/.test(s.title))).toBe(true);
+  });
 });
