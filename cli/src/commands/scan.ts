@@ -7,7 +7,7 @@ import { filterPrompts } from "../core/filter.js";
 import { capByRecency } from "../core/cap.js";
 import { DEFAULT_MAX_PROMPTS, DEFAULT_DETECT_WINDOW } from "../core/scope.js";
 import { cluster, normalize } from "../core/cluster.js";
-import { mineSequences } from "../core/sequence.js";
+import { mineSequences, SEQ_MAX_BIGRAMS } from "../core/sequence.js";
 import { detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
 import { gradientDir } from "../core/manifest.js";
@@ -95,7 +95,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     const n = normalize(text);
     return sigSet.has(n) ? n : null;
   });
-  if (seq.capped) log(`sequence pair cap hit — oldest pairs dropped (raise SEQ_MAX_BIGRAMS if this recurs)`);
+  if (seq.capped) log(`sequence pair cap hit (${SEQ_MAX_BIGRAMS} distinct pairs) — pairs first seen after the cap were ignored`);
   if (seq.chains.length > 0) log(`sequences: ${seq.chains.length} recurring chain(s)`);
   const seqCap = Math.ceil(window / 4);
   if (seq.chains.length > seqCap) log(`sequence candidates capped to ${seqCap}; ${seq.chains.length - seqCap} dropped`);

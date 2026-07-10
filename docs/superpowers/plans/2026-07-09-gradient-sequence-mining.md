@@ -546,3 +546,16 @@ Expected: PASS; build clean.
 git add cli/src/core/detect.ts cli/src/core/detect.test.ts
 git commit -m "feat(detect): sequence candidates become single multi-step skills"
 ```
+
+---
+
+## Execution notes (2026-07-09, post-implementation review)
+
+Implemented by Codex CLI (S1–S4, one commit per task), then reviewed. Deviations from the plan as written, all deliberate:
+
+- **S1 support-floor fixture:** the planned `[...sessions(2), ...sessions(1)]` reuses session `s0` with duplicate timestamps — after the stable sort its pair counts once, giving 2 total, below `SEQ_MIN_COUNT`. The committed test uses `sessions(3)`.
+- **S1 merge pass (review fix):** the plan's `chains.push(merged ?? ab)` emitted a bigram standalone the moment it failed to merge as a *left* side, even though a later merge could still consume it as a *right* side — output depended on pair-map insertion order and could report `B→C` both standalone and inside `A→B→C`. Standalone bigrams now emit only after the merge pass completes.
+- **S3 pre-Phase-A wiring:** this branch was built before Spec 4 Phase A merged, so `mineSequences` wires directly after `cluster()` (no template-flood filter exists yet) and the sequence briefing sentence stands alone rather than following A5's triggers wording. **Rebase note for Phase A:** move the sequence block below the flood filter and let the briefing follow A5's sentence.
+- **S3 scan test isolation:** the planned snippet reused an absent shared `dir` fixture and omitted `home`, which would have made the suite write the developer's real `~/.config/gradient/gradient.md`. The committed test creates temp `dir` and `home`.
+- **S3 cap log (review fix):** "oldest pairs dropped" misstated the cap — pairs first seen *after* the cap are ignored while existing pairs keep counting. Log reworded.
+- **S4:** unknown candidates already omitted `kind` before the change, so the second regression test was green pre-implementation; kept as a guard.

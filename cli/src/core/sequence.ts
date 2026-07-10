@@ -67,29 +67,31 @@ export function mineSequences(
   }
 
   // One merge pass: A→B + B→C with overlapping sessions → A→B→C (spec Decision 3).
+  // Standalone bigrams are emitted only after every merge has claimed its pair —
+  // a bigram that fails to merge as a left side may still be a later merge's
+  // right side, and must not appear both standalone and inside the chain.
   const consumed = new Set<number>();
   const chains: ChainFinding[] = [];
   for (let i = 0; i < bigrams.length; i++) {
     if (consumed.has(i)) continue;
     const ab = bigrams[i];
-    let merged: ChainFinding | null = null;
     for (let j = 0; j < bigrams.length; j++) {
       if (j === i || consumed.has(j)) continue;
       const bc = bigrams[j];
       if (ab.steps[ab.steps.length - 1] !== bc.steps[0]) continue;
       const shared = ab.sessionIds.filter(s => bc.sessionIds.includes(s));
       if (shared.length < SEQ_MIN_SESSIONS) continue;
-      merged = {
+      chains.push({
         steps: [...ab.steps, ...bc.steps.slice(1)],
         count: Math.min(ab.count, bc.count),
         sessions: shared.length,
         sessionIds: shared,
         examples: ab.examples.map((e, k) => [...e, ...(bc.examples[k]?.slice(1) ?? [])]).slice(0, 3),
-      };
+      });
       consumed.add(i); consumed.add(j);
       break;
     }
-    chains.push(merged ?? ab);
   }
-  return { chains: chains.sort((a, b) => b.count - a.count), capped };
+  const leftovers = bigrams.filter((_, i) => !consumed.has(i));
+  return { chains: [...chains, ...leftovers].sort((a, b) => b.count - a.count), capped };
 }

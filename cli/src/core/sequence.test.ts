@@ -91,6 +91,21 @@ describe("mineSequences", () => {
     expect(chains[0].steps).toEqual(["review the spec", "write the plan", "push it"]);
   });
 
+  it("merge is order-independent — a bigram seen first is still consumed as a merge's right side", () => {
+    // Each session runs B,C early, then A,B — so B→C enters the pair map
+    // before A→B. The merged A→B→C must not leave a standalone B→C behind.
+    const turns = Array.from({ length: 3 }, (_, i) => [
+      turn(`s${i}`, "t1", "write the plan"),
+      turn(`s${i}`, "t2", "push it"),
+      turn(`s${i}`, "t3", "something totally novel here"),
+      turn(`s${i}`, "t4", "review the spec"),
+      turn(`s${i}`, "t5", "write the plan"),
+    ]).flat();
+    const { chains } = mineSequences(turns, assign);
+    expect(chains).toHaveLength(1);
+    expect(chains[0].steps).toEqual(["review the spec", "write the plan", "push it"]);
+  });
+
   it("orders turns by timestamp within a session", () => {
     const shuffled = [
       turn("s1", "2026-07-01T00:05:00Z", "write the plan"),
