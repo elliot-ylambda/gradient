@@ -25,9 +25,9 @@ const HELP = `gradient — turn repeated Claude Code workflows into artifacts
 Usage:
   gradient init                 configure + install the /gradient skill
   gradient init --session-scan  also run a scan at the start of each session
-  gradient scan                 this project, all history
-  gradient scan --user          all projects, last 7 days (configurable)
-  gradient scan --all           all projects, no time limit
+  gradient scan                 find repeated prompts, error pastes, and answers
+  gradient scan --user          same, all projects, last 7 days (configurable)
+  gradient scan --all           same, all projects, no time limit
     [--since 7d] [--limit N] [--max-prompts N]
   gradient review               approve cached suggestions
   gradient apply <id|name>...   generate specific suggestions

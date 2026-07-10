@@ -148,4 +148,72 @@ describe("scan", () => {
     );
     expect(out).toHaveLength(0);
   });
+
+  it("feeds paste candidates into detection without leaking or double-counting their bodies", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const errorBody = `make dev\n${"error: boom SENSITIVE_BODY\n".repeat(40)}`;
+    const turns = ["s1", "s2", "s3"].map(sessionId => ({
+      ts: "2026-07-01T00:00:00Z",
+      project: "p",
+      role: "user" as const,
+      sessionId,
+      text: errorBody,
+    }));
+    let seenPrompt = "";
+    const logs: string[] = [];
+    const backend = {
+      name: "fake",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => {
+        seenPrompt = prompt;
+        return JSON.stringify({ suggestions: [] });
+      },
+    };
+    await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        backend,
+        collectFn: async () => ["f"],
+        parseFn: async () => turns,
+        parseDialogueFn: async () => [],
+        log: message => logs.push(message),
+      },
+    );
+    expect(logs.join("\n")).toMatch(/1 paste pattern/);
+    expect(JSON.parse(seenPrompt)).toHaveLength(1);
+    expect(seenPrompt).not.toContain("SENSITIVE_BODY");
+  });
+
+  it("feeds repeated structured answers into rule detection", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const logs: string[] = [];
+    let seenKind = "";
+    const backend = {
+      name: "fake",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => {
+        const [candidate] = JSON.parse(prompt);
+        seenKind = candidate.kind;
+        return JSON.stringify({ suggestions: [] });
+      },
+    };
+    const dialogue = ["s1", "s2", "s3"].flatMap(sessionId => [
+      { role: "assistant" as const, text: "Which package manager should I use?", sessionId, ts: "t1" },
+      { role: "user" as const, text: "pnpm", sessionId, ts: "t2" },
+    ]);
+    await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        backend,
+        collectFn: async () => ["f"],
+        parseFn: async () => [],
+        parseDialogueFn: async () => dialogue,
+        log: message => logs.push(message),
+      },
+    );
+    expect(logs.join("\n")).toMatch(/1 repeated-answer pattern/);
+    expect(seenKind).toBe("answer");
+  });
 });

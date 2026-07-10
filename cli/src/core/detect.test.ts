@@ -26,6 +26,26 @@ describe("buildDetectPrompt", () => {
     expect(system).toContain("skill");
     expect(system).toContain("every merged cluster's signature");
   });
+
+  it("describes paste and answer kinds and the rule payload", () => {
+    const { system } = buildDetectPrompt([]);
+    expect(system).toContain("'paste'");
+    expect(system).toContain("'answer'");
+    expect(system).toContain("type:'rule'");
+  });
+
+  it("includes candidate kind in prompt JSON", () => {
+    const { prompt } = buildDetectPrompt([{
+      kind: "paste",
+      signature: "make dev",
+      examples: [],
+      count: 3,
+      sessions: 3,
+      sessionIds: [],
+      confidence: "high",
+    }]);
+    expect(JSON.parse(prompt)[0].kind).toBe("paste");
+  });
 });
 
 describe("detect", () => {
@@ -34,6 +54,22 @@ describe("detect", () => {
     // only high-confidence becomes a suggestion without an LLM
     expect(out.length).toBe(1);
     expect(out[0].payload.type).toBe("command");
+  });
+
+  it("turns paste candidates into self-service fixes and drops answer candidates without an LLM", async () => {
+    const paste: Candidate = {
+      ...cand("make dev", 3),
+      kind: "paste",
+      examples: ["pasted output of: make dev"],
+    };
+    const answer: Candidate = { ...cand("1 ← Which approach?", 3, "inferred"), kind: "answer" };
+    const out = await detect([paste, answer], null);
+    expect(out).toHaveLength(1);
+    expect(out[0].payload).toMatchObject({ type: "command" });
+    if (out[0].payload.type === "command") {
+      expect(out[0].payload.body).toContain("Run `make dev` yourself");
+      expect(out[0].payload.body).toContain("Do not ask the user to paste output");
+    }
   });
 
   it("uses the llm result when available and traces evidence by sourceSignature", async () => {

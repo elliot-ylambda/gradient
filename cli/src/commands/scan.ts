@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Suggestion, Turn, Config } from "../core/types.js";
 import { collect } from "../core/collect.js";
 import { parseFile } from "../core/parse.js";
+import { parseDialogueFile, type DialogueTurn } from "../core/parse.js";
 import { filterPrompts, compileIgnorePatterns, isTemplateFlood } from "../core/filter.js";
 import { capByRecency } from "../core/cap.js";
 import { DEFAULT_MAX_PROMPTS, DEFAULT_DETECT_WINDOW } from "../core/scope.js";
@@ -16,6 +17,8 @@ import { selectBackend } from "../llm/index.js";
 import { loadConfig } from "../config.js";
 import type { LLMBackend } from "../llm/backend.js";
 import { refreshRecallIndex } from "./recall.js";
+import { detectPasteCandidates, extractPasteKey } from "../core/paste.js";
+import { extractAnswerPairs, mineAnswerCandidates } from "../core/answers.js";
 
 export interface ScanOptions {
   scope: "project" | "all";
@@ -33,6 +36,8 @@ export interface ScanDeps {
   config?: Config;
   collectFn?: (o: ScanOptions) => Promise<string[]>;
   parseFn?: (path: string) => Promise<Turn[]>;
+  /** Injectable assistant+user parser for repeated-answer mining. */
+  parseDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
   /** Injectable Claude-Session trailer source for the coverage check. */
   gitLogFn?: (dir: string, sinceDays: number) => Promise<string>;
   log?: (msg: string) => void;
@@ -85,16 +90,30 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     log(`capped to most recent ${max} prompts; ${dropped} older dropped (raise with --max-prompts)`);
   }
 
-  const clustered = cluster(kept);
+  const pastes = detectPasteCandidates(kept);
+  const clusterInput = kept.filter(turn => !extractPasteKey(turn.text ?? ""));
+  const clustered = cluster(clusterInput);
   const floods = clustered.filter(isTemplateFlood);
   const candidates = clustered.filter(c => !isTemplateFlood(c));
   if (floods.length > 0) log(`excluded ${floods.length} machine-template pattern(s) (CI/hook-injected, not habits)`);
+  if (pastes.length > 0) log(`${pastes.length} paste pattern(s) detected`);
+
+  // Production scans read a dialogue-shaped view in a second pass. Test callers
+  // that replace parseFn can independently inject this view when they need it.
+  const parseDialogueFn = deps.parseDialogueFn ?? (deps.parseFn ? undefined : parseDialogueFile);
+  const dialogue: DialogueTurn[] = [];
+  if (parseDialogueFn) {
+    for (const file of files) dialogue.push(...(await parseDialogueFn(file)));
+  }
+  const answers = mineAnswerCandidates(extractAnswerPairs(dialogue));
+  if (answers.length > 0) log(`${answers.length} repeated-answer pattern(s) detected`);
+  const allCandidates = [...candidates, ...pastes, ...answers];
   const window = opts.limit ?? DEFAULT_DETECT_WINDOW;
-  log(`clustering → ${candidates.length} candidate patterns; sending top ${window} to llm`);
+  log(`clustering → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);
 
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });
   if (!backend) log("no LLM backend available — degrading to exact-repeat command suggestions only");
-  const suggestions = await detect(candidates, backend, {
+  const suggestions = await detect(allCandidates, backend, {
     limit: window,
     onCap: dropped => log(`capped to top ${window}; ${dropped} lower-frequency candidates dropped`),
   });
