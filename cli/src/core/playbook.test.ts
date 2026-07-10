@@ -6,6 +6,7 @@ import {
   generatePlaybook, writePlaybook, loadPlaybook, playbookPath,
   isNudge, DEFAULT_PLAYBOOK, MINED_START, MINED_END,
   parseProjectPlaybook, clampMode, projectPlaybookPath, loadProjectPlaybook,
+  renderMinedSection,
 } from "./playbook.js";
 import type { Suggestion } from "./types.js";
 
@@ -246,5 +247,33 @@ describe("projectPlaybookPath / loadProjectPlaybook", () => {
     await mkdir(gradPath);
     const r = await loadProjectPlaybook(dir);
     expect(r?.clamps.malformed).toBe(true);
+  });
+});
+
+import { PLAYBOOK_MAX_CHAINS } from "./playbook.js";
+import type { ChainFinding } from "./sequence.js";
+
+const chain = (a: string, b: string, count = 5, sessions = 3): ChainFinding =>
+  ({ steps: [a, b], count, sessions, sessionIds: ["s1", "s2", "s3"], examples: [[a, b]] });
+
+describe("renderMinedSection with chains", () => {
+  it("renders chain lines under the workflows heading", () => {
+    const out = renderMinedSection([], [chain("review the spec", "write the plan")]);
+    expect(out).toContain("## My workflows (mined)");
+    expect(out).toContain('- After "review the spec", you usually follow with "write the plan" (5× · 3 sessions)');
+  });
+  it("renders 3-step chains with a then-clause", () => {
+    const c: ChainFinding = { ...chain("a", "b"), steps: ["a", "b", "c"] };
+    expect(renderMinedSection([], [c])).toContain('- After "a", you usually follow with "b" then "c" (5× · 3 sessions)');
+  });
+  it("caps chains at PLAYBOOK_MAX_CHAINS", () => {
+    const many = Array.from({ length: PLAYBOOK_MAX_CHAINS + 2 }, (_, i) => chain(`a${i}`, `b${i}`));
+    const out = renderMinedSection([], many);
+    expect(out.match(/you usually follow with/g)).toHaveLength(PLAYBOOK_MAX_CHAINS);
+  });
+  it("generatePlaybook splices chains inside markers, user Rules untouched", () => {
+    const out = generatePlaybook([], undefined, [chain("a", "b")]);
+    expect(out).toContain('you usually follow with "b"');
+    expect(out!.indexOf("you usually follow")).toBeLessThan(out!.indexOf("## Rules"));
   });
 });
