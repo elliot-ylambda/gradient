@@ -4,7 +4,7 @@ The local-first `gradient` command-line tool.
 
 ```bash
 npx gradient.md init      # configure (reuses your `claude` auth — no API key needed)
-npx gradient.md scan      # mine history; send bounded candidates to the configured model
+npx gradient.md scan      # mine bounded prompt, paste, answer, and sequence candidates
 npx gradient.md review    # approve the ones you want; gradient writes the artifacts
 npx gradient.md list      # see what it generated · npx gradient.md remove <name> to undo
 npx gradient.md migrate   # convert older generated commands into skills
@@ -15,12 +15,20 @@ npx gradient.md stats     # coverage and artifact adoption
 ## How it works
 
 1. Reads your Claude Code transcripts (`~/.claude/projects/**/*.jsonl`).
-2. Clusters repeated prompts locally (no LLM) into candidate patterns.
+2. Clusters repeated prompts, failing-command pastes, recurring sequences, and
+   conservative low-impact Q→A preferences locally (no LLM). Pasted bodies and
+   command arguments are discarded; cross-project scans skip Q→A rules.
 3. Sends only the top candidates to an LLM (the `claude` CLI by default, with an
    Anthropic API-key fallback) to name and type them.
 4. You inspect the exact rendered artifact and approve; it writes
-   `.claude/skills/<name>/SKILL.md`, prints `/loop` lines, or proposes hook
-   settings that call allowlisted `gradient` subcommands.
+   `.claude/skills/<name>/SKILL.md` and project rules under `.claude/rules/`,
+   prints `/loop` instructions, or proposes local hook settings
+   that call allowlisted `gradient` subcommands.
+
+Paste and sequence findings are advisory: prior behavior is never treated as
+authorization to rerun a command or execute later workflow steps. Preference
+rules require repeated support across sessions, are limited to low-impact
+format/style/tool choices, and preserve confirmation for consequential actions.
 
 Skills are the default because Claude Code can invoke them from their mined
 trigger descriptions. Set `emitTarget` to `"command"` in the gradient config
@@ -64,9 +72,10 @@ stop up to its attempt budget. For CI or anything shared, set
 `ANTHROPIC_API_KEY` and pin `"backend": "anthropic"`; an unavailable pinned
 backend fails closed rather than silently falling back.
 
-Candidate snippets and autopilot tails are sent to the selected model after
-common credential redaction. Redaction cannot identify every kind of sensitive
-or proprietary text. See the repository's
+Candidate snippets (including bounded assistant question text for project-only
+preference mining) and autopilot tails are sent to the selected model after
+common credential/PII redaction. Redaction cannot identify every kind of
+sensitive or proprietary text. See the repository's
 [security and data-boundary documentation](https://github.com/elliot-ylambda/gradient#data-and-trust-boundaries).
 
 Full details: [Usage and billing](https://github.com/elliot-ylambda/gradient#usage-and-billing).

@@ -84,4 +84,57 @@ describe("applySuggestion", () => {
     expect(r.printed).toContain("/loop");
     expect((await loadManifest(dir)).map(e => e.name)).toEqual(["cont"]);
   });
+
+  it("applies a project rule as a manifest-tracked file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const suggestion: Suggestion = {
+      ...base,
+      id: "r1",
+      name: "prefer-recommended",
+      title: "Prefer the recommended option",
+      confidence: "inferred",
+      evidence: { count: 36, sessions: 27 },
+      payload: {
+        type: "rule",
+        target: "project",
+        ruleName: "prefer-recommended",
+        text: "Default to the recommended option.",
+      },
+    };
+    const result = await applySuggestion(suggestion, dir);
+    expect(result.written).toBe(join(dir, ".claude", "rules", "gradient-prefer-recommended.md"));
+    expect((await loadManifest(dir))[0]).toMatchObject({ name: "prefer-recommended", type: "rule" });
+  });
+
+  it("refuses a project-rule directory symlink without touching its victim", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const outside = await mkdtemp(join(tmpdir(), "grad-rule-victim-"));
+    await mkdir(join(dir, ".claude"), { recursive: true });
+    await symlink(outside, join(dir, ".claude", "rules"));
+    const suggestion: Suggestion = {
+      ...base, name: "prefer-pnpm", title: "Prefer pnpm",
+      payload: { type: "rule", target: "project", ruleName: "prefer-pnpm", text: "Prefer pnpm." },
+    };
+    await expect(applySuggestion(suggestion, dir)).rejects.toThrow(/symlink/);
+    await expect(readFile(join(outside, "gradient-prefer-pnpm.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("prints a user rule without writing a file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const suggestion: Suggestion = {
+      ...base,
+      id: "r2",
+      name: "prefer-recommended-global",
+      payload: {
+        type: "rule",
+        target: "user",
+        ruleName: "prefer-recommended",
+        text: "Default to the recommended option.",
+      },
+    };
+    const result = await applySuggestion(suggestion, dir);
+    expect(result.written).toBeUndefined();
+    expect(result.printed).toContain("~/.claude/CLAUDE.md");
+    expect((await loadManifest(dir))[0]).toMatchObject({ type: "rule", path: "" });
+  });
 });

@@ -17,11 +17,15 @@ Do not include real credentials, private transcripts, or customer data.
 ## Security boundaries
 
 Gradient reads local Claude Code transcript data and can send bounded excerpts
-to either the local `claude` CLI or the Anthropic API. Common credential formats
-are redacted, but redaction is not a complete data-loss-prevention system.
+to either the local `claude` CLI or the Anthropic API. Project-only preference
+mining can include bounded assistant questions. Common credential and PII
+formats are redacted, but redaction is not a complete data-loss-prevention system.
 Users should not scan or enable autopilot for material they are unwilling to
 send to the configured model.
 
 Generated artifacts require explicit approval. Hooks are installed into local
 Claude settings and require private per-project consent where applicable.
-Gradient does not store `ANTHROPIC_API_KEY`.
+Observed behavior is not treated as authorization: paste/sequence artifacts are
+advisory, preference rules exclude consequential approvals, and arbitrary model
+content is not written into artifacts. Gradient does not store
+`ANTHROPIC_API_KEY`.

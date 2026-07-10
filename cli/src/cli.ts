@@ -25,9 +25,9 @@ const HELP = `gradient — turn repeated Claude Code workflows into artifacts
 Usage:
   gradient init                 configure + install the /gradient skill
   gradient init --session-scan  also run a scan at the start of each session
-  gradient scan                 this project, all history
-  gradient scan --user          all projects, last 7 days (configurable)
-  gradient scan --all           all projects, no time limit
+  gradient scan                 find prompts, advisory pastes/sequences, safe preferences
+  gradient scan --user          cross-project patterns, last 7 days (no preference rules)
+  gradient scan --all           cross-project patterns, no time limit (no preference rules)
     [--since 7d] [--limit N] [--max-prompts N]
   gradient review               approve cached suggestions
   gradient apply <id|name>...   generate specific suggestions
@@ -297,7 +297,7 @@ export async function main(
         log(banner(VERSION));
         log(`${c.muted("mode:")} ${c.bold(s.mode)}${s.effectiveMode !== s.mode ? c.dim(` → ${s.effectiveMode} here (clamped by project gradient.md)`) : ""}`);
         log(`${c.muted("budget:")} ${s.budget} judge attempts/session${s.effectiveBudget !== s.budget ? c.dim(` → ${s.effectiveBudget} here (clamped by project gradient.md)`) : ""}`);
-        log(`${c.muted("gradient.md:")} ${s.playbookPath}${s.playbookExists ? "" : c.dim(" (not yet generated — run gradient scan)")}`);
+        log(`${c.muted("gradient.md:")} ${s.playbookPath}${s.playbookExists ? "" : c.dim(" (not yet generated — approve a suggestion first)")}`);
         log(
           `${c.muted("project gradient.md:")} ${s.projectPlaybookExists
             ? s.projectPlaybookPath + (s.projectMalformed ? c.coral(" (malformed — autopilot off here)") : "")

@@ -33,6 +33,11 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bAIza[0-9A-Za-z_-]{30,}\b/g,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
   /\b(?:https?|postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/(?=[^\s/@]+:[^\s/@]+@)[^\s]+/gi,
+  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+  /\b\d{3}-\d{2}-\d{4}\b/g,
+  /\b(?:\d[ -]*?){13,19}\b/g,
+  /\b(?=[A-Za-z0-9_-]{24,}\b)(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]+\b/g,
+  /\/(?:Users|home)\/[^/\s]+/g,
 ];
 
 /** Remove terminal control characters while keeping ordinary whitespace. */

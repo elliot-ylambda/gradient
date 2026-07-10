@@ -55,3 +55,40 @@ describe("triggers validation", () => {
     expect(() => validateSuggestion({ ...base, payload: { ...base.payload, triggers: ["x"] } })).not.toThrow();
   });
 });
+
+describe("rule validation", () => {
+  const base = { id: "1", name: "n", title: "t", rationale: "r", confidence: "high", evidence: { count: 3, sessions: 2 } };
+
+  it("accepts a complete rule payload", () => {
+    expect(() => validateSuggestion({
+      ...base,
+      payload: { type: "rule", target: "project", ruleName: "n", text: "t" },
+    })).not.toThrow();
+  });
+
+  it("rejects invalid targets and missing text", () => {
+    expect(() => validateSuggestion({
+      ...base,
+      payload: { type: "rule", target: "everyone", ruleName: "n", text: "t" },
+    })).toThrow(/target/);
+    expect(() => validateSuggestion({
+      ...base,
+      payload: { type: "rule", target: "project", ruleName: "n" },
+    })).toThrow(/text/);
+  });
+
+  it("rejects unsafe names, control characters, empty text, and oversized text", () => {
+    expect(() => validateSuggestion({
+      ...base, payload: { type: "rule", target: "project", ruleName: "Not Safe", text: "t" },
+    })).toThrow(/ruleName/);
+    expect(() => validateSuggestion({
+      ...base, payload: { type: "rule", target: "project", ruleName: "safe", text: "bad\u001btext" },
+    })).toThrow(/text/);
+    expect(() => validateSuggestion({
+      ...base, payload: { type: "rule", target: "project", ruleName: "safe", text: "   " },
+    })).toThrow(/text/);
+    expect(() => validateSuggestion({
+      ...base, payload: { type: "rule", target: "project", ruleName: "safe", text: "x".repeat(2_001) },
+    })).toThrow(/text/);
+  });
+});

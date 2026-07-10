@@ -1,7 +1,7 @@
 # gradient v2 — Close the Funnel — Design
 
 **Date:** 2026-07-06
-**Status:** Implementation in progress (Phases A–B complete; Phases C–E planned)
+**Status:** Implementation in progress (Phases A–C complete; Phases D–E planned)
 **Scope:** Spec 4. The v2 feature set: five sequenced phases (A–E), each of
 which becomes its own implementation plan. Builds on the shipped analysis
 engine (Spec 1), autopilot (Spec 2), and the approved `gradient.md` layering
@@ -50,7 +50,7 @@ build for permission mining (§8).
 | 1 | Shape | **One spec, five phases (A–E), one implementation plan per phase.** Phases are independently shippable increments in funnel order: fix detection input (A), close adoption (B), deepen detection (C), surface insights (D), distribute (E). |
 | 2 | Primary artifact | **Skills replace commands as the default emit target.** `.claude/skills/<name>/SKILL.md` with a mined `description` listing trigger phrasings, so Claude auto-invokes the workflow even when the user forgets it exists. `emitTarget: "command"` remains as a config escape hatch; the command emitter is compat code, not dead code. |
 | 3 | Recall mechanism | **A `UserPromptSubmit` hook (`gradient recall`) that matches the typed prompt against installed artifacts and injects a one-line context hint.** LLM-free, index-backed, fail-open, <50 ms target. It cannot rewrite the prompt (Claude Code offers no such control) — injected context telling Claude "this matches the user's `/prep` skill" is the strongest available lever and also *executes* the workflow. |
-| 4 | New payload types | **One addition to `SuggestionPayload`: `rule` (writes `.claude/rules/gradient-<name>.md`) — nothing else.** Error-paste and answer mining reuse existing `command`(→skill) and `hook` payloads plus `rule`. Unknown payload types found in `suggestions.json` are skipped with a log line (forward compatibility), same tolerant-reader stance as `gradient.md` clamps. |
+| 4 | New payload types | **One addition to `SuggestionPayload`: `rule` (writes `.claude/rules/gradient-<name>.md`) — nothing else.** Error-paste and answer mining reuse existing `command` (→ skill) plus `rule`; paste-driven arbitrary-command hooks were rejected as an unnecessary execution surface. Unknown payload types found in `suggestions.json` are skipped with a log line (forward compatibility), same tolerant-reader stance as `gradient.md` clamps. |
 | 5 | User-global rule targets | **Project rules are written; user-global rules are only printed.** gradient never edits `~/.claude/CLAUDE.md` — it is the user's file with no marker region. Project rules go in gradient-owned files under `.claude/rules/`, manifest-tracked and cleanly removable. |
 | 6 | Machine-prompt filtering | **Classify, don't just drop.** `filter.ts` grows a classifier that tags machine-generated prompts (CI-injected, continuation summaries, task notifications, template floods). Mining excludes them; `insights` (Phase D) consumes the classifications as signals. |
 | 7 | Adoption data | **Local only, derived from transcripts + a hook event log.** Uses of artifacts are counted from `<command-name>` tags in transcripts; near-miss retypes come from the recall hook's log. No telemetry leaves the machine, ever. |
@@ -213,29 +213,40 @@ export function classifyPrompt(text: string): PromptClass;
 
 - `core/paste.ts`: pre-cluster classifier for `"human"` prompts with
   `length > ~400` and error markers (`error|exception|failed|traceback|…`).
-  Extraction key = first non-empty line, truncated (~80 chars) — pasted
+  Extraction key = a strict executable plus optional harmless-looking
+  subcommand, or only the error class. Arguments, URLs, credentials, PII, and
+  arbitrary free-form headers are dropped — pasted
   output of the same failing command shares its head (`make dev …`,
   `xcodebuild …`) even when bodies differ.
 - Groups with ≥3 occurrences become `Candidate`s with a new `kind:
   "paste"` hint and the key as `signature`; they bypass trigram clustering
   (which cannot see them) and join the normal detect window.
-- `detect.ts` prompt, for paste candidates: choose between
-  - a **skill** — "run `<cmd>` yourself, then fix what fails" (kills the
-    paste round-trip entirely), or
-  - a **hook** — `PostToolUseFailure` when evidence shows the command
-    already runs *inside* sessions.
+- `detect.ts` turns paste candidates into an **advisory troubleshooting skill**.
+  It may inspect output the user supplies, but prior pasting is never permission
+  to rerun the command or take side effects; consequential actions require
+  explicit confirmation in the current conversation.
+  `PostToolUseFailure` was deliberately rejected: no gradient subcommand owns
+  arbitrary failure repair, and executing inferred commands from a hook would
+  add a new security boundary for no product benefit.
+- Paste-shaped groups still pass through the Phase A count/session flood gate,
+  so machine injectors cannot bypass template filtering by containing an error
+  marker.
 - Evidence lines in `review` show the reconstructed command, never the
   pasted bodies (redaction unchanged).
 
 ### C2. Answer mining → rules
 
-- `core/parse.ts` gains an opt-in mode that also yields assistant turns
-  (text only, no tool blocks) so Q→A pairs can be built; the default mining
-  path is unchanged.
+- `core/parse.ts` gains an opt-in mode that also yields assistant text turns so
+  Q→A pairs can be built; generic tool blocks remain ignored. Structured
+  `AskUserQuestion` results are reconstructed from their explicit question and
+  user-authored answer fields rather than mining the synthetic tool wrapper.
+  The default user-prompt mining path is unchanged.
 - `core/answers.ts`: a Q→A pair is (assistant turn whose tail looks like a
-  question) followed by a short (<80 chars) human answer in the same
-  session. Pairs cluster by normalized answer + question-topic similarity.
-  Repeats ≥3 with a consistent answer → candidate.
+  question) followed by a short (≤40 chars) semantic answer in the same
+  session. Only low-impact formatting/style/tool-preference questions qualify;
+  yes/no, ordinals, secrets/PII, and consequential approvals are rejected.
+  Pairs cluster by normalized answer + question-topic similarity. Repeats ≥3
+  across ≥2 distinct sessions → candidate. Cross-project scans skip this pass.
 - `detect.ts` gains payload type `rule`:
 
   ```ts
@@ -245,15 +256,17 @@ export function classifyPrompt(text: string): PromptClass;
 - `core/emit/rule.ts`: `target: "project"` → writes
   `.claude/rules/gradient-<ruleName>.md` (manifest-tracked, removable);
   `target: "user"` → printed only (Decision 5).
-- The "1" × 36 pattern lands here: "When presenting options, default to the
-  recommended one instead of asking."
+- Rule target and text are constructed locally, never copied from model output.
+  Rules explicitly preserve confirmation for commands, changes, external or
+  production actions, publishing, deletion, spending, credential use, and data
+  disclosure. Positional answers such as "1" never become standing rules.
 
 ### Testing (C)
 
 - Paste keying: same command / different bodies group; different commands
   don't; sub-400-char errors ignored.
-- Q→A pairing precision on a redacted fixture from real history; the "1"
-  fixture produces a rule suggestion.
+- Q→A precision on redacted fixtures; production confirmations, secrets,
+  one-session repetitions, and positional answers produce no rule.
 - Rule emit: project write path + manifest + remove; user target never
   writes; name sanitization.
 
@@ -388,8 +401,12 @@ Each phase lands as its own branch + implementation plan
 - **B2 (resolved 2026-07-09):** live transcripts contain skill invocations
   such as `/codex` and `/plan-review` in `<command-name>` tags, matching custom
   command invocations; usage counting is pinned to that shared representation.
-- **C2:** question-detection precision (assistant tails ending in "?" vs
-  AskUserQuestion tool blocks) — measure on real history before choosing.
+- **C2 (resolved 2026-07-09):** use both assistant text whose final 40
+  characters contain `?` and structured `AskUserQuestion` results. A local
+  30-day sample (1,730 transcripts) contained 514 structured results and 840
+  qualifying adjacent short-answer pairs; ignoring tool results would miss a
+  material share of real preference answers. Generic tool output remains
+  excluded.
 - **D:** whether `insights --user` shares `scan --user`'s recency window
   default (`userScopeDays`) or reports all-time by default.
 - **E:** minimum viable `plugin.json` fields for current Claude Code plugin

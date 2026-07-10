@@ -78,6 +78,8 @@ export function kindLabel(type: ArtifactType): string {
       return c.coral(type);
     case "hook":
       return c.blue(type);
+    case "rule":
+      return c.blue(type);
   }
 }
 

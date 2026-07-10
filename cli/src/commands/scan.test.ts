@@ -67,11 +67,14 @@ describe("scan", () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const fakeBackend = {
       name: "fake", available: async () => true,
-      complete: async () => JSON.stringify({ suggestions: [{
-        sourceSignature: "push and create a pull request",
-        name: "ship", title: "Ship", rationale: "r", confidence: "high",
-        payload: { type: "command", commandName: "ship", body: "push and open a PR" },
-      }] }),
+      complete: async ({ prompt }: { prompt: string }) => {
+        const [candidate] = JSON.parse(prompt);
+        return JSON.stringify({ suggestions: [{
+          sourceIds: [candidate.id],
+          name: "ship", confidence: "high",
+          payload: { type: "command", commandName: "ship" },
+        }] });
+      },
     };
     const out = await scan(
       { scope: "project", projectPath: projectDir, home },
@@ -115,11 +118,14 @@ describe("scan", () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const fakeBackend = {
       name: "fake", available: async () => true,
-      complete: async () => JSON.stringify({ suggestions: [{
-        sourceSignatures: ["continue until actually done"],
-        name: "keep-going", title: "Keep going", rationale: "r", confidence: "high",
-        payload: { type: "loop", instruction: "continue until actually done" },
-      }] }),
+      complete: async ({ prompt }: { prompt: string }) => {
+        const [candidate] = JSON.parse(prompt);
+        return JSON.stringify({ suggestions: [{
+          sourceIds: [candidate.id],
+          name: "keep-going", confidence: "high",
+          payload: { type: "loop" },
+        }] });
+      },
     };
     await scan(
       { scope: "project", projectPath: projectDir, home },
@@ -170,5 +176,162 @@ describe("scan", () => {
       },
     );
     expect(out).toHaveLength(0);
+  });
+
+  it("feeds paste candidates into detection without leaking or double-counting their bodies", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const errorBody = `make dev\n${"error: boom SENSITIVE_BODY\n".repeat(40)}`;
+    const turns = ["s1", "s2", "s3"].map(sessionId => ({
+      ts: "2026-07-01T00:00:00Z",
+      project: "p",
+      role: "user" as const,
+      sessionId,
+      text: errorBody,
+    }));
+    let seenPrompt = "";
+    const logs: string[] = [];
+    const backend = {
+      name: "fake",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => {
+        seenPrompt = prompt;
+        return JSON.stringify({ suggestions: [] });
+      },
+    };
+    await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        backend,
+        collectFn: async () => ["f"],
+        parseFn: async () => turns,
+        parseDialogueFn: async () => [],
+        log: message => logs.push(message),
+      },
+    );
+    expect(logs.join("\n")).toMatch(/1 paste pattern/);
+    expect(JSON.parse(seenPrompt)).toHaveLength(1);
+    expect(seenPrompt).not.toContain("SENSITIVE_BODY");
+  });
+
+  it("feeds repeated structured answers into rule detection", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const logs: string[] = [];
+    let seenKind = "";
+    const backend = {
+      name: "fake",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => {
+        const [candidate] = JSON.parse(prompt);
+        seenKind = candidate.kind;
+        return JSON.stringify({ suggestions: [{
+          sourceIds: [candidate.id],
+          name: "prefer-pnpm",
+          confidence: "inferred",
+          payload: {
+            type: "rule",
+            ruleName: "prefer-pnpm",
+          },
+        }] });
+      },
+    };
+    const dialogue = ["s1", "s2", "s3"].flatMap(sessionId => [
+      { role: "assistant" as const, text: "Which package manager should I use?", sessionId, ts: "t1" },
+      { role: "user" as const, text: "pnpm", sessionId, ts: "t2" },
+    ]);
+    const suggestions = await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        backend,
+        collectFn: async () => ["f"],
+        parseFn: async () => [],
+        parseDialogueFn: async () => dialogue,
+        log: message => logs.push(message),
+      },
+    );
+    expect(logs.join("\n")).toMatch(/1 repeated-answer pattern/);
+    expect(seenKind).toBe("answer");
+    expect(suggestions[0].payload).toMatchObject({ type: "rule", ruleName: "prefer-pnpm" });
+    if (suggestions[0].payload.type === "rule") {
+      expect(suggestions[0].payload.text).toContain("not authorization");
+    }
+  });
+
+  it("does not mine assistant answers across projects", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    let dialogueReads = 0;
+    let seenPrompt = "";
+    await scan(
+      { scope: "all", projectPath: dir },
+      {
+        backend: { name: "fake", available: async () => true, complete: async ({ prompt }: { prompt: string }) => {
+          seenPrompt = prompt;
+          return JSON.stringify({ suggestions: [] });
+        } },
+        collectFn: async () => ["a", "b"],
+        parseFn: async () => [],
+        parseDialogueFn: async () => {
+          dialogueReads++;
+          return [
+            { role: "assistant", text: "Which package manager do you prefer?", sessionId: "s", ts: "t" },
+            { role: "user", text: "pnpm", sessionId: "s", ts: "t" },
+          ];
+        },
+      },
+    );
+    expect(dialogueReads).toBe(0);
+    expect(seenPrompt).not.toContain("package manager");
+  });
+
+  it("keeps paste-shaped template floods out of detection", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const turns = Array.from({ length: 30 }, (_, i) => ({
+      ts: `2026-07-01T00:00:${String(i).padStart(2, "0")}Z`,
+      project: "p",
+      role: "user" as const,
+      sessionId: `s${i}`,
+      text: `review-build\n${"error: generated review payload\n".repeat(20)}`,
+    }));
+    let seenPrompt = "unset";
+    const logs: string[] = [];
+    const backend = {
+      name: "fake",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => {
+        seenPrompt = prompt;
+        return JSON.stringify({ suggestions: [] });
+      },
+    };
+    await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        backend,
+        collectFn: async () => ["f"],
+        parseFn: async () => turns,
+        parseDialogueFn: async () => [],
+        log: message => logs.push(message),
+      },
+    );
+    expect(JSON.parse(seenPrompt)).toEqual([]);
+    expect(logs.join("\n")).toContain("excluded 1 machine-template pattern");
+  });
+
+  it("mines sequences into candidates and logs the sequence count", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const seqTurns = Array.from({ length: 3 }, (_, i) => [
+      { ts: "2026-07-01T00:00:00Z", project: "p", role: "user" as const, sessionId: `s${i}`, text: "review the spec" },
+      { ts: "2026-07-01T00:01:00Z", project: "p", role: "user" as const, sessionId: `s${i}`, text: "write the plan" },
+    ]).flat();
+    const logs: string[] = [];
+    const out = await scan(
+      { scope: "project", projectPath: dir, home },
+      { backend: null, collectFn: async () => ["f"], parseFn: async () => seqTurns, log: m => logs.push(m) },
+    );
+    expect(logs.join("\n")).toContain("sequences: 1 recurring chain(s)");
+    // Degraded path: the sequence candidate surfaces as a high-confidence command suggestion.
+    expect(out.some(s => s.payload.type === "command" && /review the spec → write the plan/.test(s.title))).toBe(true);
   });
 });

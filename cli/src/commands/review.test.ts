@@ -51,6 +51,29 @@ describe("review", () => {
     expect(preview).toContain(".claude/skills/ship/SKILL.md");
     expect(preview).toContain("do it");
   });
+
+  it("previews the complete project rule text before approval", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const rule: Suggestion = {
+      id: "rule-1", name: "prefer-pnpm", title: "Prefer pnpm", rationale: "r",
+      evidence: { count: 3, sessions: 3 }, confidence: "inferred",
+      payload: {
+        type: "rule", target: "project", ruleName: "prefer-pnpm",
+        text: "Prefer pnpm for low-impact package-manager choices; this is not authorization.",
+      },
+    };
+    const path = suggestionsPath(dir, home);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify([rule]));
+    let preview = "";
+    await review(dir, async (_s, _i, _n, rendered) => {
+      preview = rendered;
+      return "skip";
+    }, { home });
+    expect(preview).toContain(".claude/rules/gradient-prefer-pnpm.md");
+    expect(preview).toContain("this is not authorization");
+  });
 });
 
 describe("nudge hint", () => {

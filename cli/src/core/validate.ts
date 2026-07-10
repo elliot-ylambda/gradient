@@ -2,7 +2,7 @@ import type { Suggestion } from "./types.js";
 import { sanitizeName, stripUnsafeControls } from "./security.js";
 
 export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan"]);
-const TYPES = new Set(["command", "loop", "hook"]);
+const TYPES = new Set(["command", "loop", "hook", "rule"]);
 const CONFIDENCES = new Set(["high", "inferred", "flagged"]);
 const HOOK_EVENTS = new Set(["PreCompact", "SessionStart"]);
 const TEXT_CAP = 8_000;
@@ -62,6 +62,17 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
   if (s.examples !== undefined &&
     (!Array.isArray(s.examples) || s.examples.length > 5 || s.examples.some(example => !validText(example, 2_000)))) {
     throw new Error("suggestion.examples must contain safe bounded text");
+  }
+  if (payload.type === "rule") {
+    if (payload.target !== "project" && payload.target !== "user") {
+      throw new Error("rule payload target must be project|user");
+    }
+    if (!validText(payload.ruleName, 100) || sanitizeName(payload.ruleName) !== payload.ruleName) {
+      throw new Error("rule payload needs a safe sanitized ruleName");
+    }
+    if (!validText(payload.text, 2_000) || payload.text.trim().length === 0) {
+      throw new Error("rule payload needs safe bounded text");
+    }
   }
 }
 

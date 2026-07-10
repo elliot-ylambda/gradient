@@ -1,10 +1,20 @@
 # gradient v2 Phase C — New Detectors (Error Pastes & Answer Mining) — Implementation Plan
 
+> **Security revision (0.1.1):** This historical execution plan predates the
+> public-release audit. The shipped implementation does not rerun pasted
+> commands, forward free-form paste headers, infer rules from yes/no or ordinal
+> answers, accept one-session support, or persist model-authored rule text.
+> Paste skills are advisory; preference rules are locally reconstructed,
+> project-scoped, low-impact, and preserve consequential confirmations.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Mine the two pattern shapes the lexical clusterer can't see: repeated pastes of the same failing command's output (~29% of the dogfood corpus) become skill suggestions ("run it yourself and fix it"), and repeatedly-given short answers to Claude's questions become `rule` suggestions written to `.claude/rules/gradient-<name>.md`. Spec: `docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md` §5.
+**Goal:** Mine the two pattern shapes the lexical clusterer can't see: repeated
+pastes become advisory troubleshooting suggestions, and repeated safe
+preferences become guarded project-rule suggestions. Spec:
+`docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md` §5.
 
-**Architecture:** `core/paste.ts` keys long error-ish prompts by their first line and emits `Candidate`s with `kind: "paste"` that bypass trigram clustering. `core/parse.ts` gains a dialogue parser (assistant + user turns) feeding `core/answers.ts`, which pairs assistant questions with short human answers and emits `kind: "answer"` candidates. `detect` learns both kinds plus the new `rule` payload; `emit/rule.ts` writes project rules (user-target rules are print-only).
+**Architecture:** `core/paste.ts` keys long error-ish prompts by their command/error head line and emits `Candidate`s with `kind: "paste"` that bypass trigram clustering but retain the template-flood gate. `core/parse.ts` gains a dialogue parser (assistant + user turns, including explicit structured question results) feeding `core/answers.ts`, which pairs assistant questions with short human answers and emits `kind: "answer"` candidates. `detect` learns both kinds plus the new `rule` payload; `emit/rule.ts` writes project rules (user-target rules are print-only).
 
 **Tech Stack:** TypeScript (ESM, `.js` import suffixes), Node ≥ 20, vitest, zero new runtime dependencies. All work in `cli/`.
 
@@ -562,8 +572,12 @@ git commit -m "feat(core): rule artifact — mined standing instructions in .cla
 - Consumes: `detectPasteCandidates` (C1), `parseDialogueFile`/`extractAnswerPairs`/`mineAnswerCandidates` (C2/C3), the flood-filtered `candidates` list (Phase A Task A2).
 - Produces:
   - `scan` merges `[...clustered (minus floods), ...pasteCandidates, ...answerCandidates]` before `detect` (they compete for the same detect window by count — no reserved slots).
-  - `buildDetectPrompt` includes each candidate's `kind` and the system prompt explains `paste` (→ command/skill body "run `<cmd>` yourself, then fix what fails") and `answer` (→ `rule` payload) kinds; payload schema line gains the rule form.
-  - Answer mining runs a second parse pass (`parseDialogueFile`) over the same collected files; injectable via `deps.parseDialogueFn` for tests. Two IO passes accepted for v1 (files are re-read, not re-collected).
+  - `buildDetectPrompt` includes each candidate's `kind` and an opaque source ID.
+    Paste output becomes an advisory troubleshooting guide; answer candidates
+    can only become locally reconstructed, low-impact project rules.
+  - Answer mining runs a bounded second parse pass only for project scope,
+    applies the same time/ignore controls, and is injectable via
+    `deps.parseDialogueFn` for tests.
 
 - [ ] **Step 1: Write the failing tests** — append to `cli/src/core/detect.test.ts`:
 
@@ -653,3 +667,36 @@ Expected: PASS.
 git add cli/src/core/detect.ts cli/src/core/detect.test.ts cli/src/commands/scan.ts cli/src/commands/scan.test.ts cli/src/cli.ts README.md
 git commit -m "feat(scan): paste + answer candidates flow into detection; rule payloads land"
 ```
+
+---
+
+## Execution notes (2026-07-09)
+
+- **C1 head precision:** real-history validation found generic injected prose,
+  Markdown headings, and a JSON delimiter satisfying the length/error-marker
+  test. Paste keys now require a command-like head or an error marker in the
+  head; this left the genuine repeated `make` failure in the 30-day sample and
+  removed the false positives.
+- **C1 template boundary:** the first implementation pulled pastes out before
+  lexical clustering as planned, but that also let the 796-session security
+  review injector bypass Phase A's flood filter. Paste groups now share the
+  count/session flood gate before entering detection. A regression test covers
+  the bypass.
+- **C2 real format:** 1,730 recent transcripts contained 514 structured
+  question results. `parseDialogueLines` reconstructs only their explicit
+  question and user-authored answer fields; generic tool blocks and synthetic
+  wrappers remain excluded. The default prompt parser is unchanged.
+- **C3 similarity fixture:** the plan's three intended-similar questions score
+  only 0.24–0.29 under raw trigram Jaccard, below the pinned 0.40 threshold, so
+  the prescribed implementation could not pass its prescribed test. Mining
+  compares question stems with the equivalent trigram Dice score while keeping
+  the 0.40 floor; the dissimilar-question guard remains separate.
+- **C4 write boundary:** project rules have apply/remove coverage; user rules
+  have an apply-level assertion that they remain print-only with an empty
+  manifest path.
+- **C5 privacy hardening:** the no-LLM fallback previously redacted examples but
+  not payload bodies, titles, names, or triggers. It now derives every emitted
+  field from the redacted signature, so an inline credential in a command head
+  cannot enter `suggestions.json`.
+- **Validation:** the final suite contains 364 tests; typecheck, build, package
+  dry-run, and a local 30-day detector pass are clean.

@@ -17,10 +17,12 @@ export type Prompter = (
 
 export function suggestionPreview(s: Suggestion, target: EmitTarget): string {
   const rendered = emit(s, { target });
-  if (rendered.kind === "command" || rendered.kind === "skill") {
+  if (rendered.kind === "command" || rendered.kind === "skill" || rendered.kind === "rule") {
     return `${rendered.path}\n${rendered.content}`;
   }
-  return rendered.kind === "loop" ? rendered.command : rendered.settingsPatch;
+  if (rendered.kind === "loop") return rendered.command;
+  if (rendered.kind === "rule-print") return rendered.text;
+  return rendered.settingsPatch;
 }
 
 export async function review(

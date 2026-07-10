@@ -4,9 +4,10 @@
 
 **The prompts you keep retyping into Claude Code, compiled into skills.**
 
-`gradient` reads your own Claude Code history, finds the workflows you repeat,
-and generates the automations to stop — **skills, loops, and hooks** —
-through a local-mining **scan** → approve **review** → reversible **apply** flow.
+`gradient` reads your own Claude Code history, finds repeated prompts, error
+pastes, short preference answers, and recurring sequences, then generates the
+automations to stop — **skills, rules, loops, and hooks** — through a
+local-mining **scan** → approve **review** → reversible **apply** flow.
 It only ever suggests: nothing runs without you turning it on.
 
 [gradient.md](https://gradient.md) · open source · MIT
@@ -44,7 +45,7 @@ gradient/
 ## Quickstart (CLI)
 
 ```bash
-npx gradient.md scan        # this project's history (all of it)
+npx gradient.md scan        # prompts, advisory paste/sequence patterns, and safe preferences
 npx gradient.md scan --user # all projects, last 7 days — your recent cross-project habits
 npx gradient.md scan --all  # all projects, no time limit (thorough; can be slow)
 npx gradient.md review      # inspect the ranked suggestions and their evidence
@@ -61,7 +62,8 @@ So `npx gradient.md scan` and, once installed globally, plain `gradient scan`.
 project but bounds it to a recent window (last 7 days, set via `userScopeDays`
 in config or `--since`), so it stays fast. A recency cap (`--max-prompts`,
 default 1500) protects the clustering step from very large histories and reports
-anything it drops.
+anything it drops. Cross-project scans deliberately skip Q→A preference mining,
+so a preference learned in one repository cannot become a rule in another.
 
 The default backend reuses your existing `claude` CLI auth — no API key required.
 Clustering is local and LLM-free. `scan` sends bounded candidate snippets—not
@@ -192,12 +194,16 @@ removing artifacts that remain unused for at least 30 days.
 ## Data and trust boundaries
 
 - `scan` reads user-authored turns from local Claude Code transcripts, writes a
-  private per-project cache under `~/.config/gradient/projects/`, and sends only capped/redacted
-  candidate snippets to the selected model. `--user --since` filters individual
-  turn timestamps; every scope keeps the default 1,500-prompt processing cap.
-- Suggestions must map to exact local source candidates. Executable skill and
-  loop instructions are reconstructed locally from redacted source text, and
-  `review` shows the exact rendered artifact before approval.
+  private per-project cache under `~/.config/gradient/projects/`, and sends only
+  capped/redacted candidate snippets to the selected model. Project-scoped
+  preference mining also reads bounded assistant questions; cross-project scans
+  skip that pass. `--user --since` filters individual turn timestamps; every
+  scope keeps the default 1,500-prompt processing cap.
+- Suggestions must map to opaque IDs for exact local source candidates; redacted
+  text is never used as a provenance key. Artifact bodies, titles, triggers,
+  rule text, and hook commands are reconstructed locally, and `review` shows the
+  exact rendered artifact before approval. Observed pastes and sequences become
+  advisory guides/checklists, not permission to rerun commands or later steps.
 - Project writes reject symlinked ancestors and final targets. Caches and user
   state use private modes and atomic writes. Hooks default to
   `.claude/settings.local.json`.
@@ -225,11 +231,15 @@ gradient-generated commands can be converted safely with `gradient migrate`
 (`--dry-run` previews the change). Set `emitTarget` to `"command"` in the
 gradient config only when legacy `.claude/commands/` output is required. Phase B
 adds local recall hints and artifact adoption reporting, closing the gap between
-generating a workflow and actually using it.
+generating a workflow and actually using it. Phase C detects repeated pasted
+failures, exact recurring sequences, and repeated low-impact preferences across
+multiple sessions. It produces advisory troubleshooting/checklist skills and
+guarded project-preference rules without retaining pasted error bodies or
+inferring authorization from prior behavior.
 
 The opt-in `gradient autopilot` Stop-hook responder also ships today. The next
-v2 phases add non-lexical detectors, surface local behavior insights, and
-package approved artifacts for teams.
+v2 phases surface local behavior insights and package approved artifacts for
+teams.
 
 - Design spec: [`docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md`](docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md)
 - Implementation plan: [`docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md`](docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md)
