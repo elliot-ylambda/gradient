@@ -720,3 +720,8 @@ main:
   Codex plugin validator.
 - Current Claude Code documentation confirms Notification matchers
   `permission_prompt` and `idle_prompt`, including `|`-separated exact matching.
+- Final verification: 515 tests, typecheck, build, zero runtime audit findings,
+  packed global install, interactive clarification into both assistant targets,
+  matched-hook bundle/apply, real and missing notifier paths, and both plugin
+  validators. A read-only seven-day dogfood pass found 14 qualifying waits in
+  11 sessions (median 18 minutes).
