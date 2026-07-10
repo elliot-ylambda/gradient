@@ -216,7 +216,7 @@ export function mineSequences(
       const sig = assign(text);
       if (sig === null) { prev = null; continue; }          // unclustered → chain breaker
       if (prev && prev.sig !== sig) {
-        const key = `${prev.sig} ${sig}`;
+        const key = `${prev.sig}\u0000${sig}`;
         let p = pairs.get(key);
         if (!p) {
           if (pairs.size >= SEQ_MAX_BIGRAMS) { capped = true; prev = { sig, text }; continue; }
@@ -235,7 +235,7 @@ export function mineSequences(
   for (const [key, p] of pairs) {
     if (p.count < SEQ_MIN_COUNT || p.sessions.size < SEQ_MIN_SESSIONS) continue;
     bigrams.push({
-      steps: key.split(" "), count: p.count,
+      steps: key.split("\u0000"), count: p.count,
       sessions: p.sessions.size, sessionIds: [...p.sessions], examples: p.examples,
     });
   }
