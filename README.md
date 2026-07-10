@@ -4,7 +4,7 @@
 
 **The prompts you keep retyping into Claude Code and Codex, compiled into skills.**
 
-`gradient` reads your own Claude Code history, finds repeated prompts, error
+`gradient` reads your own Claude Code and Codex history, finds repeated prompts, error
 pastes, and answers, then generates the automations to stop — **skills, rules,
 loops, and hooks** —
 through a read-only **scan** → approve **review** → reversible **apply** flow.
@@ -46,6 +46,7 @@ gradient/
 
 ```bash
 npx gradient.md scan        # repeated prompts, error pastes, and answers in this project
+npx gradient.md init --target both # install the gradient skill for Claude Code + Codex
 npx gradient.md scan --user # all projects, last 7 days — your recent cross-project habits
 npx gradient.md scan --all  # all projects, no time limit (thorough; can be slow)
 npx gradient.md review      # inspect the ranked suggestions and their evidence
@@ -81,29 +82,29 @@ Claude Code skills go to `.claude/skills`; portable Codex skills go to the
 documented repository location `.agents/skills`. `cheapSkillModel` is used only
 for workflows the judge marks mechanical, and an empty string disables it.
 
-The default backend reuses your existing `claude` CLI auth — no API key required.
+The default backend reuses the CLI auth you already have: `claude` for the
+default Claude Code target and `codex exec --ephemeral` for a Codex-only target.
+No API key is required for local use.
 Clustering is local and LLM-free; only short candidate snippets ever reach a model
 — never whole transcripts — and a redaction pass strips secrets first.
 
-## Usage and billing
+## Model use and billing
 
-gradient calls Claude by spawning `claude -p` (Claude Code's non-interactive
-mode). Anthropic covers that under the **Agent SDK credit** included with a Pro
-or Max plan — a separate allowance from your interactive Claude Code usage. Two
-things draw on it:
+gradient uses the selected assistant's non-interactive CLI for short text-only
+decisions: `claude -p` or an isolated `codex exec --ephemeral`. Those calls use
+the account and limits attached to that CLI login. Two features make calls:
 
 - **`scan`** — one call per run, to name and rank the mined clusters.
 - **`autopilot`** — one call per stop, bounded by `autopilotBudget` (default 10
   per session, and clampable per repo in `gradient.md`).
 
-An always-on autopilot is therefore a recurring cost, not a free one. If that
+An always-on autopilot is therefore recurring usage, not a free operation. If that
 matters, lower the budget or set `max-mode: off` in the repos you don't want it
 running in.
 
-**For CI or anything shared, use an API key.** Anthropic's guidance is that
-shared production automation should run on the Claude Platform with a key rather
-than a personal subscription. gradient supports that path — set
-`ANTHROPIC_API_KEY` and pin the backend:
+**For CI or anything shared, use a service credential rather than a personal
+login.** gradient's built-in API path uses Anthropic: set `ANTHROPIC_API_KEY`
+and pin the backend:
 
 ```json
 // ~/.config/gradient/config.json
@@ -209,7 +210,7 @@ continuity off` removes only those two hooks.
 ## Share with your team
 
 After reviewing and applying the workflows you want, package only those
-manifest-tracked artifacts as a Claude Code plugin:
+manifest-tracked artifacts as a dual Claude Code/Codex plugin:
 
 ```bash
 npx gradient.md bundle team-kit              # skills, commands, and project rules
@@ -217,7 +218,9 @@ npx gradient.md bundle team-kit --with-hooks # also approved gradient-backed hoo
 claude --plugin-dir .gradient/bundle/team-kit
 ```
 
-The bundle contains no transcript, suggestion cache, evidence counts, or other
+The bundle includes both `.claude-plugin/plugin.json` and a validated
+`.codex-plugin/plugin.json`, with shared portable skills. It contains no
+transcript, suggestion cache, evidence counts, or other
 personal telemetry, and unapproved suggestions never enter it. Rules are
 included with an explicit copy instruction because plugins do not auto-load
 project rules. Hooks are opt-in and require teammates to have `gradient`
@@ -251,8 +254,9 @@ resumed sessions. Phase E closes the v2 funnel by packaging approved artifacts
 as validated team plugins, with hooks opt-in and personal evidence stripped.
 
 The multi-assistant stage writes each approved skill for every configured
-target and tracks/removes each copy independently. Codex transcript mining is
-implemented in the following stage of the same spec.
+target, tracks/removes each copy independently, mines both assistants into one
+shared evidence pool, and reports the approximate token cost of unautomated
+nudges, context re-explains, and repeated error pastes.
 
 The opt-in `gradient autopilot` Stop-hook responder also ships today. All five
 v2 phases are implemented.
@@ -267,6 +271,8 @@ v2 phases are implemented.
 - Phase C implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md)
 - Phase D implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md)
 - Phase E implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md)
+- Codex and cost design: [`docs/superpowers/specs/2026-07-09-gradient-codex-and-cost-design.md`](docs/superpowers/specs/2026-07-09-gradient-codex-and-cost-design.md)
+- Codex Stage 2 and cost plan: [`docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md`](docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md)
 
 ## License
 

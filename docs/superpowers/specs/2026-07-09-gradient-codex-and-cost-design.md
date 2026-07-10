@@ -1,7 +1,7 @@
 # gradient — Second Assistant (Codex) & Cost-Aware Artifacts — Design
 
 **Date:** 2026-07-09
-**Status:** Approved and in implementation
+**Status:** Implemented
 **Scope:** Spec 10. Two components: (1) **Codex as a second emit target** —
 staged multi-assistant support, exercising the emitter pluggability Spec 4
 Decision 9 reserved; (2) **cost-aware artifacts** — mechanical skills get a
@@ -77,7 +77,9 @@ workflow available in both agents.
 
 ## 5. Out of scope (YAGNI)
 
-- **Codex hooks, plugins, autopilot, AGENTS.md writes** — Decision 3.
+- **Codex hooks, autopilot, and AGENTS.md writes** — Decision 3. Phase E bundles
+  now include a Codex plugin manifest because the shared `skills/` payload is
+  already portable; Claude-only hooks remain absent from that manifest.
 - **Other assistants** (Gemini CLI, Cursor CLI) — the registry leaves the
   door open; no code until a user asks.
 - **Dollar accounting, budgets, or spend dashboards** — ccusage territory.
@@ -117,14 +119,13 @@ workflow available in both agents.
 - Cost section: fixture with known usage fields; chars/4 fallback; rows
   hide when inputs missing; zero-history no-op.
 
-## 8. Open questions for the implementation plans
+## 8. Resolved implementation questions
 
-- **Codex paths & schema** (Stage 1/2 blockers, verify at plan time):
-  skills directory location (repo vs `~/.codex/skills`), minimum
-  frontmatter Codex requires, sessions JSONL location and message shape.
-- Whether `model: haiku` (alias) is honored in skill frontmatter or a full
-  model id is required — pin against current Claude Code docs.
-- Whether Stage 2's collect cap should be shared with or separate from
-  `maxPrompts` (one budget across assistants vs per-source).
-- Whether merged cross-assistant evidence should weight sources equally or
-  favor the assistant the artifact targets.
+- Codex repo skills are `.agents/skills/<name>/SKILL.md`; user skills are
+  `~/.agents/skills`. Only `name` and `description` are emitted.
+- Codex sessions are local rollout JSONL under `~/.codex/sessions`; genuine
+  prompts use `event_msg/user_message`, with a guarded legacy fallback.
+- Claude Code documents the `model` skill field and accepts aliases such as
+  `haiku`; an empty `cheapSkillModel` disables it.
+- One `maxPrompts` recency budget is shared across assistants, and evidence is
+  weighted equally regardless of source.

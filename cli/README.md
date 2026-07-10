@@ -3,7 +3,7 @@
 The local-first `gradient` command-line tool.
 
 ```bash
-npx gradient.md init      # configure (reuses your `claude` auth — no API key needed)
+npx gradient.md init --target both # configure Claude Code + Codex (existing CLI auth)
 npx gradient.md scan      # read-only: find repeated prompts, error pastes, and answers
 npx gradient.md review    # approve the ones you want; gradient writes the artifacts
 npx gradient.md list      # see what it generated · npx gradient.md remove <name> to undo
@@ -17,11 +17,12 @@ npx gradient.md bundle team-kit # package approved artifacts as a plugin
 
 ## How it works
 
-1. Reads your Claude Code transcripts (`~/.claude/projects/**/*.jsonl`).
+1. Reads enabled local histories: Claude Code (`~/.claude/projects/**/*.jsonl`)
+   and Codex (`~/.codex/sessions/**/*.jsonl`). Spawned subagent logs are excluded.
 2. Clusters repeated prompts, failing-command pastes, and short Q→A preferences
    locally (no LLM) into candidate patterns. Pasted bodies are discarded.
-3. Sends only the top candidates to an LLM (the `claude` CLI by default, with an
-   Anthropic API-key fallback) to name and type them.
+3. Sends only the top candidates to an LLM (`claude` by default, `codex exec`
+   for a Codex-only target, with an Anthropic API-key fallback) to name and type them.
 4. You approve; it writes `.claude/skills/<name>/SKILL.md`, portable Codex
    skills under `.agents/skills/<name>/SKILL.md`, and project rules under
    `.claude/rules/`, prints `/loop` or user-rule instructions, or proposes
@@ -46,11 +47,12 @@ uses, last use, retypes caught, and stale-artifact removal suggestions.
 
 `gradient insights [--user] [--html]` is also LLM-free. It counts behavior
 signals such as nudges, interrupts, compacts, error pastes, and model churn,
-then routes them to concrete gradient actions. `gradient continuity on`
+quantifies the approximate tokens spent on automatable habits, then routes them
+to concrete gradient actions. `gradient continuity on`
 installs the paired, reversible checkpoint/recap hooks that preserve a redacted
 `progress.md` across compaction and resumed sessions.
 
-`gradient bundle <name> [--with-hooks]` rebuilds a Claude Code plugin under
+`gradient bundle <name> [--with-hooks]` rebuilds a dual Claude Code/Codex plugin under
 `.gradient/bundle/<name>/` from manifest-tracked artifacts only. It never copies
 the suggestion cache or evidence counts. The generated README explains the
 manual rule-copy step and the optional hooks' `gradient` dependency.
@@ -74,13 +76,12 @@ fails open — any error means the stop simply stands. The judge runs with every
 tool denied, so it can only decide, never act. A committed `gradient.md` at a
 repo root can lower autopilot's authority for everyone, never raise it.
 
-## Usage and billing
+## Model use and billing
 
-gradient calls Claude by spawning `claude -p`, which draws on the **Agent SDK
-credit** included with a Pro or Max plan — a separate allowance from interactive
-Claude Code usage. `scan` costs one call per run; `autopilot` costs one call per
-stop, so leaving it on is a recurring cost. For CI or anything shared, set
-`ANTHROPIC_API_KEY` and pin `"backend": "anthropic"` in your config.
+gradient uses `claude -p` or isolated `codex exec --ephemeral` calls under the
+account and limits of your existing CLI login. `scan` uses one classification
+call per run; Claude Code autopilot uses one decision call per stop. For CI or
+anything shared, set `ANTHROPIC_API_KEY` and pin `"backend": "anthropic"`.
 
 Full details: [Usage and billing](https://github.com/elliot-ylambda/gradient#usage-and-billing).
 

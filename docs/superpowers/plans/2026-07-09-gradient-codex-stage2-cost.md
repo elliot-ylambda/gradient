@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-09  
 **Spec:** `docs/superpowers/specs/2026-07-09-gradient-codex-and-cost-design.md`  
-**Status:** In implementation
+**Status:** Implemented
 
 ## Verified inputs
 
@@ -42,3 +42,20 @@
   supported assistant recorded it.
 - Tokens are reported, never dollars. Cached and uncached recorded tokens stay
   in the assistant's own total rather than applying a pricing model.
+
+## Execution verification
+
+- Full repository suite, typecheck, build, and package dry-run passed after
+  implementation (483 tests before the final path-alias regression was added).
+- Real project dogfood collected 83 Claude Code transcripts and 4 root Codex
+  rollouts, parsed 273 prompts with zero malformed Codex records, filtered the
+  combined corpus to 142 human prompts, and mined one shared candidate window.
+- A synthetic Codex-only CLI run collected three rollout files, called the live
+  `codex exec --ephemeral` backend, and cached one command suggestion with
+  `{count: 3, sessions: 3, assistants: ["codex"]}` evidence.
+- Live Codex discovered and executed a gradient-emitted `.agents/skills` skill
+  in a fresh repository.
+- The plugin-creator validator accepted a bundle emitted by the built code with
+  both `.claude-plugin` and `.codex-plugin` manifests.
+- Dogfood exposed a macOS `/var` versus `/private/var` project identity gap;
+  collector matching now canonicalizes existing paths and has a symlink test.

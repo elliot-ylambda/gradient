@@ -4,9 +4,9 @@
 
 **Goal:** `apply` fans skill artifacts out to every configured assistant (`targets: ["claude-code", "codex"]`), tracked per-target in the manifest and cleanly removable; mechanical skills carry a cheap-model frontmatter the reviewer sees before approving. Spec: `docs/superpowers/specs/2026-07-09-gradient-codex-and-cost-design.md` (Component 1 **Stage 1** + Component 2's mechanical-skill flag).
 
-**Deferred to follow-up plans (per spec Decision 1 and the Phase D dependency):** Stage 2 (mining Codex session JSONL) and the `insights` "cost of unautomated habits" section. Neither is stubbed here.
+**Follow-up completed:** Stage 2 (Codex session mining) and the `insights` token-cost section are implemented by `2026-07-09-gradient-codex-stage2-cost.md`.
 
-**Architecture:** `emit()` gains an `assistant` dimension; a new `emit/codex-skill.ts` shares the description builder with the Claude skill emitter. `applySuggestion` loops the resolved targets, writing under `.claude/` or `.codex/` with per-root containment, one manifest entry per (name, target). The detect judge flags `mechanical` command payloads; `emitSkill` adds `model:` only for those, and `review` prints the choice.
+**Architecture:** `emit()` gains an `assistant` dimension; a new `emit/codex-skill.ts` shares the description builder with the Claude skill emitter. `applySuggestion` loops the resolved targets, writing under `.claude/` or `.agents/` with per-root containment, one manifest entry per (name, target). The detect judge flags `mechanical` command payloads; `emitSkill` adds `model:` only for those, and `review` prints the choice.
 
 **Tech Stack:** TypeScript (ESM, `.js` import suffixes), Node ≥ 20, vitest, zero new runtime dependencies. All work in `cli/`.
 
@@ -233,7 +233,7 @@ git commit -m "feat(core): assistant targets config + (name,target) manifest ide
 - Consumes: A3's `emitSkill`, `sanitizeName`.
 - Produces:
   - `emit/skill.ts`: `buildSkillDescription(title: string, triggers?: string[]): string` (exported; A3's inline logic extracted verbatim); `emitSkill(s, opts?: { model?: string })` — emits `model: <JSON string>` in frontmatter **only when** `opts.model` is set **and** `s.payload.mechanical === true`
-  - `emit/codex-skill.ts`: `CODEX_SKILLS_DIR = ".codex/skills"`; `emitCodexSkill(s: Suggestion): { path: string; content: string }` — `name` + `description` frontmatter only, body verbatim
+  - `emit/codex-skill.ts`: `CODEX_SKILLS_DIR = ".agents/skills"`; `emitCodexSkill(s: Suggestion): { path: string; content: string }` — `name` + `description` frontmatter only, body verbatim
   - `emit/index.ts`: `interface EmitOpts { target?: EmitTarget; assistant?: Assistant; cheapModel?: string }`; skill results gain `assistant: Assistant`; `emit(s, { assistant: "codex" })` throws for loop/hook payloads.
 
 - [ ] **Step 1: Write the failing tests** — append to `cli/src/core/emit/emit.test.ts`:
@@ -247,7 +247,7 @@ const mech = { id: "1", name: "fix-push", title: "Fix the push", rationale: "",
     triggers: ["gp failed"], mechanical: true } };
 
 describe("emitCodexSkill", () => {
-  it("writes under .codex/skills with minimal frontmatter", () => {
+  it("writes under .agents/skills with minimal frontmatter", () => {
     const { path, content } = emitCodexSkill(mech);
     expect(path).toBe(`${CODEX_SKILLS_DIR}/fix-push/SKILL.md`);
     expect(content).toContain('name: "fix-push"');
@@ -275,7 +275,7 @@ describe("assistant dispatch", () => {
     expect(r.kind).toBe("skill");
     if (r.kind === "skill") {
       expect(r.assistant).toBe("codex");
-      expect(r.path.startsWith(".codex/")).toBe(true);
+      expect(r.path.startsWith(".agents/")).toBe(true);
     }
   });
   it("claude-code skill results carry their assistant", () => {
@@ -329,7 +329,7 @@ import { sanitizeName } from "../security.js";
 import { buildSkillDescription } from "./skill.js";
 
 /** Pinned per spec §8; verify against current Codex docs before first use. */
-export const CODEX_SKILLS_DIR = ".codex/skills";
+export const CODEX_SKILLS_DIR = ".agents/skills";
 
 /** Codex SKILL.md: minimal frontmatter (name, description), body verbatim,
  * never a model line (Spec 10 Decisions 3, 5, 7). */
@@ -412,10 +412,10 @@ it("fans a command out to both assistants with per-target manifest entries", asy
   const r = await applySuggestion(mech, dir, { targets: ["claude-code", "codex"], cheapModel: "haiku" });
   expect(r.writes.map(w => w.target)).toEqual(["claude-code", "codex"]);
   expect(r.writes[0].path).toContain(join(".claude", "skills", "fix-push"));
-  expect(r.writes[1].path).toContain(join(".codex", "skills", "fix-push"));
+  expect(r.writes[1].path).toContain(join(".agents", "skills", "fix-push"));
   const manifest = await loadManifest(dir);
   expect(manifest).toHaveLength(2);
-  expect(manifest.find(e => e.target === "codex")?.path).toContain(".codex");
+  expect(manifest.find(e => e.target === "codex")?.path).toContain(".agents");
 });
 
 it("skips codex for loop payloads and reports it", async () => {
@@ -469,7 +469,7 @@ export async function applySuggestion(
     let entryPath = "";
     let type: ArtifactType;
     if (result.kind === "command" || result.kind === "skill") {
-      const root = target === "codex" ? ".codex" : ".claude";
+      const root = target === "codex" ? ".agents" : ".claude";
       const abs = join(projectDir, result.path);
       assertInside(join(projectDir, root), abs);
       await mkdir(dirname(abs), { recursive: true });
@@ -517,7 +517,7 @@ git commit -m "feat(apply): fan out to configured assistants; per-target manifes
 - Consumes: `resolveTargets`, `resolveCheapModel`, `removeEntries`, `ApplyResult.writes`.
 - Produces:
   - `applyByIds` and `review` resolve `{ targets, cheapModel, emitTarget }` from config once and pass them through.
-  - `remove` unlinks **every** target's file (and A4's emptied-skill-dir cleanup per entry, `.codex` included).
+  - `remove` unlinks **every** target's file (and A4's emptied-skill-dir cleanup per entry, `.agents` included).
   - `list` renders a `target` column value only for non-default targets.
   - `detect` system prompt asks for `mechanical` with the canonical yes/no examples (spec §4).
   - `readlinePrompter(cheapModel?: string)` prints `emits with model: <m>` for mechanical command payloads.
@@ -533,7 +533,7 @@ it("remove deletes artifacts for every target", async () => {
   await applySuggestion(s, dir, { targets: ["claude-code", "codex"] });
   expect(await remove(dir, "fix-push")).toBe(true);
   await expect(stat(join(dir, ".claude", "skills", "fix-push"))).rejects.toThrow();
-  await expect(stat(join(dir, ".codex", "skills", "fix-push"))).rejects.toThrow();
+  await expect(stat(join(dir, ".agents", "skills", "fix-push"))).rejects.toThrow();
   expect(await loadManifest(dir)).toHaveLength(0);
 });
 ```
