@@ -715,5 +715,8 @@ main:
 - Hook matchers survive both direct emission and Phase E plugin bundling. The
   installed binary also dispatches `notify` through a lightweight path instead
   of loading the LLM-facing CLI graph.
+- Release dogfooding upgraded Phase E's Claude manifest with author metadata;
+  generated bundles now pass both `claude plugin validate --strict` and the
+  Codex plugin validator.
 - Current Claude Code documentation confirms Notification matchers
   `permission_prompt` and `idle_prompt`, including `|`-separated exact matching.

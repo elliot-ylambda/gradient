@@ -34,6 +34,7 @@ describe("buildBundle", () => {
       name: "team-toolkit",
       description: "Workflows mined from real usage by gradient",
       version: "0.1.0",
+      author: { name: "gradient" },
     });
     const codexManifest = JSON.parse(await readFile(join(result.dir, ".codex-plugin", "plugin.json"), "utf8"));
     expect(codexManifest).toMatchObject({

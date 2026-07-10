@@ -159,7 +159,12 @@ export async function buildBundle(
   await put(
     root,
     join(".claude-plugin", "plugin.json"),
-    `${JSON.stringify({ name: safeName, description: BUNDLE_DESCRIPTION, version: "0.1.0" }, null, 2)}\n`,
+    `${JSON.stringify({
+      name: safeName,
+      description: BUNDLE_DESCRIPTION,
+      version: "0.1.0",
+      author: { name: "gradient" },
+    }, null, 2)}\n`,
     files,
   );
   await put(
