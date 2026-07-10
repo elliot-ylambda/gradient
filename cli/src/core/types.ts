@@ -3,6 +3,20 @@ export type Confidence = "high" | "inferred" | "flagged";
 export type ArtifactType = "command" | "loop" | "hook" | "skill" | "rule";
 export type Assistant = "claude-code" | "codex";
 
+/** One complete reading of an ambiguous pattern. */
+export interface ClarifyOption {
+  label: string;
+  body: string;
+}
+
+/** Judge-authored disambiguation for a flagged suggestion. `chosen` is set
+ * only after the user resolves it during review. */
+export interface Clarify {
+  question: string;
+  options: ClarifyOption[];
+  chosen?: string;
+}
+
 /** One genuine user prompt after parse + filter. (The mining pipeline consumes
  * only user text; assistant turns are rendered by core/tail.ts for autopilot.) */
 export interface Turn {
@@ -45,6 +59,7 @@ export interface Suggestion {
   rationale: string;
   evidence: { count: number; sessions: number; assistants?: Assistant[] };
   confidence: Confidence;
+  clarify?: Clarify;
   examples?: string[];   // representative redacted prompts, for `explain`
   payload: SuggestionPayload;
 }
