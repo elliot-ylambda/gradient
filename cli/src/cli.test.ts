@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseCliArgs, main } from "./cli.js";
 import { spawnDetached } from "./core/spawn.js";
 import { migrate } from "./commands/migrate.js";
@@ -8,6 +11,7 @@ import { insights, writeInsightsHtml } from "./commands/insights.js";
 import { continuityStatus, setContinuity } from "./commands/continuity.js";
 import { recap } from "./commands/recap.js";
 import { bundleCommand } from "./commands/bundle.js";
+import { notify } from "./commands/notify.js";
 
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
 vi.mock("./commands/migrate.js", () => ({
@@ -72,6 +76,9 @@ vi.mock("./commands/bundle.js", () => ({
     ],
     skipped: ["a-loop"],
   })),
+}));
+vi.mock("./commands/notify.js", () => ({
+  notify: vi.fn(async () => {}),
 }));
 
 describe("parseCliArgs", () => {
@@ -165,6 +172,40 @@ describe("main", () => {
     expect(logs.join("\n")).toContain("gradient");
   });
 
+  it("renders clarification options and the chosen provenance in explain", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-cli-explain-"));
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "suggestions.json"), JSON.stringify([{
+      id: "clarify-1",
+      name: "lgtm",
+      title: "LGTM approval",
+      rationale: "Ambiguous intent",
+      evidence: { count: 5, sessions: 3 },
+      confidence: "high",
+      payload: { type: "command", commandName: "lgtm", body: "Approve and merge." },
+      clarify: {
+        question: "Acknowledge or merge?",
+        chosen: "merge",
+        options: [
+          { label: "acknowledge", body: "Treat as sign-off only." },
+          { label: "merge", body: "Approve and merge." },
+        ],
+      },
+    }]));
+    const previous = process.cwd();
+    const logs: string[] = [];
+    try {
+      process.chdir(dir);
+      expect(await main(["explain", "lgtm"], { log: line => logs.push(line) })).toBe(0);
+    } finally {
+      process.chdir(previous);
+    }
+    const output = logs.join("\n");
+    expect(output).toContain("clarify: Acknowledge or merge?");
+    expect(output).toContain("✓ merge");
+    expect(output).toContain("· acknowledge");
+  });
+
   it("returns 2 for an unknown command", async () => {
     const logs: string[] = [];
     const code = await main(["wat"], { log: (m) => logs.push(m) });
@@ -228,6 +269,29 @@ describe("respond dispatch", () => {
     const code = await main(["respond"], { log: s => lines.push(s), readStdin: async () => ({}) });
     expect(code).toBe(0);
     expect(lines).toEqual([]);
+  });
+});
+
+describe("notify dispatch", () => {
+  it("lists the hook target, drains stdin, stays silent, and exits zero", async () => {
+    const help: string[] = [];
+    await main([], { log: line => help.push(line) });
+    expect(help.join("\n")).toContain("gradient notify");
+
+    vi.mocked(notify).mockClear();
+    let drained = false;
+    const logs: string[] = [];
+    const code = await main(["notify"], {
+      log: line => logs.push(line),
+      readStdin: async () => {
+        drained = true;
+        return { ignored: "transcript text" };
+      },
+    });
+    expect(code).toBe(0);
+    expect(drained).toBe(true);
+    expect(vi.mocked(notify)).toHaveBeenCalledOnce();
+    expect(logs).toEqual([]);
   });
 });
 

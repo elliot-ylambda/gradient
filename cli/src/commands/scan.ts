@@ -22,6 +22,7 @@ import type { LLMBackend } from "../llm/backend.js";
 import { refreshRecallIndex } from "./recall.js";
 import { detectPasteCandidates, extractPasteKey } from "../core/paste.js";
 import { extractAnswerPairs, mineAnswerCandidates } from "../core/answers.js";
+import { attentionSuggestion, mineAttention } from "../core/attention.js";
 
 export interface ScanOptions {
   scope: "project" | "all";
@@ -176,6 +177,28 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     } catch (e) {
       log(`skipping invalid suggestion: ${(e as Error).message}`);
     }
+  }
+
+  // Attention notifications are Claude-specific lifecycle hooks. Mine only
+  // Claude transcripts even when the broader habit pool also includes Codex.
+  try {
+    const attention = await mineAttention(claudeFiles);
+    if (
+      attention &&
+      !valid.some(suggestion =>
+        suggestion.payload.type === "hook" && suggestion.payload.event === "Notification",
+      )
+    ) {
+      const suggestion = attentionSuggestion(attention);
+      validateSuggestion(suggestion);
+      valid.push(suggestion);
+      log(
+        `attention: ${attention.gaps} waits ≥5min across ${attention.sessions} sessions — ` +
+        "notification hook suggested",
+      );
+    }
+  } catch (error) {
+    log(`attention check failed: ${(error as Error).message}`);
   }
 
   const gdir = gradientDir(projectDir);

@@ -43,6 +43,50 @@ describe("assertHookRunnable", () => {
       payload: { type: "hook", event: "SessionStart", subcommand: "scan", description: "d" } };
     expect(() => assertHookRunnable(s)).not.toThrow();
   });
+  it("treats notify as a known hook target", () => {
+    const hook: Suggestion = {
+      ...good,
+      payload: {
+        type: "hook",
+        event: "Notification",
+        matcher: "permission_prompt|idle_prompt",
+        subcommand: "notify",
+        description: "d",
+      },
+    };
+    expect(() => assertHookRunnable(hook)).not.toThrow();
+  });
+});
+
+describe("optional suggestion fields", () => {
+  it("accepts a complete clarification and rejects malformed options", () => {
+    const clarify = {
+      question: "Acknowledge or merge?",
+      options: [
+        { label: "acknowledge", body: "Acknowledge only." },
+        { label: "merge", body: "Approve and merge." },
+      ],
+    };
+    expect(() => validateSuggestion({ ...good, confidence: "flagged", clarify })).not.toThrow();
+    expect(() => validateSuggestion({
+      ...good,
+      confidence: "flagged",
+      clarify: { ...clarify, options: [{ label: "only", body: "one" }] },
+    })).toThrow(/clarify/);
+  });
+
+  it("rejects a non-string hook matcher", () => {
+    expect(() => validateSuggestion({
+      ...good,
+      payload: {
+        type: "hook",
+        event: "Notification",
+        matcher: 42,
+        subcommand: "notify",
+        description: "d",
+      },
+    })).toThrow(/matcher/);
+  });
 });
 
 describe("triggers validation", () => {

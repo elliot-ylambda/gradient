@@ -690,3 +690,38 @@ Expected: PASS; build clean.
 git add cli/src/commands/notify.ts cli/src/commands/notify.test.ts cli/src/commands/scan.ts cli/src/commands/scan.test.ts cli/src/cli.ts README.md
 git commit -m "feat(cli): gradient notify + attention-gap suggestion wiring"
 ```
+
+---
+
+## Execution notes (2026-07-10)
+
+All four tasks are implemented. The execution preserved the plan's user-visible
+contract and adapted it to the later multi-assistant and bundle work already on
+main:
+
+- `review` keeps its current config/options parameter; `Clarifier` is an option,
+  so Claude/Codex target fan-out and cheap-model settings remain intact.
+- Declining a clarification skips the unresolved suggestion immediately. This
+  enforces the spec's “flagged and unapplied” rule even if a custom approval
+  prompter would otherwise approve it.
+- Clarification provenance is persisted before artifact I/O, so a failed target
+  write cannot erase the user's choice. Cache validation accepts only the two
+  valid states: flagged/unresolved or high/chosen.
+- Attention mining reads Claude transcripts only. Codex prompts remain part of
+  shared habit mining, but cannot create a Claude lifecycle-hook suggestion.
+- Question-tail detection reuses Phase C's detector; duplicate transcript paths
+  cannot inflate the five-session floor, and even-sized medians use the
+  conventional midpoint.
+- Hook matchers survive both direct emission and Phase E plugin bundling. The
+  installed binary also dispatches `notify` through a lightweight path instead
+  of loading the LLM-facing CLI graph.
+- Release dogfooding upgraded Phase E's Claude manifest with author metadata;
+  generated bundles now pass both `claude plugin validate --strict` and the
+  Codex plugin validator.
+- Current Claude Code documentation confirms Notification matchers
+  `permission_prompt` and `idle_prompt`, including `|`-separated exact matching.
+- Final verification: 515 tests, typecheck, build, zero runtime audit findings,
+  packed global install, interactive clarification into both assistant targets,
+  matched-hook bundle/apply, real and missing notifier paths, and both plugin
+  validators. A read-only seven-day dogfood pass found 14 qualifying waits in
+  11 sessions (median 18 minutes).

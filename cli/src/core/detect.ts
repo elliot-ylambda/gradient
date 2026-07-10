@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Candidate, Suggestion, Confidence } from "./types.js";
+import type { Candidate, Suggestion, Confidence, Clarify } from "./types.js";
 import { sanitizeName, redact } from "./security.js";
 import type { LLMBackend } from "../llm/backend.js";
 
@@ -7,6 +7,26 @@ const ALLOWED_CONFIDENCE = new Set(["high", "inferred", "flagged"]);
 
 function idFor(signature: string): string {
   return createHash("sha1").update(signature).digest("hex").slice(0, 10);
+}
+
+/** Tolerant reader for an LLM-authored clarification: a fully valid shape or
+ * nothing. Model-provided resolution state is deliberately discarded. */
+export function sanitizeClarify(value: unknown): Clarify | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as { question?: unknown; options?: unknown };
+  if (typeof candidate.question !== "string") return undefined;
+  if (!Array.isArray(candidate.options) || candidate.options.length < 2 || candidate.options.length > 3) {
+    return undefined;
+  }
+
+  const options = [];
+  for (const option of candidate.options) {
+    if (!option || typeof option !== "object") return undefined;
+    const fields = option as { label?: unknown; body?: unknown };
+    if (typeof fields.label !== "string" || typeof fields.body !== "string") return undefined;
+    options.push({ label: fields.label, body: fields.body });
+  }
+  return { question: candidate.question, options };
 }
 
 export function candidateToCommand(c: Candidate): Suggestion {
@@ -64,7 +84,10 @@ export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt:
     "(their signature joins the steps with ' → '). For each, produce ONE command suggestion whose " +
     "body performs the steps in order as a numbered list, and whose triggers are phrasings of the " +
     "FIRST step only — the user types the first step; the skill carries them to the end. " +
-    "Respond ONLY with JSON: {\"suggestions\":[{sourceSignatures,name,title,rationale,confidence,payload}]} where payload is one of " +
+    "When you mark a suggestion 'flagged' because the user's intent is ambiguous, ALSO include " +
+    "clarify: {question, options:[{label, body}]} with 2-3 options — one short question, and per " +
+    "option a complete replacement payload body reflecting that reading. " +
+    "Respond ONLY with JSON: {\"suggestions\":[{sourceSignatures,name,title,rationale,confidence,clarify?,payload}]} where payload is one of " +
     "{type:'command',commandName,body,triggers?,mechanical?} | {type:'loop',instruction,cadence?} | {type:'hook',event:'PreCompact',subcommand:'checkpoint',description} | {type:'rule',target:'project'|'user',ruleName,text}. " +
     "confidence must be exactly one of \"high\", \"inferred\", or \"flagged\".";
   // Redact secrets from examples/signatures before they ever leave the machine (spec §7).
@@ -86,6 +109,7 @@ interface LlmSuggestion {
   sourceSignatures?: string[];
   sourceSignature?: string;   // legacy single form still tolerated
   name: string; title: string; rationale: string; confidence: Confidence;
+  clarify?: unknown;
   payload: Suggestion["payload"];
 }
 
@@ -118,6 +142,10 @@ export async function detect(
         const assistants = [...new Set(matched.flatMap(c => c.assistants ?? ["claude-code" as const]))]
           .sort((a, b) => a === b ? 0 : a === "claude-code" ? -1 : 1);
         const examples = matched.flatMap(c => c.examples).map(redact).slice(0, 5);
+        const confidence = ALLOWED_CONFIDENCE.has(s.confidence) ? s.confidence : "inferred";
+        const clarify = confidence === "flagged" && s.payload.type === "command"
+          ? sanitizeClarify(s.clarify)
+          : undefined;
         return {
           id: idFor(s.payload.type === "command" ? (s.payload.commandName ?? s.name) : s.name),
           name: s.name,
@@ -128,7 +156,8 @@ export async function detect(
             sessions,
             ...(assistants.length ? { assistants } : {}),
           },
-          confidence: ALLOWED_CONFIDENCE.has(s.confidence) ? s.confidence : "inferred",
+          confidence,
+          ...(clarify ? { clarify } : {}),
           examples,
           payload: s.payload,
         };

@@ -26,7 +26,7 @@ function questionSimilarity(a: string, b: string): number {
   return jaccard === 0 ? 0 : (2 * jaccard) / (1 + jaccard);
 }
 
-function endsWithQuestion(text: string): boolean {
+export function endsWithQuestion(text: string): boolean {
   return text.trim().slice(-40).includes("?");
 }
 

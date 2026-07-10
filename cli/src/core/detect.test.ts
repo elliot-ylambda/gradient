@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detect, candidateToCommand, buildDetectPrompt } from "./detect.js";
+import { detect, candidateToCommand, buildDetectPrompt, sanitizeClarify } from "./detect.js";
 import type { Candidate } from "./types.js";
 
 const cand = (signature: string, count: number, confidence: any = "high"): Candidate =>
@@ -47,6 +47,12 @@ describe("buildDetectPrompt", () => {
     expect(system).toContain("every merged cluster's signature");
   });
 
+  it("asks for clarify options on ambiguous flagged suggestions", () => {
+    const { system } = buildDetectPrompt([]);
+    expect(system).toContain("clarify");
+    expect(system).toContain("flagged");
+  });
+
   it("describes paste and answer kinds and the rule payload", () => {
     const { system } = buildDetectPrompt([]);
     expect(system).toContain("'paste'");
@@ -65,6 +71,52 @@ describe("buildDetectPrompt", () => {
       confidence: "high",
     }]);
     expect(JSON.parse(prompt)[0].kind).toBe("paste");
+  });
+});
+
+describe("sanitizeClarify", () => {
+  const good = {
+    question: "Acknowledge or merge?",
+    options: [
+      { label: "acknowledge", body: "Treat as sign-off only." },
+      { label: "merge", body: "Approve and merge once checks pass." },
+    ],
+  };
+
+  it("passes a valid 2-option clarify through", () => {
+    expect(sanitizeClarify(good)).toEqual(good);
+  });
+
+  it("accepts 3 options, rejects 1 and 4", () => {
+    const opt = good.options[0];
+    expect(sanitizeClarify({ ...good, options: [opt, opt, opt] })).toBeDefined();
+    expect(sanitizeClarify({ ...good, options: [opt] })).toBeUndefined();
+    expect(sanitizeClarify({ ...good, options: [opt, opt, opt, opt] })).toBeUndefined();
+  });
+
+  it("rejects non-string fields and missing pieces", () => {
+    expect(sanitizeClarify(undefined)).toBeUndefined();
+    expect(sanitizeClarify({ question: 1, options: good.options })).toBeUndefined();
+    expect(sanitizeClarify({ question: "q", options: [{ label: "a", body: 2 }, good.options[0]] })).toBeUndefined();
+    expect(sanitizeClarify({ question: "q" })).toBeUndefined();
+  });
+
+  it("strips unknown keys from options and never trusts a chosen value from the model", () => {
+    const noisy = {
+      question: "q",
+      chosen: "a",
+      options: [
+        { label: "a", body: "b", extra: true },
+        { label: "c", body: "d" },
+      ],
+    };
+    expect(sanitizeClarify(noisy)).toEqual({
+      question: "q",
+      options: [
+        { label: "a", body: "b" },
+        { label: "c", body: "d" },
+      ],
+    });
   });
 });
 
@@ -168,6 +220,65 @@ describe("detect", () => {
     const out = await detect([cand("x", 5)], llm);
     expect(out.length).toBe(1);
     expect(out[0].confidence).toBe("inferred");
+  });
+
+  it("keeps only a valid clarify from an ambiguous flagged suggestion", async () => {
+    const llm = {
+      name: "fake",
+      available: async () => true,
+      complete: async () => JSON.stringify({ suggestions: [
+        {
+          sourceSignature: "lgtm",
+          name: "approve",
+          title: "Approve",
+          rationale: "ambiguous intent",
+          confidence: "flagged",
+          clarify: {
+            question: "Acknowledge or merge?",
+            chosen: "merge",
+            options: [
+              { label: "acknowledge", body: "Treat as sign-off only.", ignored: true },
+              { label: "merge", body: "Approve and merge once checks pass." },
+            ],
+          },
+          payload: { type: "command", commandName: "approve", body: "ambiguous" },
+        },
+        {
+          sourceSignature: "ship",
+          name: "ship",
+          title: "Ship",
+          rationale: "clear intent",
+          confidence: "high",
+          clarify: {
+            question: "Should not survive",
+            options: [
+              { label: "a", body: "a" },
+              { label: "b", body: "b" },
+            ],
+          },
+          payload: { type: "command", commandName: "ship", body: "ship" },
+        },
+        {
+          sourceSignature: "review",
+          name: "review",
+          title: "Review",
+          rationale: "bad clarify",
+          confidence: "flagged",
+          clarify: { question: "Only one?", options: [{ label: "a", body: "a" }] },
+          payload: { type: "command", commandName: "review", body: "review" },
+        },
+      ] }),
+    };
+    const out = await detect([cand("lgtm", 5), cand("ship", 5), cand("review", 5)], llm);
+    expect(out[0].clarify).toEqual({
+      question: "Acknowledge or merge?",
+      options: [
+        { label: "acknowledge", body: "Treat as sign-off only." },
+        { label: "merge", body: "Approve and merge once checks pass." },
+      ],
+    });
+    expect(out[1].clarify).toBeUndefined();
+    expect(out[2].clarify).toBeUndefined();
   });
 
   it("merges synonymous clusters, summing counts and unioning sessions", async () => {

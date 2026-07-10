@@ -34,6 +34,7 @@ describe("buildBundle", () => {
       name: "team-toolkit",
       description: "Workflows mined from real usage by gradient",
       version: "0.1.0",
+      author: { name: "gradient" },
     });
     const codexManifest = JSON.parse(await readFile(join(result.dir, ".codex-plugin", "plugin.json"), "utf8"));
     expect(codexManifest).toMatchObject({
@@ -147,7 +148,13 @@ describe("buildBundle", () => {
       rationale: "",
       confidence: "high",
       evidence: { count: 100, sessions: 90 },
-      payload: { type: "hook", event: "PreCompact", subcommand: "checkpoint", description: "d" },
+      payload: {
+        type: "hook",
+        event: "PreCompact",
+        matcher: "compact",
+        subcommand: "checkpoint",
+        description: "d",
+      },
     }]));
     await addEntry(dir, {
       name: "pre-compact-checkpoint",
@@ -159,6 +166,7 @@ describe("buildBundle", () => {
     const result = await buildBundle(dir, "kit", { withHooks: true });
     const hooks = JSON.parse(await readFile(join(result.dir, "hooks", "hooks.json"), "utf8"));
     expect(hooks.hooks.PreCompact[0].hooks[0]).toEqual({ type: "command", command: "gradient checkpoint" });
+    expect(hooks.hooks.PreCompact[0].matcher).toBe("compact");
     expect(await readFile(join(result.dir, "README.md"), "utf8")).toContain("need gradient installed");
   });
 
