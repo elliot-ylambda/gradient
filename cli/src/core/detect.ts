@@ -36,12 +36,17 @@ export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt:
     "the only supported hook event is PreCompact backed by the gradient subcommand 'checkpoint'). " +
     "Merge clusters that mean the same thing (e.g. 'lgtm' and 'looks good') into ONE suggestion. " +
     "Echo back EVERY merged cluster's exact 'signature' in a 'sourceSignatures' string array so evidence can be summed. " +
+    "Clusters with kind 'sequence' are ordered multi-step workflows the user performs in order " +
+    "(their signature joins the steps with ' → '). For each, produce ONE command suggestion whose " +
+    "body performs the steps in order as a numbered list, and whose triggers are phrasings of the " +
+    "FIRST step only — the user types the first step; the skill carries them to the end. " +
     "Respond ONLY with JSON: {\"suggestions\":[{sourceSignatures,name,title,rationale,confidence,payload}]} where payload is one of " +
     "{type:'command',commandName,body} | {type:'loop',instruction,cadence?} | {type:'hook',event:'PreCompact',subcommand:'checkpoint',description}. " +
     "confidence must be exactly one of \"high\", \"inferred\", or \"flagged\".";
   // Redact secrets from examples/signatures before they ever leave the machine (spec §7).
   const prompt = JSON.stringify(
     cands.map(c => ({
+      ...(c.kind !== "unknown" ? { kind: c.kind } : {}),
       signature: redact(c.signature),
       count: c.count,
       sessions: c.sessions,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detect, candidateToCommand } from "./detect.js";
+import { detect, candidateToCommand, buildDetectPrompt } from "./detect.js";
 import type { Candidate } from "./types.js";
 
 const cand = (signature: string, count: number, confidence: any = "high"): Candidate =>
@@ -131,4 +131,20 @@ describe("detect", () => {
     expect(out[0].examples?.[0]).toContain("[REDACTED]");
     expect(out[0].examples?.[0]).not.toContain("sk-ant-abc123def");
   });
+});
+
+it("briefs the model on sequence candidates and forwards their kind", () => {
+  const seq = { kind: "sequence" as const, signature: "review the spec → write the plan",
+    examples: ["review the spec ⏎ write the plan"], count: 5, sessions: 3,
+    sessionIds: ["a", "b", "c"], confidence: "high" as const };
+  const { system, prompt } = buildDetectPrompt([seq]);
+  expect(system).toContain("sequence");
+  expect(system).toContain("numbered");
+  expect(JSON.parse(prompt)[0].kind).toBe("sequence");
+});
+
+it("omits kind for unknown candidates (prompt stays unchanged for them)", () => {
+  const c = { kind: "unknown" as const, signature: "lgtm", examples: ["lgtm"],
+    count: 5, sessions: 3, sessionIds: ["a"], confidence: "high" as const };
+  expect(JSON.parse(buildDetectPrompt([c]).prompt)[0].kind).toBeUndefined();
 });
