@@ -126,6 +126,20 @@ describe("setRecall / recallStatus", () => {
     await setRecall(false, dir, home);
     expect((await recallStatus(dir)).installed).toBe(false);
   });
+
+  it("upgrades an existing recall hook to timeout 5", async () => {
+    await mkdir(join(dir, ".claude"), { recursive: true });
+    await writeFile(join(dir, ".claude", "settings.json"), JSON.stringify({
+      hooks: {
+        UserPromptSubmit: [{
+          hooks: [{ type: "command", command: "gradient recall" }],
+        }],
+      },
+    }));
+    await setRecall(true, dir, home);
+    const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.json"), "utf8"));
+    expect(settings.hooks.UserPromptSubmit[0].hooks[0].timeout).toBe(5);
+  });
 });
 
 async function seedSuggestion(name: string): Promise<void> {

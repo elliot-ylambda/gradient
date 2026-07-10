@@ -171,12 +171,27 @@ export async function recallIndexFresh(
 ): Promise<boolean> {
   const builtAt = Date.parse(index.builtAt);
   if (!Number.isFinite(builtAt)) return false;
-  for (const { root } of artifactRoots(projectDir, home)) {
+  for (const { root, kind } of artifactRoots(projectDir, home)) {
     try {
       // ISO timestamps have millisecond precision while stat() can expose
       // fractional milliseconds. Compare at the shared precision so a root
       // created just before the index is not immediately considered stale.
       if (Math.floor((await stat(root)).mtimeMs) > builtAt) return false;
+      const names = await readdir(root);
+      for (const name of names) {
+        const path = kind === "skill"
+          ? join(root, name, "SKILL.md")
+          : name.endsWith(".md")
+            ? join(root, name)
+            : null;
+        if (!path) continue;
+        try {
+          if (Math.floor((await stat(path)).mtimeMs) > builtAt) return false;
+        } catch {
+          // A root mtime change catches removals; unreadable unrelated entries
+          // do not make the hook fail closed.
+        }
+      }
     } catch {
       // Missing roots are valid and contribute no artifacts.
     }

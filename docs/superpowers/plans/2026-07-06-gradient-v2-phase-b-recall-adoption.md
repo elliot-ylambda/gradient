@@ -47,7 +47,7 @@
   - `recallIndexPath(projectDir: string): string` → `<projectDir>/.gradient/recall.json`
   - `buildRecallIndex(projectDir: string, home?: string): Promise<RecallIndex>` — scans four roots: `<projectDir>/.claude/commands/*.md`, `<projectDir>/.claude/skills/*/SKILL.md`, `<home>/.claude/commands/*.md`, `<home>/.claude/skills/*/SKILL.md`. Missing roots are fine.
   - `saveRecallIndex(projectDir, index): Promise<void>` / `loadRecallIndex(projectDir): Promise<RecallIndex | null>` (corrupt/absent → null)
-  - `recallIndexFresh(index: RecallIndex, projectDir: string, home?: string): Promise<boolean>` — false when any of the four roots has mtime newer than `builtAt`
+  - `recallIndexFresh(index: RecallIndex, projectDir: string, home?: string): Promise<boolean>` — false when any artifact root or relevant command/skill file has mtime newer than `builtAt`
   - `extractTriggers(description: string): string[]` — parses the Phase A `Use when the user says things like: "a", "b".` clause; no clause → `[]`
 
 - [ ] **Step 1: Write the failing tests** — create `cli/src/core/recall.test.ts`:
@@ -232,7 +232,10 @@ export async function recallIndexFresh(index: RecallIndex, projectDir: string, h
 }
 ```
 
-(Note: directory mtime changes when files are added/removed directly inside it; edits to `skills/<name>/SKILL.md` bump `skills/<name>/`, not `skills/` — accepted as good-enough freshness since gradient's own writers rebuild explicitly, and the plan's status command exposes `builtAt`. Recorded in the status output, not silently.)
+(Execution strengthened the planned root-only check: direct edits to an
+existing `SKILL.md` or command file do not reliably bump the root directory,
+so freshness also checks the relevant artifact file mtimes. See execution
+notes.)
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -770,3 +773,30 @@ Expected: PASS.
 git add cli/src/core/usage.ts cli/src/core/usage.test.ts cli/src/commands/stats.ts cli/src/commands/stats.test.ts cli/src/cli.ts README.md
 git commit -m "feat(stats): adoption rows — uses, retypes caught, unused-artifact removal nudges"
 ```
+
+---
+
+## Execution notes (2026-07-09)
+
+- **B1 freshness:** root directory mtimes catch additions/removals but not
+  reliable in-place edits. The shipped check also walks relevant command and
+  `SKILL.md` mtimes, preserving the spec's hand-edit self-healing guarantee.
+- **B1 timestamp precision:** filesystem mtimes may include fractional
+  milliseconds while ISO `builtAt` does not; comparisons use their shared
+  millisecond precision to avoid an immediately-stale new index.
+- **B3 hook schema:** verified against the current official Claude Code hooks
+  reference. The shipped output is structured
+  `hookSpecificOutput.additionalContext`, not plain stdout.
+- **B3 idempotent install:** re-running `recall on` upgrades an existing hook
+  entry to the required five-second timeout instead of merely detecting it.
+- **B3 latency:** the published `gradient` bin now has a lightweight exact
+  `recall` dispatcher instead of eagerly loading the full CLI/LLM graph. With
+  24 real user artifacts, end-to-end subprocess latency measured 29.16 ms p50
+  and 30.08 ms p95 (30 runs), below the 50 ms target.
+- **B4 test isolation:** apply/review/remove/migrate refreshes accept the
+  existing optional test `home`, so index tests never scan the developer's
+  real user-level artifacts.
+- **B5 live fixture:** local transcripts confirm installed skills including
+  `/codex` and `/plan-review` use the same `<command-name>` representation as
+  custom commands. Retype counts include only actual hints, not near misses,
+  and exclude events predating the current manifest entry.

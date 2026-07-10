@@ -1,7 +1,7 @@
 # gradient v2 — Close the Funnel — Design
 
 **Date:** 2026-07-06
-**Status:** Implementation in progress (Phase A complete; Phases B–E planned)
+**Status:** Implementation in progress (Phases A–B complete; Phases C–E planned)
 **Scope:** Spec 4. The v2 feature set: five sequenced phases (A–E), each of
 which becomes its own implementation plan. Builds on the shipped analysis
 engine (Spec 1), autopilot (Spec 2), and the approved `gradient.md` layering
@@ -157,10 +157,11 @@ export function classifyPrompt(text: string): PromptClass;
   equivalents) — recall must cover `/prep`, not just gradient's own output.
 - **Freshness:** built by `gradient recall on` at install time; rebuilt by
   `apply`, `remove`, `migrate`, and `scan`; and self-healing on the hot
-  path — the index records `builtAt`, and `recall` stats the four artifact
-  directories' mtimes (4 cheap syscalls) and rebuilds inline when any is
-  newer. Hand-edited artifacts therefore surface without any gradient
-  command running first.
+  path — the index records `builtAt`, and `recall` checks the four artifact
+  roots plus the relevant command/skill file mtimes before rebuilding inline
+  when any is newer. Hand-edited artifacts therefore surface without any
+  gradient command running first; the index remains small enough for this
+  local metadata walk to stay inside the hook's latency target.
 - **Hot path** (mirrors `respond`'s gate style, but LLM-free):
   1. Read stdin JSON `{prompt, cwd, session_id}`; empty/parse failure → exit
      0, no output.
@@ -169,15 +170,15 @@ export function classifyPrompt(text: string): PromptClass;
   3. Load index (single small JSON read). Normalize prompt
      (`cluster.ts#normalize`), compare against triggers + signatures with
      `cluster.ts#similarity`; N is dozens, so no LSH needed.
-  4. Best match ≥ threshold (~0.7, pinned by fixtures) → emit:
+  4. Best match ≥ 0.55 (pinned by fixtures) → emit:
 
      ```json
      { "hookSpecificOutput": { "hookEventName": "UserPromptSubmit",
          "additionalContext": "The user's prompt closely matches their installed skill \"/prep\" (mined from their own history). Prefer following that skill's workflow." } }
      ```
 
-  5. Append `{ts, matched, artifact, similarity}` to
-     `.gradient/adoption.jsonl` (also on near-misses ≥ ~0.5, for stats).
+  5. Append `{ts, artifact, similarity, hinted}` to
+     `.gradient/adoption.jsonl` (also on near-misses ≥ 0.4, for stats).
      Log write failures are swallowed; the hint still ships.
   - Every path exits 0. No spawn, no network. Target <50 ms.
 
@@ -381,13 +382,12 @@ Each phase lands as its own branch + implementation plan
 
 - **A1:** exact template-flood constants (char floor, count floor, ratio
   band), pinned against the captured security-review fixture.
-- **B1:** the `UserPromptSubmit` `additionalContext` JSON shape must be
-  verified against current Claude Code docs at build time (hook output
-  schemas have evolved); fall back to plain stdout if `hookSpecificOutput`
-  is not honored.
-- **B2:** confirm skill invocations appear as `<command-name>` tags in
-  transcripts like command invocations do (affects use-counting); pin with
-  a live fixture.
+- **B1 (resolved 2026-07-09):** the current Claude Code hooks reference
+  documents `hookSpecificOutput: {hookEventName: "UserPromptSubmit",
+  additionalContext}`; Phase B ships that structured form.
+- **B2 (resolved 2026-07-09):** live transcripts contain skill invocations
+  such as `/codex` and `/plan-review` in `<command-name>` tags, matching custom
+  command invocations; usage counting is pinned to that shared representation.
 - **C2:** question-detection precision (assistant tails ending in "?" vs
   AskUserQuestion tool blocks) — measure on real history before choosing.
 - **D:** whether `insights --user` shares `scan --user`'s recency window

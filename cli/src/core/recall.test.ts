@@ -94,6 +94,14 @@ describe("save/load/freshness", () => {
     expect(await recallIndexFresh(index, dir, home)).toBe(false);
   });
 
+  it("reports stale after an existing artifact file is edited", async () => {
+    await seed();
+    const index = await buildRecallIndex(dir, home);
+    const future = new Date(Date.parse(index.builtAt) + 60_000);
+    await utimes(join(dir, ".claude", "skills", "lgtm", "SKILL.md"), future, future);
+    expect(await recallIndexFresh(index, dir, home)).toBe(false);
+  });
+
   it("returns null for absent, corrupt, or structurally invalid indexes", async () => {
     expect(await loadRecallIndex(dir)).toBeNull();
     await mkdir(join(dir, ".gradient"), { recursive: true });

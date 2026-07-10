@@ -22,7 +22,7 @@
   "license": "MIT",
   "author": "ylambda",
   "type": "module",
-  "bin": { "gradient": "dist/cli.js" },
+  "bin": { "gradient": "dist/bin.js" },
   "engines": { "node": ">=20" },
   "files": ["dist", "src/skill"],
   "scripts": {
