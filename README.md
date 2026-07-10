@@ -64,6 +64,35 @@ The default backend reuses your existing `claude` CLI auth — no API key requir
 Clustering is local and LLM-free; only short candidate snippets ever reach a model
 — never whole transcripts — and a redaction pass strips secrets first.
 
+## Usage and billing
+
+gradient calls Claude by spawning `claude -p` (Claude Code's non-interactive
+mode). Anthropic covers that under the **Agent SDK credit** included with a Pro
+or Max plan — a separate allowance from your interactive Claude Code usage. Two
+things draw on it:
+
+- **`scan`** — one call per run, to name and rank the mined clusters.
+- **`autopilot`** — one call per stop, bounded by `autopilotBudget` (default 10
+  per session, and clampable per repo in `gradient.md`).
+
+An always-on autopilot is therefore a recurring cost, not a free one. If that
+matters, lower the budget or set `max-mode: off` in the repos you don't want it
+running in.
+
+**For CI or anything shared, use an API key.** Anthropic's guidance is that
+shared production automation should run on the Claude Platform with a key rather
+than a personal subscription. gradient supports that path — set
+`ANTHROPIC_API_KEY` and pin the backend:
+
+```json
+// ~/.config/gradient/config.json
+{ "backend": "anthropic", "model": "claude-sonnet-4-6" }
+```
+
+(Note that an exported `ANTHROPIC_API_KEY` also redirects the default `claude`
+CLI backend to API billing, so setting it is enough to move off the subscription
+either way.)
+
 ## Autopilot (opt-in)
 
 The most-mined pattern in every history is the nudge — `continue`, `what's
@@ -79,10 +108,7 @@ npx gradient.md autopilot status  # what did it do while I was away?
 npx gradient.md autopilot off     # remove the hook
 ```
 
-Bounded by design: a per-session budget (default 10), a progress gate that
-stands down when Claude stops twice with no new tool activity, and fail-open
-errors — anything unexpected means Claude just stops normally. Your permission
-prompts still gate dangerous tools; autopilot cannot answer those.
+Bounded by design — see [How the loop is bounded](#how-the-loop-is-bounded) below.
 
 **Per-repo limits.** Drop a committed `gradient.md` at a repo root to bound
 autopilot for everyone who works there. Optional frontmatter clamps authority —
@@ -102,6 +128,27 @@ Everything below the frontmatter is prose the auto-responder reads as context.
 Trailing `#` comments are descriptive and ignored. Anything else the parser
 can't read — an unclosed block, `max-mode: turbo` — turns autopilot off for that
 repo rather than guessing; `gradient autopilot status` shows the effective mode.
+
+### How the loop is bounded
+
+Claude Code passes a `stop_hook_active` flag so a `Stop` hook can tell it is
+already continuing a session, and avoid looping forever. **gradient deliberately
+does not gate on it.** For an auto-responder that flag is true whenever the
+feature is working — bailing on it would mean autopilot could nudge exactly once
+per session and never again.
+
+Three other bounds replace it, and each is independent:
+
+- **Budget** — a hard cap on auto-responses per session (default 10), clampable
+  further per repo.
+- **Progress gate** — if Claude stops again having done no tool work since the
+  last nudge, autopilot latches off for the session rather than nudging into a
+  wall.
+- **Fail-open** — any error (no backend, judge timeout, unparseable reply) means
+  the stop simply stands. Autopilot's failure mode is "off", never "loops".
+
+The judge also runs with every tool denied, so it can only decide — never act.
+Your permission prompts still gate dangerous tools; autopilot cannot answer them.
 
 ## Develop
 
