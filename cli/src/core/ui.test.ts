@@ -26,6 +26,7 @@ describe("ui — plain-mode (no-TTY) contract", () => {
 
   it("kindLabel returns the plain kind name for every artifact type", () => {
     expect(kindLabel("command")).toBe("command");
+    expect(kindLabel("skill")).toBe("skill");
     expect(kindLabel("loop")).toBe("loop");
     expect(kindLabel("hook")).toBe("hook");
   });

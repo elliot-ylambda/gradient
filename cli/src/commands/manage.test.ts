@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, mkdir, writeFile, access } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, access, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyByIds } from "./apply.js";
 import { list } from "./list.js";
 import { remove } from "./remove.js";
 import type { Suggestion } from "../core/types.js";
+import { saveConfig } from "../config.js";
 
 const ship: Suggestion = {
   id: "id-ship", name: "ship", title: "t", rationale: "r",
@@ -19,15 +20,35 @@ async function seed(dir: string) {
 }
 
 describe("manage commands", () => {
+  it("remove deletes the skill file and its emptied directory", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await seed(dir);
+    await applyByIds(["id-ship"], dir, { home });
+    expect(await remove(dir, "ship")).toBe(true);
+    await expect(stat(join(dir, ".claude", "skills", "ship"))).rejects.toThrow();
+  });
+
+  it("apply honors the configured command emit target", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await seed(dir);
+    await saveConfig({ emitTarget: "command" }, home);
+    const [applied] = await applyByIds(["id-ship"], dir, { home });
+    expect(applied.written).toBe(join(dir, ".claude", "commands", "ship.md"));
+  });
+
   it("applies by id, lists, then removes (unlinking the file)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     await seed(dir);
-    const applied = await applyByIds(["id-ship"], dir);
+    const applied = await applyByIds(["id-ship"], dir, { home });
     expect(applied.length).toBe(1);
+    expect(applied[0].written).toBe(join(dir, ".claude", "skills", "ship", "SKILL.md"));
     expect((await list(dir)).map(e => e.name)).toEqual(["ship"]);
     const ok = await remove(dir, "ship");
     expect(ok).toBe(true);
-    await expect(access(join(dir, ".claude/commands/ship.md"))).rejects.toThrow();
+    await expect(access(applied[0].written!)).rejects.toThrow();
     expect(await list(dir)).toEqual([]);
   });
 

@@ -11,9 +11,13 @@ export interface ApplyResult {
   printed?: string;
 }
 
-export async function applySuggestion(s: Suggestion, projectDir: string, opts: { target?: EmitTarget } = {}): Promise<ApplyResult> {
-  const result = emit(s, opts);
-  const type = s.payload.type as ArtifactType;
+export async function applySuggestion(
+  s: Suggestion,
+  projectDir: string,
+  opts: { emitTarget?: EmitTarget } = {},
+): Promise<ApplyResult> {
+  const result = emit(s, { target: opts.emitTarget });
+  let type: ArtifactType;
   let written: string | undefined;
   let printed: string | undefined;
 
@@ -23,10 +27,13 @@ export async function applySuggestion(s: Suggestion, projectDir: string, opts: {
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, result.content);
     written = abs;
+    type = result.kind;
   } else if (result.kind === "loop") {
     printed = result.command;
+    type = "loop";
   } else {
     printed = result.settingsPatch; // hooks are surfaced for the user to approve into settings.json
+    type = "hook";
   }
 
   const entry: ManifestEntry = {

@@ -1,5 +1,5 @@
-import { unlink } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { rmdir, unlink } from "node:fs/promises";
+import { dirname, isAbsolute, join } from "node:path";
 import { removeEntry } from "../core/manifest.js";
 import { assertInside } from "../core/security.js";
 
@@ -12,6 +12,9 @@ export async function remove(projectDir: string, name: string): Promise<boolean>
     // manifest was tampered with (mirror the boundary apply.ts enforces on write).
     assertInside(join(projectDir, ".claude"), abs);
     try { await unlink(abs); } catch { /* already gone */ }
+    if (entry.type === "skill") {
+      try { await rmdir(dirname(abs)); } catch { /* non-empty or already gone */ }
+    }
   }
   return true;
 }
