@@ -1,13 +1,14 @@
 {
   "name": "gradient.md",
   "version": "0.1.0",
-  "description": "The prompts you keep retyping into Claude Code, compiled into slash commands, loops, and hooks.",
+  "description": "Turn repeated Claude Code workflows into skills, rules, insights, and team plugins.",
   "keywords": [
     "claude",
     "claude-code",
     "cli",
     "automation",
-    "slash-commands",
+    "skills",
+    "plugins",
     "hooks",
     "developer-tools",
     "ai"

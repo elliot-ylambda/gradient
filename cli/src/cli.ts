@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
+import { basename, relative } from "node:path";
 import { scan } from "./commands/scan.js";
 import { review, readlinePrompter } from "./commands/review.js";
 import { applyByIds } from "./commands/apply.js";
@@ -22,6 +23,7 @@ import { VERSION } from "./version.js";
 import { insights, writeInsightsHtml } from "./commands/insights.js";
 import { continuityStatus, setContinuity } from "./commands/continuity.js";
 import { recap } from "./commands/recap.js";
+import { bundleCommand } from "./commands/bundle.js";
 
 const HELP = `gradient — turn repeated Claude Code workflows into artifacts
 
@@ -45,6 +47,8 @@ Usage:
                                 behavior report + what to automate next
   gradient continuity <on|off|status>
                                 checkpoint before compaction, recap on resume
+  gradient bundle <name> [--with-hooks]
+                                package approved artifacts as a plugin
   gradient autopilot <off|nudge|full>
                                 auto-respond when Claude stops (opt-in)
   gradient autopilot status     mode, budget, and recent auto-responses
@@ -70,6 +74,7 @@ export function parseCliArgs(argv: string[]): {
       detach: { type: "boolean" },
       "dry-run": { type: "boolean" },
       html: { type: "boolean" },
+      "with-hooks": { type: "boolean" },
     },
   });
   return { command, positionals, flags: values as Record<string, string | boolean> };
@@ -164,7 +169,7 @@ export async function main(
         return 0;
       }
       case "review": {
-        const applied = await review(projectDir, readlinePrompter());
+        const applied = await review(projectDir, readlinePrompter(), { onSkip: log });
         log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
         for (const a of applied) {
           if (a.printed) log(`  ${c.dim("run:")} ${a.printed}`);
@@ -172,14 +177,14 @@ export async function main(
         return 0;
       }
       case "apply": {
-        const applied = await applyByIds(positionals, projectDir);
+        const applied = await applyByIds(positionals, projectDir, { onSkip: log });
         for (const a of applied) {
           log(a.written ? `${c.ok("wrote")} ${c.muted(a.written)}` : `${c.dim("run:")} ${a.printed}`);
         }
         return 0;
       }
       case "explain": {
-        const s = await explain(projectDir, positionals[0] ?? "");
+        const s = await explain(projectDir, positionals[0] ?? "", { onSkip: log });
         if (!s) {
           log(c.coral(`no suggestion matching: ${positionals[0] ?? "(none given)"}`));
           return 1;
@@ -256,7 +261,7 @@ export async function main(
       }
       case "stats": {
         log(banner(VERSION));
-        const r = await stats(projectDir);
+        const r = await stats(projectDir, { onSkip: log });
         log(c.dim(`coverage: ${r.covered}/${r.total} patterns automated (${r.coveragePct}%)`));
         log(c.dim(`session-start scan: ${r.sessionScanEnabled ? "on" : "off"}`));
         for (const p of r.patterns) {
@@ -316,6 +321,32 @@ export async function main(
           `${c.muted("checkpoint (PreCompact):")} ${status.checkpoint ? c.ok("on") : "off"}   ` +
           `${c.muted("recap (SessionStart):")} ${status.recap ? c.ok("on") : "off"}`,
         );
+        return 0;
+      }
+      case "bundle": {
+        const name = positionals[0];
+        if (!name) {
+          log(c.coral("bundle needs a name: gradient bundle <name>"));
+          return 2;
+        }
+        const result = await bundleCommand(projectDir, name, { withHooks: !!flags["with-hooks"] });
+        log(`${c.ok("bundle written")} ${c.muted(result.dir)}`);
+        for (const file of result.files) log(`  ${c.dim(relative(result.dir, file))}`);
+        for (const skipped of result.skipped) log(c.muted(`  skipped ${skipped} (no approved readable artifact)`));
+        log(`\n${c.dim("try it:")} claude --plugin-dir ${JSON.stringify(result.dir)}`);
+
+        const pluginName = basename(result.dir);
+        log(c.dim("marketplace catalog (current Claude Code schema; place the plugin at the shown relative source):"));
+        log(JSON.stringify({
+          name: `${pluginName}-marketplace`,
+          owner: { name: "YOUR_TEAM" },
+          description: "Team workflows packaged by gradient",
+          plugins: [{
+            name: pluginName,
+            source: `./${pluginName}`,
+            description: "Workflows mined from real usage by gradient",
+          }],
+        }, null, 2));
         return 0;
       }
       case "checkpoint": {

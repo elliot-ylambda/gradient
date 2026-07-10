@@ -1,7 +1,7 @@
 # gradient v2 — Close the Funnel — Design
 
 **Date:** 2026-07-06
-**Status:** Implementation in progress (Phases A–D complete; Phase E planned)
+**Status:** Implemented (Phases A–E complete)
 **Scope:** Spec 4. The v2 feature set: five sequenced phases (A–E), each of
 which becomes its own implementation plan. Builds on the shipped analysis
 engine (Spec 1), autopilot (Spec 2), and the approved `gradient.md` layering
@@ -337,6 +337,9 @@ its unused-artifact signal only to route users back to `gradient remove`:
   `--with-hooks`, and the README documents that teammates need `gradient`
   installed for them — skills-only bundles have zero dependencies.
 - Rules files (`C2`) are bundleable the same way once they exist.
+- Claude Code plugins do not auto-load `rules/`; the generated bundle README
+  explicitly tells teammates to copy bundled rules into the target project's
+  `.claude/rules/`.
 
 ### Testing (E)
 
@@ -387,8 +390,9 @@ Each phase lands as its own branch + implementation plan
 - README + `cli/README.md`: "slash commands" → "skills"; the "v1 analysis
   engine" status section is rewritten around the funnel (A–E) once Phase A
   merges; Quickstart gains `recall`/`insights` once shipped.
-- `stats`'s coverage section is subsumed by the adoption view (B2) — the old
-  coverage-only rendering is removed, not kept alongside.
+- `stats` remains the single artifact report: pattern coverage and adoption
+  render there. `insights` consumes only actionable adoption signals and does
+  not duplicate the per-artifact table.
 - `emit/command.ts` is **retained deliberately** as the `emitTarget:
   "command"` compat path (Decision 2) — compat, not dead code.
 
@@ -411,5 +415,9 @@ Each phase lands as its own branch + implementation plan
 - **D (resolved 2026-07-09):** `insights --user` shares `scan --user`'s
   `userScopeDays` window (seven days by default). Consistency keeps the report
   bounded and makes the label unambiguous.
-- **E:** minimum viable `plugin.json` fields for current Claude Code plugin
-  loading (`name`, `description`, `version` assumed; verify).
+- **E (resolved 2026-07-09):** current Claude Code accepts the generated
+  `plugin.json` identity fields (`name`, `description`, `version`) and
+  auto-discovers root-level `skills/`, `commands/`, and `hooks/hooks.json`.
+  `claude plugin validate` 2.1.206 passes the generated plugin. Marketplace
+  catalogs additionally require top-level `owner` and plugin-entry `name` plus
+  `source`; the printed catalog includes all three and also validates.

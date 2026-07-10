@@ -15,7 +15,7 @@
 - **Rules caveat:** Claude Code plugins have no `rules/` auto-load; bundled rules land in `rules/` with a README instruction to copy them into a project's `.claude/rules/`. Recorded in the bundle README, not silently.
 - **Hooks are opt-in (`--with-hooks`)** and only ever `gradient <subcommand>` commands; the README states teammates need `gradient` installed for them.
 - All bundle writes go through `assertInside(join(projectDir, ".gradient"), …)`.
-- **Verify at build time (spec §11):** minimum `plugin.json` fields against the current plugin docs (assumed: `name`, `description`, `version`); the marketplace snippet is labeled "verify against current docs" in CLI output.
+- **Verified against current docs (2026-07-09):** `plugin.json` uses `name`, `description`, and `version`; root-level `skills/`, `commands/`, and `hooks/hooks.json` are auto-discovered. A marketplace catalog requires top-level `owner` and plugin-entry `name` + `source`.
 - Tests: vitest, temp dirs, no network. Run from `cli/`: `npm test`, `npm run typecheck`.
 
 ## File structure
@@ -351,3 +351,36 @@ Expected: PASS.
 git add cli/src/commands/bundle.ts cli/src/cli.ts cli/src/cli.test.ts README.md
 git commit -m "feat(cli): gradient bundle — package approved artifacts for the team"
 ```
+
+---
+
+## Execution notes (2026-07-09)
+
+- **E1 input trust boundary:** the plan constrained bundle writes but trusted
+  manifest source paths. The implementation resolves each source through
+  `realpath` and requires it to remain inside the project's `.claude/`; a
+  tampered manifest cannot package an arbitrary local file.
+- **E1 clean projection:** every build removes and recreates its target bundle.
+  Removed artifacts and a previous opt-in `hooks.json` therefore cannot linger
+  in a later skills-only build.
+- **E2 hook validation:** hook reconstruction reuses `emitHook`, the same
+  applied-artifact trust boundary, so tampered lifecycle events or unknown
+  subcommands are skipped. Duplicate event/command pairs are collapsed.
+- **E3 marketplace schema:** the planned snippet omitted the required
+  marketplace `owner` and plugin-entry `name`. The shipped catalog includes
+  `name`, `owner`, `description`, and a plugin entry with `name`, relative
+  `source`, and description.
+- **Forward-compatible cache reader:** the final cross-phase audit found
+  `suggestions.json` was still cast directly. Every reader now validates entries
+  individually, logs invalid future payloads in user-facing commands, and keeps
+  processing valid entries.
+- **Current-doc validation:** Claude Code 2.1.206 validates both the generated
+  plugin and marketplace. The plugin's only warning is optional author
+  attribution; no false author is synthesized. The catalog validates cleanly
+  once its optional description is included.
+- **Dogfood:** approved skill, rule, hook, and loop suggestions were applied in
+  a clean project, then bundled with hooks. The skill, rule, and hook landed;
+  the pathless loop was reported as skipped. A cache-only unapproved suggestion
+  and distinctive evidence counts were absent from every bundle file.
+- **Validation:** 440 tests pass; typecheck, build, package dry-run, plugin
+  validation, marketplace validation, and privacy leak scan are clean.

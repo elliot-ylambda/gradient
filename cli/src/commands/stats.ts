@@ -43,6 +43,7 @@ export interface StatsOptions {
   now?: number;
   collectFn?: typeof collect;
   parseFn?: typeof parseFile;
+  onSkip?: (message: string) => void;
 }
 
 export async function adoptionFromTurns(
@@ -104,7 +105,7 @@ async function readRetypes(
 }
 
 export async function stats(projectDir: string, opts: StatsOptions = {}): Promise<StatsReport> {
-  const suggestions = await loadSuggestions(projectDir);
+  const suggestions = await loadSuggestions(projectDir, opts.onSkip);
   const manifest = await loadManifest(projectDir);
   const coveredIds = new Set(manifest.map(m => m.suggestionId));
   const config = await loadConfig(opts.home);

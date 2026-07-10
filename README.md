@@ -55,6 +55,7 @@ npx gradient.md recall on   # hint when a typed prompt matches an installed arti
 npx gradient.md stats       # coverage plus artifact adoption
 npx gradient.md insights    # local behavior report + concrete next actions
 npx gradient.md continuity on # checkpoint before compaction, recap after resume
+npx gradient.md bundle team-kit # package approved artifacts for teammates
 ```
 
 The npm package is **`gradient.md`**; the command it installs is **`gradient`**.
@@ -191,6 +192,24 @@ scan, and `--html` writes a self-contained `.gradient/insights.html`.
 to `progress.md`; recap prints that file back into context. `gradient
 continuity off` removes only those two hooks.
 
+## Share with your team
+
+After reviewing and applying the workflows you want, package only those
+manifest-tracked artifacts as a Claude Code plugin:
+
+```bash
+npx gradient.md bundle team-kit              # skills, commands, and project rules
+npx gradient.md bundle team-kit --with-hooks # also approved gradient-backed hooks
+claude --plugin-dir .gradient/bundle/team-kit
+```
+
+The bundle contains no transcript, suggestion cache, evidence counts, or other
+personal telemetry, and unapproved suggestions never enter it. Rules are
+included with an explicit copy instruction because plugins do not auto-load
+project rules. Hooks are opt-in and require teammates to have `gradient`
+installed. The command prints a current-schema marketplace catalog you can add
+to a repository alongside the generated plugin directory.
+
 ## Develop
 
 ```bash
@@ -214,10 +233,11 @@ standing project rules without retaining pasted error bodies.
 Phase D adds the LLM-free behavior report and the opt-in continuity pack:
 `gradient insights` turns local work signals into concrete next actions, while
 `gradient continuity on` preserves a redacted checkpoint across compaction and
-resumed sessions.
+resumed sessions. Phase E closes the v2 funnel by packaging approved artifacts
+as validated team plugins, with hooks opt-in and personal evidence stripped.
 
-The opt-in `gradient autopilot` Stop-hook responder also ships today. The final
-v2 phase packages approved artifacts for teams.
+The opt-in `gradient autopilot` Stop-hook responder also ships today. All five
+v2 phases are implemented.
 
 - Design spec: [`docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md`](docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md)
 - Implementation plan: [`docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md`](docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md)
@@ -228,6 +248,7 @@ v2 phase packages approved artifacts for teams.
 - Phase B implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md)
 - Phase C implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md)
 - Phase D implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md)
+- Phase E implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md)
 
 ## License
 
