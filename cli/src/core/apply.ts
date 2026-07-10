@@ -30,7 +30,7 @@ export async function applySuggestion(
   let written: string | undefined;
   let printed: string | undefined;
 
-  if (result.kind === "command" || result.kind === "skill") {
+  if (result.kind === "command" || result.kind === "skill" || result.kind === "rule") {
     const abs = join(projectDir, result.path);
     assertInside(join(projectDir, ".claude"), abs);
     await mkdir(dirname(abs), { recursive: true });
@@ -51,6 +51,9 @@ export async function applySuggestion(
   } else if (result.kind === "loop") {
     printed = result.command;
     type = "loop";
+  } else if (result.kind === "rule-print") {
+    printed = result.text;
+    type = "rule";
   } else {
     printed = result.settingsPatch; // hooks are surfaced for the user to approve into settings.json
     type = "hook";

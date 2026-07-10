@@ -63,4 +63,24 @@ describe("manage commands", () => {
     await expect(remove(dir, "evil")).rejects.toThrow();
     await expect(access(victim)).resolves.toBeUndefined(); // victim must survive
   });
+
+  it("remove deletes a manifest-tracked project rule", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const rule: Suggestion = {
+      ...ship,
+      id: "id-rule",
+      name: "prefer-recommended",
+      payload: {
+        type: "rule",
+        target: "project",
+        ruleName: "prefer-recommended",
+        text: "Default to the recommended option.",
+      },
+    };
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "suggestions.json"), JSON.stringify([rule]));
+    const [applied] = await applyByIds(["id-rule"], dir);
+    expect(await remove(dir, "prefer-recommended")).toBe(true);
+    await expect(access(applied.written!)).rejects.toThrow();
+  });
 });
