@@ -47,14 +47,15 @@ export interface ChainFinding {
   steps: string[];        // ordered cluster signatures, length ≥ 2
   count: number;          // occurrences of the full chain
   sessions: number;       // distinct sessions containing it
-  examples: string[][];   // ≤ 3 redacted example prompt-tuples
+  sessionIds: string[];   // distinct session ids (detect merges evidence via sessionIds)
+  examples: string[][];   // ≤ 3 example prompt-tuples (redacted before any LLM call)
 }
 
 export function mineSequences(
-  turns: Turn[],               // session-ordered, "human" class only
+  turns: Turn[],               // "human" class only; ordered per session internally by ts
   assign: (text: string) => string | null,  // cluster-signature lookup; null = unclustered
-  isNudge: (text: string) => boolean,       // nudge-lexicon check (Decision 2)
-): ChainFinding[];
+): { chains: ChainFinding[]; capped: boolean };
+// Nudge detection is internal: an exported NUDGE_PROMPT_RE whole-prompt lexicon (Decision 2).
 ```
 
 - Single pass per session: map each turn to its node (Decision 2), emit
@@ -79,21 +80,20 @@ export function mineSequences(
 
 ## 5. Sink 2 — playbook Workflows (deterministic)
 
-- `core/playbook.ts#generatePlaybook` gains a second mined subsection under
-  the existing marker region:
+- The mined region **already renders** a `## My workflows (mined)`
+  subsection (`renderMinedSection` lists command suggestions there). Chain
+  lines join that existing subsection — no new heading, no
+  `DEFAULT_PLAYBOOK` change:
 
   ```markdown
-  ## Workflows (mined)
-  - After "run the tests", you usually say "now build and push" (7×, 4 sessions).
+  ## My workflows (mined)
+  - After "run the tests", you usually follow with "now build and push" (7× · 4 sessions)
   ```
 
-- Top K chains by count (K ≈ 5, pinned in the plan); rendered from
+- Top K chains by count (K = 5, `PLAYBOOK_MAX_CHAINS`); rendered from
   signatures only. The marker-region splice contract is unchanged — user
-  `Rules` and hand-written `Workflows` outside the markers are untouched,
+  `Rules` and hand-written content outside the markers are untouched,
   and markers-gone → `null` still applies.
-- `DEFAULT_PLAYBOOK` template text gains the subsection header so a fresh
-  file shows where mined workflows will land — the template's wording is
-  updated in the same commit (no stale template).
 - Value: autopilot `full` mode's judge (Spec 2) reads the playbook today;
   mined workflows make "start the user's usual next step" grounded in
   evidence instead of hand-authored lines only.
@@ -117,8 +117,8 @@ export function mineSequences(
   signatures) merges first, `mineSequences` reuses its per-occurrence
   member signatures instead of re-assigning — the plan checks this at
   build time.
-- Dead code: none removed; `DEFAULT_PLAYBOOK` and its tests updated in
-  place (§5) so no stale template text survives.
+- Dead code: none removed and no template churn — chain lines reuse the
+  existing mined-region subsection (§5), so `DEFAULT_PLAYBOOK` is untouched.
 
 ## 8. Testing
 
