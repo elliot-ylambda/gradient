@@ -53,6 +53,8 @@ npx gradient.md apply <id>  # generate an approved skill / loop / hook
 npx gradient.md migrate     # convert older generated commands into skills
 npx gradient.md recall on   # hint when a typed prompt matches an installed artifact
 npx gradient.md stats       # coverage plus artifact adoption
+npx gradient.md insights    # local behavior report + concrete next actions
+npx gradient.md continuity on # checkpoint before compaction, recap after resume
 ```
 
 The npm package is **`gradient.md`**; the command it installs is **`gradient`**.
@@ -173,6 +175,21 @@ to `.gradient/adoption.jsonl` as artifact name, timestamp, similarity, and
 whether a hint was shown. Prompt text is never logged. `gradient stats` reports
 uses, last use, and retypes caught for each approved artifact, and suggests
 removing artifacts that remain unused for at least 30 days.
+
+## Insights & continuity
+
+`gradient insights` is a local-only report card for the way you work: typed
+nudges, interrupted turns, context deaths and compacts, repeated error pastes,
+and model/effort churn. It makes no model call. Each hot metric points to a
+specific action such as `gradient autopilot nudge`, `gradient scan`, or
+`gradient recall on`; `--user` uses the same recent cross-project window as
+scan, and `--html` writes a self-contained `.gradient/insights.html`.
+
+`gradient continuity on` productizes the checkpoint/resume loop. It installs a
+`PreCompact` checkpoint hook and a `SessionStart` hook limited to `resume` and
+`compact`. The checkpoint writes redacted recent intent and conversation tail
+to `progress.md`; recap prints that file back into context. `gradient
+continuity off` removes only those two hooks.
 
 ## Develop
 

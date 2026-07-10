@@ -10,6 +10,8 @@ npx gradient.md list      # see what it generated · npx gradient.md remove <nam
 npx gradient.md migrate   # convert older generated commands into skills
 npx gradient.md recall on # hint when prompts match installed artifacts
 npx gradient.md stats     # coverage and artifact adoption
+npx gradient.md insights  # local behavior report and recommended actions
+npx gradient.md continuity on # preserve context across compact/resume
 ```
 
 ## How it works
@@ -33,6 +35,12 @@ touching hand-written files.
 index covers project and user-level commands and skills; its adoption log stores
 only artifact names and match scores, never prompt text. `gradient stats` shows
 uses, last use, retypes caught, and stale-artifact removal suggestions.
+
+`gradient insights [--user] [--html]` is also LLM-free. It counts behavior
+signals such as nudges, interrupts, compacts, error pastes, and model churn,
+then routes them to concrete gradient actions. `gradient continuity on`
+installs the paired, reversible checkpoint/recap hooks that preserve a redacted
+`progress.md` across compaction and resumed sessions.
 
 Nothing is written until you approve it in `review`, and everything written is
 tracked in `.gradient/manifest.json` so `remove` cleanly undoes it.

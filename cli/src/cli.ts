@@ -20,6 +20,8 @@ import { isNudge } from "./core/playbook.js";
 import { loadConfig } from "./config.js";
 import { VERSION } from "./version.js";
 import { insights, writeInsightsHtml } from "./commands/insights.js";
+import { continuityStatus, setContinuity } from "./commands/continuity.js";
+import { recap } from "./commands/recap.js";
 
 const HELP = `gradient — turn repeated Claude Code workflows into artifacts
 
@@ -41,6 +43,8 @@ Usage:
   gradient stats                show pattern coverage + artifact adoption
   gradient insights [--user] [--html]
                                 behavior report + what to automate next
+  gradient continuity <on|off|status>
+                                checkpoint before compaction, recap on resume
   gradient autopilot <off|nudge|full>
                                 auto-respond when Claude stops (opt-in)
   gradient autopilot status     mode, budget, and recent auto-responses
@@ -285,6 +289,33 @@ export async function main(
         log("");
         for (const recommendation of report.recommendations) log(`  ${c.violet("→")} ${recommendation.line}`);
         if (flags.html) log(`${c.ok("wrote")} ${c.muted(await writeInsightsHtml(projectDir, report))}`);
+        return 0;
+      }
+      case "recap": {
+        const text = await recap(projectDir);
+        if (text) log(text);
+        return 0;
+      }
+      case "continuity": {
+        const action = positionals[0] ?? "status";
+        if (action === "on" || action === "off") {
+          const result = await setContinuity(action === "on", projectDir);
+          log(
+            result.on
+              ? `${c.ok("continuity hooks installed")} ${c.muted(result.settingsPath)}`
+              : `${c.muted("continuity hooks removed:")} ${result.settingsPath}`,
+          );
+          return 0;
+        }
+        if (action !== "status") {
+          log(c.coral(`unknown continuity action: ${action} (use on|off|status)`));
+          return 2;
+        }
+        const status = await continuityStatus(projectDir);
+        log(
+          `${c.muted("checkpoint (PreCompact):")} ${status.checkpoint ? c.ok("on") : "off"}   ` +
+          `${c.muted("recap (SessionStart):")} ${status.recap ? c.ok("on") : "off"}`,
+        );
         return 0;
       }
       case "checkpoint": {

@@ -48,6 +48,23 @@ describe("hook timeout option", () => {
   });
 });
 
+describe("hook matcher option", () => {
+  it("adds a matcher to the hook group when given", () => {
+    const out = mergeHookIntoSettings({}, "SessionStart", "gradient recap", { matcher: "resume|compact" });
+    expect(out.hooks.SessionStart[0]).toEqual({
+      matcher: "resume|compact",
+      hooks: [{ type: "command", command: "gradient recap" }],
+    });
+  });
+
+  it("upgrades an existing command with the requested matcher", () => {
+    const once = mergeHookIntoSettings({}, "SessionStart", "gradient recap");
+    const upgraded = mergeHookIntoSettings(once, "SessionStart", "gradient recap", { matcher: "resume|compact" });
+    expect(upgraded.hooks.SessionStart).toHaveLength(1);
+    expect(upgraded.hooks.SessionStart[0].matcher).toBe("resume|compact");
+  });
+});
+
 describe("removeHookFromSettings", () => {
   it("removes the matching hook and drops empty groups and events", () => {
     const withHook = mergeHookIntoSettings({}, "Stop", "gradient respond");
