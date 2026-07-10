@@ -13,12 +13,36 @@ interface HookGroup {
   hooks: { type: string; command: string; timeout?: number }[];
 }
 
+function assertSettingsShape(value: unknown, event: string): asserts value is Record<string, any> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("settings root must be an object");
+  }
+  const hooks = (value as Record<string, unknown>).hooks;
+  if (hooks === undefined) return;
+  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) {
+    throw new Error("settings hooks must be an object");
+  }
+  const groups = (hooks as Record<string, unknown>)[event];
+  if (groups === undefined) return;
+  if (!Array.isArray(groups) || groups.some(group => {
+    if (!group || typeof group !== "object" || Array.isArray(group)) return true;
+    const entries = (group as Record<string, unknown>).hooks;
+    return !Array.isArray(entries) || entries.some(hook =>
+      !hook || typeof hook !== "object" || Array.isArray(hook) ||
+      typeof (hook as Record<string, unknown>).command !== "string"
+    );
+  })) {
+    throw new Error(`settings hooks.${event} has an invalid shape`);
+  }
+}
+
 export function mergeHookIntoSettings(
   existing: Record<string, any>,
   event: string,
   command: string,
   opts: { timeout?: number; matcher?: string } = {},
 ): Record<string, any> {
+  assertSettingsShape(existing, event);
   const out = { ...existing, hooks: { ...(existing.hooks ?? {}) } };
   const existingGroups: HookGroup[] = Array.isArray(out.hooks[event]) ? out.hooks[event] : [];
   const groups: HookGroup[] = [];
@@ -52,6 +76,7 @@ export function removeHookFromSettings(
   event: string,
   command: string,
 ): Record<string, any> {
+  assertSettingsShape(existing, event);
   const out = { ...existing, hooks: { ...(existing.hooks ?? {}) } };
   const groups: HookGroup[] = Array.isArray(out.hooks[event]) ? out.hooks[event] : [];
   const kept = groups

@@ -2,9 +2,10 @@
 
 ## Supported versions
 
-Only the latest published `0.1.x` release receives security fixes. Upgrade from
-`0.1.0` to `0.1.1` or newer: the original release has known isolation and
-installed-entrypoint defects.
+Only the latest published release receives security fixes. Upgrade to `0.2.1`
+or newer: `0.1.0` has known isolation and installed-entrypoint defects, and
+`0.2.0` introduced Codex support without the complete cross-target filesystem,
+process-isolation, and approval hardening present in `0.2.1`.
 
 ## Reporting a vulnerability
 
@@ -16,12 +17,19 @@ Do not include real credentials, private transcripts, or customer data.
 
 ## Security boundaries
 
-Gradient reads local Claude Code transcript data and can send bounded excerpts
-to either the local `claude` CLI or the Anthropic API. Project-only preference
-mining can include bounded assistant questions. Common credential and PII
-formats are redacted, but redaction is not a complete data-loss-prevention system.
-Users should not scan or enable autopilot for material they are unwilling to
-send to the configured model.
+Gradient reads enabled local Claude Code and Codex transcript data and can send
+bounded excerpts to a trusted local `claude`/`codex` CLI or the Anthropic API.
+Codex subagent rollouts are excluded. Project-only preference mining can include
+bounded assistant questions. Common credential and PII formats are redacted,
+but redaction is not a complete data-loss-prevention system. Users should not
+scan or enable autopilot for material they are unwilling to send to the
+configured model.
+
+Local model CLIs are resolved from the user's `PATH` and are part of the trusted
+computing base. Do not run Gradient with a project-controlled or otherwise
+untrusted `claude`, `codex`, `node`, or `git` executable on `PATH`. Explicitly
+pinned Gradient backends fail closed when unavailable rather than switching
+providers.
 
 Transcript discovery, per-file and aggregate reads, parsed prompts, LLM
 candidates, configuration, settings, caches, playbooks, and logs have hard
@@ -30,7 +38,16 @@ linear-looking regex subset. Paid autopilot attempts default to 10 and have an
 absolute ceiling of 100 per session; repository configuration can only lower
 that authority and budget.
 
-Generated artifacts require explicit approval. Hooks are installed into local
+Headless classifier children run in fresh private directories and receive
+prompt data over stdin. Claude tools/customizations and Codex tools, apps,
+plugins, hooks, browsing, project documents, rules, multi-agent features, and
+session persistence are disabled. Codex also uses a read-only sandbox and
+strict configuration; classifier calls have an absolute timeout and bounded
+output. If an installed CLI does not support the required isolation flags, the
+call fails and Gradient degrades to local advisory suggestions.
+
+Generated artifacts require explicit approval. Claude and Codex writes reject
+symlinked ancestors and untracked or incorrectly marked destinations. Hooks are installed into local
 Claude settings and require private per-project consent where applicable.
 Observed behavior is not treated as authorization: paste/sequence artifacts are
 advisory, preference rules exclude consequential approvals, and arbitrary model
@@ -50,3 +67,8 @@ Continuity is separately consented per project. It privately retains bounded,
 redacted user intents (not assistant/tool-output prose) and returns them to
 Claude as untrusted context on resume/compact. Redaction remains best-effort;
 turn continuity off to revoke consent and delete the cached checkpoint.
+
+These controls reduce known risks; they are not a guarantee that arbitrary
+transcript text is non-sensitive or that a reviewed generated workflow is safe
+for every future use. Keep packages current, inspect every review preview and
+bundle, and retain normal human confirmation for consequential actions.

@@ -38,6 +38,8 @@ describe("redact", () => {
       `AWS_ACCESS_KEY_ID=${"AKIA" + "A".repeat(16)}`,
       `npm_${"a".repeat(36)}`,
       `xoxb-${"a".repeat(24)}`,
+      `github_pat_${"A1".repeat(20)}`,
+      `sk_live_${"a1".repeat(12)}`,
       `Authorization: Bearer ${"a".repeat(32)}`,
       `eyJ${"a".repeat(12)}.${"b".repeat(12)}.${"c".repeat(12)}`,
       "postgres://user:password@example.com/db",
@@ -47,6 +49,10 @@ describe("redact", () => {
       expect(redact(sample)).toContain("[REDACTED]");
       expect(redact(sample)).not.toContain("secret material");
     }
+  });
+  it("masks Unix and Windows home-directory usernames", () => {
+    expect(redact("/Users/alice/project C:\\Users\\bob\\project")).not.toContain("alice");
+    expect(redact("/Users/alice/project C:\\Users\\bob\\project")).not.toContain("bob");
   });
   it("strips terminal control sequences from untrusted text", () => {
     expect(redact("safe\u001b]52;c;payload\u0007text")).not.toContain("\u001b");

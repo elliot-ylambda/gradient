@@ -1,8 +1,8 @@
-import { join } from "node:path";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Suggestion } from "../core/types.js";
 import { applySuggestion, type ApplyResult } from "../core/apply.js";
-import { loadConfig, projectCacheDir } from "../config.js";
+import { loadConfig, projectCacheDir, resolveCheapModel, resolveTargets } from "../config.js";
 import { refreshRecallIndex } from "./recall.js";
 import { safeReadFile } from "../core/safeFs.js";
 import { validateSuggestion } from "../core/validate.js";
@@ -64,11 +64,20 @@ export async function applyByIds(
   opts: { home?: string; onSkip?: (message: string) => void } = {},
 ): Promise<ApplyResult[]> {
   const all = await loadSuggestions(projectDir, opts);
-  const wanted = all.filter(s => ids.includes(s.id) || ids.includes(s.name));
+  const wanted = all.filter(suggestion => ids.includes(suggestion.id) || ids.includes(suggestion.name));
   const config = await loadConfig(opts.home);
   const emitTarget = config.emitTarget ?? "skill";
+  const targets = resolveTargets(config);
+  const cheapModel = resolveCheapModel(config);
   const out: ApplyResult[] = [];
-  for (const s of wanted) out.push(await applySuggestion(s, projectDir, { emitTarget, home: opts.home }));
+  for (const suggestion of wanted) {
+    out.push(await applySuggestion(suggestion, projectDir, {
+      emitTarget,
+      targets,
+      cheapModel,
+      home: opts.home,
+    }));
+  }
   if (out.length > 0) {
     await syncApprovedPlaybook(projectDir, all, opts.home);
     await refreshRecallIndex(projectDir, opts.home);

@@ -2,9 +2,9 @@
 
 # gradient
 
-**The prompts you keep retyping into Claude Code, compiled into skills.**
+**The prompts you keep retyping into Claude Code and Codex, compiled into skills.**
 
-`gradient` reads your own Claude Code history, finds repeated prompts, error
+`gradient` reads your own Claude Code and Codex history, finds repeated prompts, error
 pastes, short preference answers, and recurring sequences, then generates the
 automations to stop — **skills, rules, loops, and hooks** — through a
 local-mining **scan** → approve **review** → reversible **apply** flow.
@@ -45,6 +45,7 @@ gradient/
 ## Quickstart (CLI)
 
 ```bash
+npx gradient.md init --target both # install the gradient skill for Claude Code + Codex
 npx gradient.md scan        # prompts, advisory paste/sequence patterns, and safe preferences
 npx gradient.md scan --user # all projects, last 7 days — your recent cross-project habits
 npx gradient.md scan --all  # all projects, no time limit (thorough; can be slow)
@@ -70,34 +71,49 @@ file-count, depth, per-file, and aggregate-byte ceilings. Cross-project scans
 deliberately skip Q→A preference mining, so a preference learned in one
 repository cannot become a rule in another.
 
-The default backend reuses your existing `claude` CLI auth — no API key required.
+Approved skills can be written for both assistants. Add this to
+`~/.config/gradient/config.json`:
+
+```json
+{
+  "targets": ["claude-code", "codex"],
+  "cheapSkillModel": "haiku"
+}
+```
+
+Claude Code skills go to `.claude/skills`; portable Codex skills go to the
+documented repository location `.agents/skills`. `cheapSkillModel` is used only
+for workflows the judge marks mechanical, and an empty string disables it.
+
+The default backend reuses the CLI auth you already have: `claude` for the
+default Claude Code target and `codex exec --ephemeral` for a Codex-only target.
+No API key is required for local use.
 Clustering is local and LLM-free. `scan` sends bounded candidate snippets—not
-whole transcripts—to the selected model after redacting common credential
-formats. Redaction is defense in depth, not a guarantee that arbitrary private
-or proprietary text is removed; review the [data and trust boundaries](#data-and-trust-boundaries)
-before scanning sensitive history.
+whole transcripts—to the selected model after redacting common credential and
+PII formats. Redaction is defense in depth, not a guarantee that arbitrary
+private or proprietary text is removed; review the
+[data and trust boundaries](#data-and-trust-boundaries) before scanning
+sensitive history.
 
-## Usage and billing
+## Model use and billing
 
-gradient calls Claude by spawning `claude -p` (Claude Code's non-interactive
-mode). Anthropic covers that under the **Agent SDK credit** included with a Pro
-or Max plan — a separate allowance from your interactive Claude Code usage. Two
-things draw on it:
+gradient uses the selected assistant's non-interactive CLI for short text-only
+decisions: `claude -p` or an isolated `codex exec --ephemeral`. Those calls use
+the account and limits attached to that CLI login. Two features make calls:
 
 - **`scan`** — one call per run, to name and rank the mined clusters.
 - **`autopilot`** — at most `autopilotBudget` judge attempts per session
   (default 10, absolute ceiling 100, clampable lower per repo in `gradient.md`).
   Stand-downs and failed or timed-out calls consume the budget too.
 
-An always-on autopilot is therefore a recurring cost, not a free one. If that
+An always-on autopilot is therefore recurring usage, not a free operation. If that
 matters, lower the budget or set `max-mode: off` in the repos you don't want it
 running in.
 
-**For CI or anything shared, use an API key.** Anthropic's guidance is that
-shared production automation should run on the Claude Platform with a key rather
-than a personal subscription. gradient supports that path — set
-`ANTHROPIC_API_KEY` and pin the backend. Pinned backends fail closed when
-unavailable; Gradient never silently switches identity or billing path:
+**For CI or anything shared, use a service credential rather than a personal
+login.** gradient's built-in API path uses Anthropic: set `ANTHROPIC_API_KEY`
+and pin the backend. Pinned backends fail closed when unavailable; Gradient
+never silently switches identity or billing path:
 
 ```json
 // ~/.config/gradient/config.json
@@ -122,7 +138,7 @@ npx gradient.md autopilot status  # what did it do while I was away?
 npx gradient.md autopilot off     # remove the hook
 ```
 
-Arbitrary-response `full` mode is disabled in `0.1.1` pending additional
+Arbitrary-response `full` mode is disabled in `0.2.1` pending additional
 prompt-injection hardening. Enabling nudge records consent for the canonical
 project path in private user config and installs the hook in
 `.claude/settings.local.json`. A stale or committed hook is inert without that
@@ -215,7 +231,8 @@ consent, deletes the checkpoint, then removes only those two hooks.
 
 ## Data and trust boundaries
 
-- `scan` reads user-authored turns from local Claude Code transcripts, writes a
+- `scan` reads user-authored turns from enabled local Claude Code and Codex
+  transcripts (excluding Codex subagent rollouts), writes a
   private per-project cache under `~/.config/gradient/projects/`, and sends only
   capped/redacted candidate snippets to the selected model. Project-scoped
   preference mining also reads bounded assistant questions; cross-project scans
@@ -233,6 +250,10 @@ consent, deletes the checkpoint, then removes only those two hooks.
 - Project writes reject symlinked ancestors and final targets. Caches and user
   state use private modes and atomic writes. Hooks default to
   `.claude/settings.local.json`.
+- Headless Claude/Codex classifier children run in fresh private directories,
+  receive prompt text over stdin, and do not inherit project instructions.
+  Tools, plugins, MCP/apps, browsing, hooks, project docs, rules, and session
+  persistence are disabled; Codex additionally runs with a read-only sandbox.
 - Autopilot is opt-in per project and sends a bounded recent user/assistant tail
   plus the private personal playbook to the judge. Do not enable it for session
   content you are unwilling to send to the configured model.
@@ -247,14 +268,16 @@ See [SECURITY.md](SECURITY.md) for supported versions and vulnerability reports.
 ## Share with your team
 
 After reviewing and applying the workflows you want, package only those
-manifest-tracked artifacts as a Claude Code plugin:
+manifest-tracked artifacts as a dual Claude Code/Codex plugin:
 
 ```bash
 npx gradient.md bundle team-kit              # skills, commands, and project rules
 claude --plugin-dir .gradient/bundle/team-kit
 ```
 
-The bundle copies no raw transcript or cache files, evidence counts, local
+The bundle includes both `.claude-plugin/plugin.json` and a validated
+`.codex-plugin/plugin.json`, with shared portable skills. It copies no raw
+transcript or cache files, evidence counts, local
 suggestion IDs, hooks, or other personal telemetry. Artifact text can quote or
 derive from redacted prompts, so review every bundled file before sharing.
 Export additionally requires a private, exact-content approval recorded by the
@@ -296,6 +319,11 @@ resumed sessions. Phase E closes the v2 funnel by packaging current-safe,
 exact-content-approved artifacts as validated team plugins, with hook export
 disabled and personal evidence stripped.
 
+The multi-assistant stage writes each approved skill for every configured
+target, tracks/removes each copy independently, mines both assistants into one
+shared evidence pool, and reports the approximate token cost of unautomated
+nudges, context re-explains, and repeated error pastes.
+
 The opt-in `gradient autopilot` Stop-hook responder also ships today. All five
 v2 phases are implemented.
 
@@ -309,6 +337,8 @@ v2 phases are implemented.
 - Phase C implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md)
 - Phase D implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md)
 - Phase E implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md)
+- Codex and cost design: [`docs/superpowers/specs/2026-07-09-gradient-codex-and-cost-design.md`](docs/superpowers/specs/2026-07-09-gradient-codex-and-cost-design.md)
+- Codex Stage 2 and cost plan: [`docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md`](docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md)
 
 ## License
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, mkdir, readFile, writeFile, access, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, access, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { applyByIds, suggestionsPath } from "./apply.js";
@@ -102,5 +102,37 @@ describe("manage commands", () => {
     const [applied] = await applyByIds(["id-rule"], dir, { home });
     expect(await remove(dir, "prefer-recommended", { home })).toBe(true);
     await expect(access(applied.written!)).rejects.toThrow();
+  });
+
+  it("applies and removes a skill for both configured assistants", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await seed(dir, home);
+    await saveConfig({ targets: ["claude-code", "codex"] }, home);
+    const [applied] = await applyByIds(["id-ship"], dir, { home });
+    expect(applied.writes.map(write => write.target)).toEqual(["claude-code", "codex"]);
+    await expect(access(join(dir, ".claude", "skills", "ship", "SKILL.md"))).resolves.toBeUndefined();
+    await expect(access(join(dir, ".agents", "skills", "ship", "SKILL.md"))).resolves.toBeUndefined();
+
+    expect(await remove(dir, "ship", { home })).toBe(true);
+    await expect(stat(join(dir, ".claude", "skills", "ship"))).rejects.toThrow();
+    await expect(stat(join(dir, ".agents", "skills", "ship"))).rejects.toThrow();
+    expect(await list(dir)).toEqual([]);
+  });
+
+  it("refuses to remove through a repository-controlled .agents symlink", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const outside = await mkdtemp(join(tmpdir(), "grad-remove-victim-"));
+    const victim = join(outside, "skills", "ship", "SKILL.md");
+    await mkdir(dirname(victim), { recursive: true });
+    await writeFile(victim, "<!-- gradient:generated id=x name=ship -->\nkeep\n");
+    await symlink(outside, join(dir, ".agents"));
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "manifest.json"), JSON.stringify([{
+      name: "ship", type: "skill", target: "codex",
+      path: ".agents/skills/ship/SKILL.md", createdAt: "2026-07-01", suggestionId: "x",
+    }]));
+    await expect(remove(dir, "ship")).rejects.toThrow(/symlink/);
+    expect(await readFile(victim, "utf8")).toContain("keep");
   });
 });

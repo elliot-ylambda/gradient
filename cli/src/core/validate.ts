@@ -40,6 +40,9 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
         throw new Error("command payload triggers must be an array of strings");
       }
     }
+    if (payload.mechanical !== undefined && typeof payload.mechanical !== "boolean") {
+      throw new Error("command payload mechanical must be a boolean");
+    }
   }
   if (payload.type === "loop") {
     if (!validText(payload.instruction, 2_000) ||
@@ -58,8 +61,18 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
   }
   const evidence = s.evidence as Record<string, unknown> | undefined;
   if (!evidence || !Number.isInteger(evidence.count) || (evidence.count as number) < 0 ||
-    !Number.isInteger(evidence.sessions) || (evidence.sessions as number) < 0) {
+    (evidence.count as number) > 1_000_000_000 ||
+    !Number.isInteger(evidence.sessions) || (evidence.sessions as number) < 0 ||
+    (evidence.sessions as number) > 1_000_000_000) {
     throw new Error("suggestion.evidence must contain non-negative integer counts");
+  }
+  if (evidence.assistants !== undefined && (
+    !Array.isArray(evidence.assistants) ||
+    evidence.assistants.length > 2 ||
+    new Set(evidence.assistants).size !== evidence.assistants.length ||
+    evidence.assistants.some(value => value !== "claude-code" && value !== "codex")
+  )) {
+    throw new Error("suggestion.evidence assistants must contain known unique assistants");
   }
   if (s.examples !== undefined &&
     (!Array.isArray(s.examples) || s.examples.length > 5 || s.examples.some(example => !validText(example, 2_000)))) {

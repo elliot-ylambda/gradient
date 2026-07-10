@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { stats } from "./stats.js";
+import { adoptionFromTurns, stats } from "./stats.js";
 import { addEntry } from "../core/manifest.js";
 import { appendAdoption } from "./recall.js";
 import { suggestionsPath } from "./apply.js";
@@ -46,6 +46,7 @@ describe("stats", () => {
       sessionScanEnabled: false,
       patterns: [],
       adoption: [],
+      capped: false,
     });
   });
 
@@ -122,5 +123,57 @@ describe("stats", () => {
       retypesCaught: 0,
       suggestRemoval: true,
     });
+  });
+
+  it("caps transcript files and turns before adoption analysis", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-stats-capped-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
+    await addEntry(dir, {
+      name: "ship", type: "skill", path: ".claude/skills/ship/SKILL.md",
+      createdAt: "2026-06-15", suggestionId: "ship-id",
+    });
+    let parses = 0;
+    const report = await stats(dir, {
+      home,
+      maxFiles: 1,
+      maxTurns: 1,
+      collectFn: async () => ["one", "two"],
+      parseFn: async () => {
+        parses++;
+        return [
+          { ts: "2026-07-01", project: "p", role: "user", sessionId: "s1", text: "first" },
+          { ts: "2026-07-02", project: "p", role: "user", sessionId: "s2", text: "second" },
+        ];
+      },
+    });
+    expect(parses).toBe(1);
+    expect(report.capped).toBe(true);
+  });
+
+  it("uses enabled Codex rollouts and reports a dual-target artifact once", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-stats-codex-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
+    await mkdir(join(home, ".config", "gradient"), { recursive: true });
+    await writeFile(join(home, ".config", "gradient", "config.json"), JSON.stringify({ targets: ["codex"] }));
+    await addEntry(dir, {
+      name: "ship", type: "skill", target: "codex", path: ".agents/skills/ship/SKILL.md",
+      createdAt: "2026-06-15", suggestionId: "ship-id",
+    });
+    const report = await stats(dir, {
+      home,
+      collectFn: async () => { throw new Error("Claude collection must stay disabled"); },
+      collectCodexFn: async () => ["codex"],
+      parseCodexFn: async () => [{
+        ts: "2026-07-03T00:00:00Z", project: "p", role: "user", sessionId: "s1",
+        text: "<command-name>/ship</command-name>", assistant: "codex",
+      }],
+    });
+    expect(report.adoption).toEqual([expect.objectContaining({ name: "ship", uses: 1 })]);
+
+    const dual = await adoptionFromTurns(dir, [], { manifest: [
+      { name: "ship", type: "skill", path: ".claude/skills/ship/SKILL.md", createdAt: "2026-06-15", suggestionId: "ship-id" },
+      { name: "ship", type: "skill", target: "codex", path: ".agents/skills/ship/SKILL.md", createdAt: "2026-06-15", suggestionId: "ship-id" },
+    ], home });
+    expect(dual).toHaveLength(1);
   });
 });

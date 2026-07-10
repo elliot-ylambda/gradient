@@ -44,6 +44,15 @@ describe("session state", () => {
     expect(files[0]).not.toContain("..");
   });
 
+  it("bounds very long session ids and rejects invalid numeric state", async () => {
+    const home = await tmpHome();
+    await saveState("x".repeat(10_000), freshState(), home);
+    expect((await readdir(stateDir(home)))[0].length).toBeLessThan(120);
+    await mkdir(stateDir(home), { recursive: true });
+    await writeFile(join(stateDir(home), "bad.json"), '{"count":1e999,"attempts":0,"lastFingerprint":"","stoodDown":false,"log":[]}');
+    expect(await loadState("bad", home)).toEqual(freshState());
+  });
+
   it("cleanupStale removes only files older than 7 days", async () => {
     const home = await tmpHome();
     await saveState("old", freshState(), home);

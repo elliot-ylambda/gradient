@@ -55,14 +55,19 @@ export function extractPasteKey(text: string): string | null {
 
 /** Group repeated error pastes without retaining their potentially sensitive bodies. */
 export function detectPasteCandidates(prompts: Turn[]): Candidate[] {
-  const groups = new Map<string, { count: number; sessions: Set<string> }>();
+  const groups = new Map<string, { count: number; sessions: Set<string>; assistants: Set<"claude-code" | "codex"> }>();
   for (const prompt of prompts) {
     if (prompt.role !== "user" || !prompt.text) continue;
     const key = extractPasteKey(prompt.text);
     if (!key) continue;
-    const group = groups.get(key) ?? { count: 0, sessions: new Set<string>() };
+    const group = groups.get(key) ?? {
+      count: 0,
+      sessions: new Set<string>(),
+      assistants: new Set<"claude-code" | "codex">(),
+    };
     group.count++;
     group.sessions.add(prompt.sessionId);
+    group.assistants.add(prompt.assistant ?? "claude-code");
     groups.set(key, group);
   }
 
@@ -77,6 +82,7 @@ export function detectPasteCandidates(prompts: Turn[]): Candidate[] {
       sessions: group.sessions.size,
       sessionIds: [...group.sessions],
       confidence: "high",
+      assistants: [...group.assistants],
     });
   }
   return candidates.sort((a, b) => b.count - a.count || a.signature.localeCompare(b.signature));

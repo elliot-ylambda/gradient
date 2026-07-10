@@ -1,21 +1,22 @@
-import { open } from "node:fs/promises";
 import { constants } from "node:fs";
-import type { Turn, Role } from "./types.js";
+import { open } from "node:fs/promises";
+import type { Assistant, Role, Turn } from "./types.js";
 
 export const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 export const MAX_PARSED_TURNS_PER_FILE = 20_000;
 export const MAX_TURN_TEXT_CHARS = 16_000;
 export const MAX_DIALOGUE_TEXT_CHARS = 2_000;
+const MAX_USAGE_TOKENS = 1_000_000_000;
 
 /** Read only the newest bounded portion of a transcript. Starting mid-line is
  * harmless because the incomplete JSON record is discarded. */
 async function readTranscriptTail(path: string): Promise<string> {
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) throw new Error("refusing non-regular transcript");
-    const length = Math.min(stat.size, MAX_TRANSCRIPT_BYTES);
-    const start = Math.max(0, stat.size - length);
+    const metadata = await handle.stat();
+    if (!metadata.isFile()) throw new Error("refusing non-regular transcript");
+    const length = Math.min(metadata.size, MAX_TRANSCRIPT_BYTES);
+    const start = Math.max(0, metadata.size - length);
     const buffer = Buffer.alloc(length);
     await handle.read(buffer, 0, length, start);
     let content = buffer.toString("utf8");
@@ -42,60 +43,86 @@ interface Raw {
   cwd?: string;
   gitBranch?: string;
   timestamp?: string;
-  message?: { role?: string; content?: string | RawBlock[] };
+  message?: {
+    role?: string;
+    content?: string | RawBlock[];
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    };
+  };
   toolUseResult?: RawToolUseResult;
 }
 
 function project(cwd: string | undefined): string {
   if (!cwd) return "?";
-  return cwd.split("/").filter(Boolean).pop() ?? "?";
+  return cwd.split("/").filter(Boolean).pop()?.slice(0, 500) ?? "?";
 }
 
-// Mining pipeline: genuine user prompts only. Assistant turns + tool activity
-// are consumed separately by core/tail.ts for the autopilot judge.
-function parseOne(line: string): Turn | null {
-  let raw: Raw;
-  try {
-    raw = JSON.parse(line) as Raw;
-  } catch {
-    return null;
-  }
+function parseOne(raw: Raw): Turn | null {
   if (raw.isSidechain || raw.type !== "user") return null;
   const content = raw.message?.content;
   let text: string | undefined;
   if (typeof content === "string") text = content;
   else if (Array.isArray(content)) {
-    const parts = content.filter(b => b.type === "text").map(b => b.text ?? "");
+    const parts = content.filter(block => block.type === "text").map(block => block.text ?? "");
     text = parts.length ? parts.join(" ") : undefined;
   }
   if (!text) return null;
-  text = text.slice(0, MAX_TURN_TEXT_CHARS);
   return {
-    ts: raw.timestamp ?? "",
+    ts: (raw.timestamp ?? "").slice(0, 100),
     project: project(raw.cwd),
-    branch: raw.gitBranch,
-    sessionId: raw.sessionId ?? "?",
+    ...(raw.gitBranch ? { branch: raw.gitBranch.slice(0, 500) } : {}),
+    sessionId: (raw.sessionId ?? "?").slice(0, 200),
     role: "user",
-    text,
+    text: text.slice(0, MAX_TURN_TEXT_CHARS),
+    assistant: "claude-code",
   };
+}
+
+function usageTokens(raw: Raw): number {
+  if (raw.isSidechain || raw.type !== "assistant") return 0;
+  const usage = raw.message?.usage;
+  if (!usage) return 0;
+  return Math.min(MAX_USAGE_TOKENS, [
+    usage.input_tokens,
+    usage.output_tokens,
+    usage.cache_creation_input_tokens,
+    usage.cache_read_input_tokens,
+  ].reduce<number>((sum, value) =>
+    sum + (Number.isSafeInteger(value) && (value as number) > 0 ? value as number : 0), 0));
 }
 
 export function parseLines(lines: string[], maxTurns = MAX_PARSED_TURNS_PER_FILE): Turn[] {
   const out: Turn[] = [];
-  const start = Math.max(0, lines.length - maxTurns * 4);
-  for (let i = start; i < lines.length; i++) {
-    const line = lines[i];
+  const limit = Math.max(1, Math.min(maxTurns, MAX_PARSED_TURNS_PER_FILE));
+  const start = Math.max(0, lines.length - limit * 4);
+  for (let index = start; index < lines.length; index++) {
+    const line = lines[index];
     if (!line.trim()) continue;
-    const t = parseOne(line);
-    if (t) out.push(t);
-    if (out.length > maxTurns) out.shift();
+    let raw: Raw;
+    try {
+      raw = JSON.parse(line) as Raw;
+    } catch {
+      continue;
+    }
+    const turn = parseOne(raw);
+    if (turn) {
+      out.push(turn);
+      if (out.length > limit) out.shift();
+      continue;
+    }
+    const tokens = usageTokens(raw);
+    const pending = out[out.length - 1];
+    if (pending && tokens > 0) pending.usageTokens = Math.min(MAX_USAGE_TOKENS, (pending.usageTokens ?? 0) + tokens);
   }
   return out;
 }
 
 export async function parseFile(path: string): Promise<Turn[]> {
-  const content = await readTranscriptTail(path);
-  return parseLines(content.split(/\r?\n/));
+  return parseLines((await readTranscriptTail(path)).split(/\r?\n/));
 }
 
 export interface DialogueTurn {
@@ -103,12 +130,13 @@ export interface DialogueTurn {
   text: string;
   ts: string;
   sessionId: string;
+  assistant?: Assistant;
 }
 
 /** Assistant-and-user view used only for adjacent question/answer mining. */
 export function parseDialogueLines(lines: string[]): DialogueTurn[] {
   const out: DialogueTurn[] = [];
-  for (const line of lines) {
+  for (const line of lines.slice(-MAX_PARSED_TURNS_PER_FILE * 4)) {
     if (!line.trim()) continue;
     let raw: Raw;
     try {
@@ -118,16 +146,17 @@ export function parseDialogueLines(lines: string[]): DialogueTurn[] {
     }
     if (raw.isSidechain || (raw.type !== "user" && raw.type !== "assistant")) continue;
 
-    // AskUserQuestion responses are stored as a tool_result wrapper, but the
-    // top-level result preserves the user-authored answer separately. Rebuild
-    // alternating Q→A turns from that structured data; never mine the wrapper.
     if (raw.type === "user" && raw.toolUseResult?.questions && raw.toolUseResult.answers) {
-      for (const item of raw.toolUseResult.questions) {
+      for (const item of raw.toolUseResult.questions.slice(0, 20)) {
         const question = item.question?.trim();
         if (!question) continue;
         const answer = raw.toolUseResult.answers[question];
         if (typeof answer !== "string" || !answer.trim()) continue;
-        const common = { ts: raw.timestamp ?? "", sessionId: raw.sessionId ?? "?" };
+        const common = {
+          ts: (raw.timestamp ?? "").slice(0, 100),
+          sessionId: (raw.sessionId ?? "?").slice(0, 200),
+          assistant: "claude-code" as const,
+        };
         out.push({ role: "assistant", text: question.slice(-MAX_DIALOGUE_TEXT_CHARS), ...common });
         out.push({ role: "user", text: answer.slice(0, MAX_DIALOGUE_TEXT_CHARS), ...common });
       }
@@ -144,14 +173,14 @@ export function parseDialogueLines(lines: string[]): DialogueTurn[] {
     out.push({
       role: raw.type,
       text: text.slice(-MAX_DIALOGUE_TEXT_CHARS),
-      ts: raw.timestamp ?? "",
-      sessionId: raw.sessionId ?? "?",
+      ts: (raw.timestamp ?? "").slice(0, 100),
+      sessionId: (raw.sessionId ?? "?").slice(0, 200),
+      assistant: "claude-code",
     });
   }
-  return out;
+  return out.slice(-MAX_PARSED_TURNS_PER_FILE);
 }
 
 export async function parseDialogueFile(path: string): Promise<DialogueTurn[]> {
-  const content = await readTranscriptTail(path);
-  return parseDialogueLines(content.split(/\r?\n/)).slice(-MAX_PARSED_TURNS_PER_FILE);
+  return parseDialogueLines((await readTranscriptTail(path)).split(/\r?\n/));
 }

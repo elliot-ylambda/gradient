@@ -1,11 +1,11 @@
 ---
 name: gradient
-description: Use when the user wants to find repeated Claude Code workflows and turn them into skills, loops, or hooks. Runs the gradient CLI to scan transcripts and propose artifacts.
+description: Use when the user wants to find repeated Claude Code or Codex workflows and turn them into skills, rules, loops, or hooks. Runs the gradient CLI to scan local transcripts and propose artifacts.
 ---
 
-# /gradient
+# gradient
 
-Mine your Claude Code history for things you repeat, and generate reusable
+Mine your Claude Code and Codex history for things you repeat, and generate reusable
 artifacts you approve.
 
 ## Usage

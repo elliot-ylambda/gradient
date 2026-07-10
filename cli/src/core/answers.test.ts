@@ -20,6 +20,7 @@ describe("extractAnswerPairs", () => {
       answer: "pnpm",
       sessionId: "s1",
       ts: "t",
+      assistant: "claude-code",
     }]);
   });
 

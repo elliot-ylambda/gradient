@@ -55,4 +55,13 @@ describe("cluster", () => {
     const cands = cluster([...noise, ...trio], { minCount: 3, simThreshold: 0.5 });
     expect(cands.some(c => c.signature.includes("pull request") && c.count >= 3 && c.confidence === "inferred")).toBe(true);
   });
+
+  it("records every assistant contributing to a merged habit", () => {
+    const turns: Turn[] = [
+      { ...u("ship it", "c1"), assistant: "claude-code" },
+      { ...u("ship it", "codex:x1"), assistant: "codex" },
+      { ...u("ship it", "codex:x2"), assistant: "codex" },
+    ];
+    expect(cluster(turns)[0].assistants).toEqual(["claude-code", "codex"]);
+  });
 });

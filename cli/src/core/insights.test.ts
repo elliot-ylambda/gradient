@@ -4,6 +4,7 @@ import {
   computeMetrics,
   sumAutopilotAvoided,
   buildRecommendations,
+  buildCostRows,
   renderInsightsHtml,
 } from "./insights.js";
 import type { Turn } from "./types.js";
@@ -129,6 +130,29 @@ describe("buildRecommendations", () => {
   });
 });
 
+describe("buildCostRows", () => {
+  it("uses recorded turn usage and falls back to chars/4", () => {
+    const nudge = { ...t("continue"), usageTokens: 120 };
+    const continuation = t("This session is being continued from a previous conversation.");
+    const rows = buildCostRows([nudge, continuation]);
+    expect(rows.find(row => row.metric === "nudges")).toMatchObject({ tokens: 120, prompts: 1 });
+    expect(rows.find(row => row.metric === "continuations")?.tokens)
+      .toBe(Math.ceil((continuation.text?.length ?? 0) / 4));
+    expect(rows.map(row => row.line).join("\n")).toContain("≈");
+  });
+
+  it("counts only paste keys repeated to the detector support floor", () => {
+    const repeated = t(`make test\n${"error: boom\n".repeat(40)}`);
+    expect(buildCostRows([repeated, { ...repeated }, { ...repeated }]))
+      .toEqual([expect.objectContaining({ metric: "pastes", prompts: 3 })]);
+    expect(buildCostRows([repeated])).toEqual([]);
+  });
+
+  it("hides the section entirely when no attributable habits exist", () => {
+    expect(buildCostRows([t("implement the parser")])).toEqual([]);
+  });
+});
+
 describe("renderInsightsHtml", () => {
   const report = {
     label: "project scope",
@@ -145,6 +169,7 @@ describe("renderInsightsHtml", () => {
       errorPastes: 1,
     },
     recommendations: [{ metric: "nudges", line: "try <gradient autopilot nudge> & friends" }],
+    costs: [{ metric: "nudges" as const, tokens: 123, prompts: 3, line: "≈123 tokens · 3 nudges" }],
   };
 
   it("is self-contained and escapes dynamic content", () => {
@@ -154,5 +179,7 @@ describe("renderInsightsHtml", () => {
     expect(html).not.toMatch(/https?:\/\//);
     expect(html).toContain("&lt;gradient autopilot nudge&gt; &amp; friends");
     expect(html).toContain("project scope");
+    expect(html).toContain("cost of unautomated habits");
+    expect(html).toContain("≈123 tokens");
   });
 });

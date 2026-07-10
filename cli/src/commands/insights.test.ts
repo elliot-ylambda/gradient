@@ -118,4 +118,21 @@ describe("insights", () => {
     await expect(writeInsightsHtml(dir, report)).rejects.toThrow(/symlink/);
     await expect(access(join(outside, "insights.html"))).rejects.toThrow();
   });
+
+  it("combines enabled Claude Code and Codex turns in metrics and token costs", async () => {
+    const report = await insights(
+      { projectDir: dir, home },
+      {
+        config: { targets: ["claude-code", "codex"] },
+        collectFn: async () => ["claude"],
+        collectCodexFn: async () => ["codex"],
+        parseFn: async () => [{ ...nudgeTurns[0], assistant: "claude-code", usageTokens: 100 }],
+        parseCodexFn: async () => [{ ...nudgeTurns[1], assistant: "codex", usageTokens: 50 }],
+      },
+    );
+    expect(report.metrics.nudges).toBe(2);
+    expect(report.costs).toEqual([
+      expect.objectContaining({ metric: "nudges", prompts: 2, tokens: 150 }),
+    ]);
+  });
 });

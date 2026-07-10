@@ -18,7 +18,9 @@ const TRANSCRIPT_FILE_BYTES_CAP = 8_000_000;
 const TRANSCRIPT_TREE_DEPTH_CAP = 20;
 
 export function encodeProjectDir(cwd: string): string {
-  return cwd.replace(/\//g, "-");
+  // Claude's directory encoding replaces path separators. Cover both styles so
+  // a Windows cwd can never turn the joined transcript root into a path escape.
+  return cwd.replace(/[\\/]/g, "-").replace(/:/g, "-");
 }
 
 // Sessions started in Claude Code git worktrees transcribe into SIBLING directories named

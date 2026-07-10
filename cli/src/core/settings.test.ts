@@ -35,6 +35,17 @@ describe("installHook", () => {
     expect(await readFile(file, "utf8")).toBe("{ this is not valid json"); // untouched, not clobbered
   });
 
+  it("refuses parseable but structurally invalid settings instead of replacing them", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-settings-shape-"));
+    const cdir = join(dir, ".claude");
+    await mkdir(cdir, { recursive: true });
+    const file = join(cdir, "settings.local.json");
+    const original = JSON.stringify({ hooks: { SessionStart: { command: "keep me" } } });
+    await writeFile(file, original);
+    await expect(installHook(dir, "SessionStart", "gradient scan --detach")).rejects.toThrow(/invalid shape/);
+    expect(await readFile(file, "utf8")).toBe(original);
+  });
+
   it("refuses a repository-controlled .claude symlink", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-settings-link-"));
     const outside = await mkdtemp(join(tmpdir(), "grad-settings-victim-"));

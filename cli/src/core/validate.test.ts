@@ -59,6 +59,20 @@ describe("triggers validation", () => {
   });
 });
 
+describe("mechanical validation", () => {
+  it("accepts boolean or absent mechanical and rejects other values", () => {
+    expect(() => validateSuggestion(good)).not.toThrow();
+    expect(() => validateSuggestion({
+      ...good,
+      payload: { ...good.payload, mechanical: true },
+    })).not.toThrow();
+    expect(() => validateSuggestion({
+      ...good,
+      payload: { ...good.payload, mechanical: "yes" },
+    })).toThrow(/mechanical/);
+  });
+});
+
 describe("rule validation", () => {
   const base = { id: "1", name: "n", title: "t", rationale: "r", confidence: "high", evidence: { count: 3, sessions: 2 } };
 

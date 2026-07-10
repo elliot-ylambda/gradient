@@ -2,7 +2,15 @@ import { describe, it, expect } from "vitest";
 import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { boundedAutopilotBudget, loadConfig, MAX_AUTOPILOT_BUDGET, saveConfig } from "./config.js";
+import {
+  boundedAutopilotBudget,
+  DEFAULT_CHEAP_SKILL_MODEL,
+  loadConfig,
+  MAX_AUTOPILOT_BUDGET,
+  resolveCheapModel,
+  resolveTargets,
+  saveConfig,
+} from "./config.js";
 
 describe("config", () => {
   it("round-trips config under a fake home", async () => {
@@ -18,9 +26,37 @@ describe("config", () => {
     await writeFile(join(home, ".config", "gradient", "config.json"), "{broken");
     await expect(loadConfig(home)).rejects.toThrow(/unreadable gradient config/);
   });
+  it("fails closed on malformed authority-bearing consent fields", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-"));
+    await mkdir(join(home, ".config", "gradient"), { recursive: true });
+    const path = join(home, ".config", "gradient", "config.json");
+    await writeFile(path, JSON.stringify({ recallProjects: "/repo" }));
+    await expect(loadConfig(home)).rejects.toThrow(/recallProjects/);
+    await writeFile(path, JSON.stringify({ autopilotProjects: { relative: "nudge" } }));
+    await expect(loadConfig(home)).rejects.toThrow(/autopilotProjects/);
+  });
   it("bounds malformed and excessive paid autopilot budgets", () => {
     expect(boundedAutopilotBudget(Number.POSITIVE_INFINITY)).toBe(10);
     expect(boundedAutopilotBudget(1_000_000)).toBe(MAX_AUTOPILOT_BUDGET);
     expect(boundedAutopilotBudget(0)).toBe(0);
+  });
+});
+
+describe("assistant target config", () => {
+  it("defaults to Claude Code and accepts/deduplicates known targets", () => {
+    expect(resolveTargets({})).toEqual(["claude-code"]);
+    expect(resolveTargets({ targets: ["claude-code", "codex", "codex"] })).toEqual(["claude-code", "codex"]);
+  });
+
+  it("rejects unknown, non-array, and empty targets", () => {
+    expect(() => resolveTargets({ targets: ["cursor"] as never })).toThrow(/unknown target/);
+    expect(() => resolveTargets({ targets: "codex" as never })).toThrow(/array/);
+    expect(() => resolveTargets({ targets: [] })).toThrow(/at least one/);
+  });
+
+  it("resolves the cheap model and lets an empty string disable it", () => {
+    expect(resolveCheapModel({})).toBe(DEFAULT_CHEAP_SKILL_MODEL);
+    expect(resolveCheapModel({ cheapSkillModel: "" })).toBeUndefined();
+    expect(resolveCheapModel({ cheapSkillModel: "claude-haiku-4-5" })).toBe("claude-haiku-4-5");
   });
 });

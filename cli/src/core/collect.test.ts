@@ -7,6 +7,7 @@ import { encodeProjectDir, matchesSince, collect } from "./collect.js";
 describe("collect helpers", () => {
   it("encodes a cwd to a projects dir name", () => {
     expect(encodeProjectDir("/Users/x/projects/y")).toBe("-Users-x-projects-y");
+    expect(encodeProjectDir("C:\\Users\\x\\project")).toBe("C--Users-x-project");
   });
   it("matchesSince keeps recent files and drops old ones", () => {
     const now = 1_000_000_000_000;

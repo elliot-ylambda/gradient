@@ -1,18 +1,23 @@
 import { homedir } from "node:os";
-import type { Suggestion, Turn, Config, Candidate } from "../core/types.js";
+import type { Candidate, Config, Suggestion, Turn } from "../core/types.js";
 import { collect } from "../core/collect.js";
-import { parseFile } from "../core/parse.js";
-import { parseDialogueFile, type DialogueTurn } from "../core/parse.js";
-import { filterPrompts, compileIgnorePatterns, hasTemplateFloodSupport, isTemplateFlood } from "../core/filter.js";
+import { collectCodex } from "../core/collect-codex.js";
+import { parseDialogueFile, parseFile, type DialogueTurn } from "../core/parse.js";
+import {
+  parseCodexDialogueFile,
+  parseCodexFile,
+  parseCodexSessionFile,
+} from "../core/parse-codex.js";
+import { compileIgnorePatterns, filterPrompts, hasTemplateFloodSupport, isTemplateFlood } from "../core/filter.js";
 import { boundedPromptLimit, capByRecency, MAX_PROMPTS_HARD_CAP } from "../core/cap.js";
-import { DEFAULT_MAX_PROMPTS, DEFAULT_DETECT_WINDOW } from "../core/scope.js";
+import { DEFAULT_DETECT_WINDOW, DEFAULT_MAX_PROMPTS } from "../core/scope.js";
 import { cluster, normalize } from "../core/cluster.js";
 import { mineSequences, SEQ_MAX_BIGRAMS } from "../core/sequence.js";
 import { boundedDetectLimit, detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
 import { findHusks, findMissingSessions } from "../core/coverage.js";
 import { selectBackend } from "../llm/index.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, resolveTargets } from "../config.js";
 import type { LLMBackend } from "../llm/backend.js";
 import { refreshRecallIndex } from "./recall.js";
 import { safeWriteFile } from "../core/safeFs.js";
@@ -27,7 +32,6 @@ export interface ScanOptions {
   projectPath?: string;
   sinceDays?: number;
   limit?: number;
-  /** Ceiling on prompts entering clustering; older ones are dropped. */
   maxPrompts?: number;
   home?: string;
   now?: number;
@@ -35,75 +39,105 @@ export interface ScanOptions {
 
 export interface ScanDeps {
   backend?: LLMBackend | null;
-  /** Pre-loaded config, to avoid a redundant read by the caller. */
   config?: Config;
-  collectFn?: (o: ScanOptions) => Promise<string[]>;
+  collectFn?: (options: ScanOptions) => Promise<string[]>;
+  collectCodexFn?: (options: ScanOptions) => Promise<string[]>;
   parseFn?: (path: string) => Promise<Turn[]>;
-  /** Injectable assistant+user parser for repeated-answer mining. */
+  parseCodexFn?: (path: string) => Promise<Turn[]>;
   parseDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
-  /** Injectable Claude-Session trailer source for the coverage check. */
+  parseCodexDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
   gitLogFn?: (dir: string, sinceDays: number) => Promise<string>;
-  log?: (msg: string) => void;
+  log?: (message: string) => void;
 }
 
 export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Suggestion[]> {
   const log = deps.log ?? (() => {});
-  const collectFn = deps.collectFn ?? ((o: ScanOptions) => collect(o));
-  const parseFn = deps.parseFn ?? parseFile;
   const config = deps.config ?? (await loadConfig(opts.home));
+  const targets = resolveTargets(config);
   const requestedMax = opts.maxPrompts ?? config.maxPrompts ?? DEFAULT_MAX_PROMPTS;
   const max = boundedPromptLimit(requestedMax);
   if (max !== requestedMax) log(`max-prompts safety-capped to ${max}`);
+  const requestedWindow = opts.limit ?? DEFAULT_DETECT_WINDOW;
+  const window = boundedDetectLimit(requestedWindow, DEFAULT_DETECT_WINDOW);
+  if (window !== requestedWindow) log(`candidate limit safety-capped to ${window}`);
 
-  const files = await collectFn(opts);
-  log(`files: ${files.length} transcripts`);
+  const collectFn = deps.collectFn ?? ((options: ScanOptions) => collect(options));
+  const collectCodexFn = deps.collectCodexFn ?? ((options: ScanOptions) => collectCodex(options));
+  const parseFn = deps.parseFn ?? parseFile;
+  const projectDir = opts.projectPath ?? process.cwd();
+  const claudeFiles = targets.includes("claude-code") ? await collectFn(opts) : [];
+  const codexFiles = targets.includes("codex") ? await collectCodexFn(opts) : [];
+  const files = [...claudeFiles, ...codexFiles];
+  log(targets.includes("codex")
+    ? `files: ${files.length} transcripts (Claude Code ${claudeFiles.length} · Codex ${codexFiles.length})`
+    : `files: ${files.length} transcripts`);
+
+  const cutoff = opts.sinceDays === undefined
+    ? undefined
+    : (opts.now ?? Date.now()) - opts.sinceDays * 86_400_000;
+  const scoped = <T extends { ts: string }>(items: T[]): T[] => cutoff === undefined
+    ? items
+    : items.filter(item => {
+      const timestamp = Date.parse(item.ts);
+      return Number.isFinite(timestamp) && timestamp >= cutoff;
+    });
+  const pushTurns = (current: Turn[], additions: Turn[]): Turn[] => {
+    current.push(...scoped(additions));
+    return current.length > MAX_PROMPTS_HARD_CAP
+      ? capByRecency(current, MAX_PROMPTS_HARD_CAP).kept
+      : current;
+  };
+
+  const ignore = compileIgnorePatterns(config.ignorePatterns);
+  const answerPairs = [] as ReturnType<typeof extractAnswerPairs>;
+  const pairCap = Math.min(ANSWER_MAX_PAIRS, max);
   let turns: Turn[] = [];
   const userTurnCounts = new Map<string, number>();
-  for (const f of files) {
-    const t = await parseFn(f);
-    userTurnCounts.set(f, t.length);
-    if (opts.sinceDays === undefined) {
-      turns.push(...t);
+  for (const file of claudeFiles) {
+    const parsed = await parseFn(file);
+    userTurnCounts.set(file, parsed.length);
+    turns = pushTurns(turns, parsed);
+  }
+
+  const productionCodexSinglePass = !deps.parseCodexFn && !deps.parseCodexDialogueFn;
+  for (const file of codexFiles) {
+    if (productionCodexSinglePass) {
+      const parsed = await parseCodexSessionFile(file);
+      turns = pushTurns(turns, parsed.turns);
+      if (opts.scope === "project" && answerPairs.length < pairCap) {
+        answerPairs.push(...extractAnswerPairs(scoped(parsed.dialogue), ignore, pairCap - answerPairs.length));
+      }
     } else {
-      const cutoff = (opts.now ?? Date.now()) - opts.sinceDays * 86_400_000;
-      turns.push(...t.filter(turn => {
-        const ts = Date.parse(turn.ts);
-        return Number.isFinite(ts) && ts >= cutoff;
-      }));
-    }
-    if (turns.length > MAX_PROMPTS_HARD_CAP) {
-      turns = capByRecency(turns, MAX_PROMPTS_HARD_CAP).kept;
+      turns = pushTurns(turns, await (deps.parseCodexFn ?? parseCodexFile)(file));
     }
   }
 
-  const projectDir = opts.projectPath ?? process.cwd();
+  if (targets.includes("codex")) {
+    const claudePrompts = turns.filter(turn => (turn.assistant ?? "claude-code") === "claude-code").length;
+    const codexPrompts = turns.filter(turn => turn.assistant === "codex").length;
+    log(`sources: Claude Code ${claudePrompts} prompt(s) · Codex ${codexPrompts} prompt(s)`);
+  }
 
-  // Coverage sanity: a scan over a silently shrunken corpus (bridged sessions whose
-  // prompts live only at claude.ai, transcripts reaped by retention) looks identical to
-  // a complete one — make the gaps loud. Advisory only; never fails the scan.
   try {
-    const husks = await findHusks(files, userTurnCounts);
+    const husks = await findHusks(claudeFiles, userTurnCounts);
     if (husks.length > 0) {
       log(`coverage: ${husks.length} bridged transcript(s) contain no minable prompts — those conversations live only at claude.ai`);
     }
-    const missing = await findMissingSessions(projectDir, files, {
+    const missing = targets.includes("claude-code") ? await findMissingSessions(projectDir, claudeFiles, {
       sinceDays: opts.sinceDays,
       gitLogFn: deps.gitLogFn,
-    });
+    }) : [];
     if (missing.length > 0) {
       log(`coverage: ${missing.length} session(s) in recent Claude-Session git trailers have no local transcript (cloud-only, another machine, or cleaned up) — results under-represent them`);
     }
-  } catch (e) {
-    log(`coverage check failed: ${(e as Error).message}`);
+  } catch (error) {
+    log(`coverage check failed: ${(error as Error).message}`);
   }
 
-  const ignore = compileIgnorePatterns(config.ignorePatterns);
   const prompts = filterPrompts(turns, ignore);
   log(`prompts: ${prompts.length} after filtering injected text`);
   const { kept, dropped } = capByRecency(prompts, max);
-  if (dropped > 0) {
-    log(`capped to most recent ${max} prompts; ${dropped} older dropped (raise with --max-prompts)`);
-  }
+  if (dropped > 0) log(`capped to most recent ${max} prompts; ${dropped} older dropped (raise with --max-prompts)`);
 
   const detectedPastes = detectPasteCandidates(kept);
   const pasteFloods = detectedPastes.filter(hasTemplateFloodSupport);
@@ -113,85 +147,79 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     .map(turn => ({ ...turn, text: turn.text?.slice(0, MAX_MINED_PROMPT_CHARS) }));
   const clustered = cluster(clusterInput);
   const floods = clustered.filter(isTemplateFlood);
-  const candidates = clustered.filter(c => !isTemplateFlood(c));
+  const candidates = clustered.filter(candidate => !isTemplateFlood(candidate));
   const floodCount = floods.length + pasteFloods.length;
   if (floodCount > 0) log(`excluded ${floodCount} machine-template pattern(s) (CI/hook-injected, not habits)`);
   if (pastes.length > 0) log(`${pastes.length} paste pattern(s) detected`);
 
-  // Production scans read a dialogue-shaped view in a second pass. Test callers
-  // that replace parseFn can independently inject this view when they need it.
-  const parseDialogueFn = deps.parseDialogueFn ?? (deps.parseFn ? undefined : parseDialogueFile);
-  const answerPairs = [] as ReturnType<typeof extractAnswerPairs>;
-  if (opts.scope === "project" && parseDialogueFn) {
-    const pairCap = Math.min(ANSWER_MAX_PAIRS, max > 0 ? max : ANSWER_MAX_PAIRS);
-    for (const file of files) {
-      if (answerPairs.length >= pairCap) break;
-      const parsed = await parseDialogueFn(file);
-      let scoped: DialogueTurn[];
-      if (opts.sinceDays === undefined) {
-        scoped = parsed;
-      } else {
-        const cutoff = (opts.now ?? Date.now()) - opts.sinceDays * 86_400_000;
-        scoped = parsed.filter(turn => {
-          const ts = Date.parse(turn.ts);
-          return Number.isFinite(ts) && ts >= cutoff;
-        });
+  if (opts.scope === "project") {
+    const parseDialogueFn = deps.parseDialogueFn ?? (deps.parseFn ? undefined : parseDialogueFile);
+    if (parseDialogueFn) {
+      for (const file of claudeFiles) {
+        if (answerPairs.length >= pairCap) break;
+        answerPairs.push(...extractAnswerPairs(scoped(await parseDialogueFn(file)), ignore, pairCap - answerPairs.length));
       }
-      answerPairs.push(...extractAnswerPairs(scoped, ignore, pairCap - answerPairs.length));
     }
-  } else if (opts.scope === "all") {
+    if (!productionCodexSinglePass) {
+      const parseCodexDialogueFn = deps.parseCodexDialogueFn ?? (deps.parseCodexFn ? undefined : parseCodexDialogueFile);
+      if (parseCodexDialogueFn) {
+        for (const file of codexFiles) {
+          if (answerPairs.length >= pairCap) break;
+          answerPairs.push(...extractAnswerPairs(scoped(await parseCodexDialogueFn(file)), ignore, pairCap - answerPairs.length));
+        }
+      }
+    }
+  } else {
     log("repeated-answer rules skipped for cross-project scope");
   }
   const answers = mineAnswerCandidates(answerPairs);
   if (answers.length > 0) log(`${answers.length} repeated-answer pattern(s) detected`);
   const nonSequenceCandidates = [...candidates, ...pastes, ...answers];
-  const requestedWindow = opts.limit ?? DEFAULT_DETECT_WINDOW;
-  const window = boundedDetectLimit(requestedWindow, DEFAULT_DETECT_WINDOW);
-  if (window !== requestedWindow) log(`candidate limit safety-capped to ${window}`);
 
-  // Sequence sink 1: chains join the detect window as candidates (spec §4).
-  const sigSet = new Set(candidates.map(c => c.signature));
-  const seq = mineSequences(clusterInput, text => {
-    const n = normalize(text);
-    return sigSet.has(n) ? n : null;
+  const signatureSet = new Set(candidates.map(candidate => candidate.signature));
+  const sequence = mineSequences(clusterInput, text => {
+    const normalized = normalize(text);
+    return signatureSet.has(normalized) ? normalized : null;
   });
-  if (seq.capped) log(`sequence pair cap hit (${SEQ_MAX_BIGRAMS} distinct pairs) — pairs first seen after the cap were ignored`);
-  if (seq.chains.length > 0) log(`sequences: ${seq.chains.length} recurring chain(s)`);
-  const seqCap = Math.ceil(window / 4);
-  if (seq.chains.length > seqCap) log(`sequence candidates capped to ${seqCap}; ${seq.chains.length - seqCap} dropped`);
-  const seqCandidates: Candidate[] = seq.chains.slice(0, seqCap).map(ch => ({
+  if (sequence.capped) log(`sequence pair cap hit (${SEQ_MAX_BIGRAMS} distinct pairs) — pairs first seen after the cap were ignored`);
+  if (sequence.chains.length > 0) log(`sequences: ${sequence.chains.length} recurring chain(s)`);
+  const sequenceCap = Math.ceil(window / 4);
+  if (sequence.chains.length > sequenceCap) {
+    log(`sequence candidates capped to ${sequenceCap}; ${sequence.chains.length - sequenceCap} dropped`);
+  }
+  const assistantBySession = new Map(clusterInput.map(turn => [turn.sessionId, turn.assistant ?? "claude-code"]));
+  const sequenceCandidates: Candidate[] = sequence.chains.slice(0, sequenceCap).map(chain => ({
     kind: "sequence",
-    signature: ch.steps.join(" → "),
-    examples: ch.examples.map(e => e.join(" ⏎ ")),
-    count: ch.count,
-    sessions: ch.sessions,
-    sessionIds: ch.sessionIds,
+    signature: chain.steps.join(" → "),
+    examples: chain.examples.map(example => example.join(" ⏎ ")),
+    count: chain.count,
+    sessions: chain.sessions,
+    sessionIds: chain.sessionIds,
     confidence: "high",
+    assistants: [...new Set(chain.sessionIds.map(sessionId => assistantBySession.get(sessionId) ?? "claude-code"))],
   }));
-  const allCandidates = [...nonSequenceCandidates, ...seqCandidates];
+  const allCandidates = [...nonSequenceCandidates, ...sequenceCandidates];
   log(`mining → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);
 
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });
   if (!backend) log("no LLM backend available — degrading to exact-repeat command suggestions only");
   const suggestions = await detect(allCandidates, backend, {
     limit: window,
-    onCap: dropped => log(`capped to top ${window}; ${dropped} lower-frequency candidates dropped`),
+    onCap: count => log(`capped to top ${window}; ${count} lower-frequency candidates dropped`),
   });
   const valid: Suggestion[] = [];
-  for (const s of suggestions) {
+  for (const suggestion of suggestions) {
     try {
-      validateSuggestion(s);
-      valid.push(s);
-    } catch (e) {
-      log(`skipping invalid suggestion: ${(e as Error).message}`);
+      validateSuggestion(suggestion);
+      valid.push(suggestion);
+    } catch (error) {
+      log(`skipping invalid suggestion: ${(error as Error).message}`);
     }
   }
 
   const userHome = opts.home ?? homedir();
-  await safeWriteFile(userHome, suggestionsPath(projectDir, userHome), JSON.stringify(valid, null, 2));
+  await safeWriteFile(userHome, suggestionsPath(projectDir, userHome), `${JSON.stringify(valid, null, 2)}\n`);
   log(`found ${valid.length} suggestions → cached`);
-
   await refreshRecallIndex(projectDir, opts.home);
-
   return valid;
 }

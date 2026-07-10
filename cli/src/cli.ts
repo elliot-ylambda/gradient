@@ -18,17 +18,20 @@ import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
 import { spawnDetached } from "./core/spawn.js";
 import { resolveScanScope } from "./core/scope.js";
 import { isNudge } from "./core/playbook.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, resolveCheapModel, resolveTargets } from "./config.js";
 import { VERSION } from "./version.js";
 import { insights, writeInsightsHtml } from "./commands/insights.js";
 import { continuityStatus, setContinuity } from "./commands/continuity.js";
 import { recap } from "./commands/recap.js";
 import { bundleCommand } from "./commands/bundle.js";
+import type { Assistant } from "./core/types.js";
+import { stripUnsafeControls } from "./core/security.js";
 
-const HELP = `gradient — turn repeated Claude Code workflows into artifacts
+const HELP = `gradient — turn repeated Claude Code and Codex workflows into artifacts
 
 Usage:
-  gradient init                 configure + install the /gradient skill
+  gradient init [--target claude-code|codex|both]
+                                configure + install the gradient skill
   gradient init --session-scan  also run a scan at the start of each session
   gradient scan                 find prompts, advisory pastes/sequences, safe preferences
   gradient scan --user          cross-project patterns, last 7 days (no preference rules)
@@ -75,6 +78,7 @@ export function parseCliArgs(argv: string[]): {
       "dry-run": { type: "boolean" },
       html: { type: "boolean" },
       "with-hooks": { type: "boolean" },
+      target: { type: "string" },
     },
   });
   return { command, positionals, flags: values as Record<string, string | boolean> };
@@ -94,6 +98,18 @@ export function posixShellQuote(value: string): string {
 
 function terminalSafePath(value: string): string | undefined {
   return /[\u0000-\u001f\u007f-\u009f]/.test(value) ? undefined : value;
+}
+
+function terminalSafeLine(value: unknown): string {
+  return stripUnsafeControls(String(value)).replace(/[\r\n\t]+/g, " ");
+}
+
+function initTargets(flag: string | boolean | undefined): Assistant[] | undefined {
+  if (flag === undefined) return undefined;
+  if (flag === "claude-code") return ["claude-code"];
+  if (flag === "codex") return ["codex"];
+  if (flag === "both") return ["claude-code", "codex"];
+  throw new Error(`unknown init target: ${String(flag)} (use claude-code|codex|both)`);
 }
 
 export async function main(
@@ -127,7 +143,7 @@ export async function main(
   try {
     parsed = parseCliArgs(argv);
   } catch (e) {
-    log(c.coral((e as Error).message.split(".")[0]));
+    log(c.coral(terminalSafeLine((e as Error).message.split(".")[0])));
     log(`\n${HELP}`);
     return 2;
   }
@@ -137,10 +153,15 @@ export async function main(
   try {
     switch (command) {
       case "init": {
-        const r = await init({ installSkill: !flags["no-skill"], sessionScan: !!flags["session-scan"], projectDir });
+        const r = await init({
+          installSkill: !flags["no-skill"],
+          sessionScan: !!flags["session-scan"],
+          projectDir,
+          targets: initTargets(flags.target),
+        });
         log(banner(VERSION));
         log(
-          `${c.muted("backend:")} ${r.backend}\n${c.muted("config:")} ${r.configPath}\n${c.muted("skill installed:")} ${r.skillInstalled}\n${c.muted("session-start scan:")} ${r.sessionScanInstalled}`,
+          `${c.muted("backend:")} ${terminalSafeLine(r.backend)}\n${c.muted("config:")} ${terminalSafeLine(r.configPath)}\n${c.muted("skill installed:")} ${r.skillPaths.length ? r.skillPaths.map(terminalSafeLine).join(", ") : "false"}\n${c.muted("session-start scan:")} ${r.sessionScanInstalled}`,
         );
         return 0;
       }
@@ -169,7 +190,7 @@ export async function main(
         );
         for (const s of out) {
           log(
-            `  ${confidenceChip(s.confidence)} ${c.bold(s.name)}  ${c.muted(s.title)}  ${c.dim(`(seen ${s.evidence.count}×)`)}`,
+            `  ${confidenceChip(s.confidence)} ${c.bold(terminalSafeLine(s.name))}  ${c.muted(terminalSafeLine(s.title))}  ${c.dim(`(seen ${s.evidence.count}×)`)}`,
           );
           if (isNudge(s)) {
             log(`      ${c.dim("tip: this is what autopilot automates →")} ${c.violet("gradient autopilot nudge")}`);
@@ -179,17 +200,31 @@ export async function main(
         return 0;
       }
       case "review": {
-        const applied = await review(projectDir, readlinePrompter(), { onSkip: log });
+        const config = await loadConfig();
+        const applied = await review(projectDir, readlinePrompter({
+          targets: resolveTargets(config),
+          cheapModel: resolveCheapModel(config),
+        }), { onSkip: log });
         log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
         for (const a of applied) {
+          for (const write of a.writes) {
+            log(`${c.ok("wrote")} ${c.muted(terminalSafeLine(write.path))}${write.target === "codex" ? c.dim(" [codex]") : ""}`);
+          }
           if (a.printed) log(`  ${c.dim("run:")} ${a.printed}`);
+          for (const failure of a.failures) log(c.coral(`  ${failure.target}: ${terminalSafeLine(failure.error)}`));
+          for (const target of a.skippedTargets) log(c.muted(`  skipped ${target}: artifact type is not portable`));
         }
         return 0;
       }
       case "apply": {
         const applied = await applyByIds(positionals, projectDir, { onSkip: log });
         for (const a of applied) {
-          log(a.written ? `${c.ok("wrote")} ${c.muted(a.written)}` : `${c.dim("run:")} ${a.printed}`);
+          for (const write of a.writes) {
+            log(`${c.ok("wrote")} ${c.muted(terminalSafeLine(write.path))}${write.target === "codex" ? c.dim(" [codex]") : ""}`);
+          }
+          if (a.printed) log(`${c.dim("run:")} ${a.printed}`);
+          for (const failure of a.failures) log(c.coral(`${failure.target}: ${terminalSafeLine(failure.error)}`));
+          for (const target of a.skippedTargets) log(c.muted(`skipped ${target}: artifact type is not portable`));
         }
         return 0;
       }
@@ -199,21 +234,27 @@ export async function main(
           log(c.coral(`no suggestion matching: ${positionals[0] ?? "(none given)"}`));
           return 1;
         }
-        log(`${confidenceChip(s.confidence)} ${c.bold(s.name)}  ${c.muted(s.title)}`);
-        log(c.dim(s.rationale));
-        log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions`));
-        for (const ex of s.examples ?? []) log(`  ${c.muted("·")} ${c.muted(ex)}`);
+        log(`${confidenceChip(s.confidence)} ${c.bold(terminalSafeLine(s.name))}  ${c.muted(terminalSafeLine(s.title))}`);
+        log(c.dim(terminalSafeLine(s.rationale)));
+        const sources = s.evidence.assistants?.length === 2
+          ? " · sources: Claude Code + Codex"
+          : "";
+        log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions${sources}`));
+        for (const ex of s.examples ?? []) log(`  ${c.muted("·")} ${c.muted(terminalSafeLine(ex))}`);
         return 0;
       }
       case "list": {
-        for (const e of await list(projectDir)) {
-          log(`  ${c.bold(e.name)}\t${kindLabel(e.type)}\t${c.muted(e.path || "(printed)")}\t${c.dim(e.createdAt)}`);
+        const entries = await list(projectDir);
+        const showTargets = entries.some(entry => entry.target === "codex");
+        for (const e of entries) {
+          const target = showTargets ? `\t${c.dim(e.target ?? "claude-code")}` : "";
+          log(`  ${c.bold(terminalSafeLine(e.name))}\t${kindLabel(e.type)}${target}\t${c.muted(terminalSafeLine(e.path || "(printed)"))}\t${c.dim(terminalSafeLine(e.createdAt))}`);
         }
         return 0;
       }
       case "remove": {
         const ok = await remove(projectDir, positionals[0]);
-        log(ok ? `${c.ok("removed")} ${positionals[0]}` : c.coral(`no such artifact: ${positionals[0]}`));
+        log(ok ? `${c.ok("removed")} ${terminalSafeLine(positionals[0])}` : c.coral(`no such artifact: ${terminalSafeLine(positionals[0])}`));
         return ok ? 0 : 1;
       }
       case "migrate": {
@@ -273,6 +314,7 @@ export async function main(
         log(banner(VERSION));
         const r = await stats(projectDir, { onSkip: log });
         log(c.dim(`coverage: ${r.covered}/${r.total} patterns automated (${r.coveragePct}%)`));
+        if (r.capped) log(c.dim("stats input cap reached; adoption covers the bounded recent corpus"));
         log(c.dim(`session-start scan: ${r.sessionScanEnabled ? "on" : "off"}`));
         for (const p of r.patterns) {
           log(`  ${confidenceChip(p.confidence)} ${c.bold(p.name)}  ${c.dim(`(seen ${p.count}× · ${p.sessions} sessions)`)}  ${p.covered ? c.ok("✓ automated") : c.muted("—")}`);
@@ -302,6 +344,10 @@ export async function main(
         log(`  ${c.bold("prompts")} ${metrics.prompts}   ${c.bold("nudges")} ${metrics.nudges}   ${c.bold("interrupts")} ${metrics.interrupts}`);
         log(`  ${c.bold("context deaths")} ${metrics.continuations}   ${c.bold("compacts")} ${metrics.compacts}   ${c.bold("error pastes")} ${metrics.errorPastes}`);
         log(`  ${c.bold("model switches")} ${metrics.modelSwitches}   ${c.bold("effort switches")} ${metrics.effortSwitches}`);
+        if ((report.costs ?? []).length > 0) {
+          log(`\n${c.bold("cost of unautomated habits")}`);
+          for (const cost of report.costs ?? []) log(`  ${c.violet("→")} ${cost.line}`);
+        }
         log("");
         for (const recommendation of report.recommendations) log(`  ${c.violet("→")} ${recommendation.line}`);
         if (flags.html) log(`${c.ok("wrote")} ${c.muted(await writeInsightsHtml(projectDir, report))}`);
@@ -369,6 +415,17 @@ export async function main(
             description: "Workflows mined from real usage by gradient",
           }],
         }, null, 2));
+        log(c.dim("Codex marketplace entry (place this bundle at ./plugins/<name> relative to marketplace.json):"));
+        log(JSON.stringify({
+          name: `${pluginName}-marketplace`,
+          interface: { displayName: `${pluginName} workflows` },
+          plugins: [{
+            name: pluginName,
+            source: { source: "local", path: `./plugins/${pluginName}` },
+            policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
+            category: "Productivity",
+          }],
+        }, null, 2));
         return 0;
       }
       case "checkpoint": {
@@ -384,7 +441,7 @@ export async function main(
       }
       case "autopilot": {
         const arg = positionals[0] ?? "status";
-        if (arg === "off" || arg === "nudge" || arg === "full") {
+        if (arg === "off" || arg === "nudge") {
           const r = await setAutopilotMode(arg, projectDir); // narrowed to AutopilotMode by the condition
           log(banner(VERSION));
           log(`${c.muted("autopilot:")} ${c.bold(r.mode)}`);
@@ -428,11 +485,11 @@ export async function main(
         return 0;
       }
       default:
-        log(`${c.coral(`unknown command: ${command}`)}\n\n${banner(VERSION)}\n\n${HELP}`);
+        log(`${c.coral(`unknown command: ${terminalSafeLine(command)}`)}\n\n${banner(VERSION)}\n\n${HELP}`);
         return 2;
     }
   } catch (e) {
-    log(`gradient: ${(e as Error).message}`);
+    log(c.coral(`gradient: ${terminalSafeLine((e as Error).message)}`));
     return 1;
   }
 }

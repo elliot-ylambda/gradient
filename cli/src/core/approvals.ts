@@ -2,13 +2,15 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { projectCacheDir } from "../config.js";
-import type { ArtifactType, ManifestEntry } from "./types.js";
+import type { ArtifactType, Assistant, ManifestEntry } from "./types.js";
 import { sanitizeName } from "./security.js";
 import { safeReadFile, safeWriteFile } from "./safeFs.js";
+import { manifestTarget } from "./manifest.js";
 
 const APPROVAL_LEDGER_MAX_BYTES = 1_000_000;
 const APPROVAL_LEDGER_MAX_ENTRIES = 1_000;
 const ARTIFACT_TYPES = new Set<ArtifactType>(["command", "loop", "hook", "skill", "rule"]);
+const ASSISTANTS = new Set<Assistant>(["claude-code", "codex"]);
 
 /** Increment this whenever the generator's authority or content-safety
  * contract changes. A package-version check alone would accidentally trust
@@ -19,6 +21,7 @@ export interface ArtifactApproval {
   suggestionId: string;
   name: string;
   type: ArtifactType;
+  target: Assistant;
   contentSha256: string;
   safetyVersion: number;
 }
@@ -42,6 +45,9 @@ function validateApproval(value: unknown, index: number): ArtifactApproval {
   }
   if (typeof record.type !== "string" || !ARTIFACT_TYPES.has(record.type as ArtifactType)) {
     throw new Error(`approval entry ${index} has an invalid type`);
+  }
+  if (typeof record.target !== "string" || !ASSISTANTS.has(record.target as Assistant)) {
+    throw new Error(`approval entry ${index} has an invalid target`);
   }
   if (typeof record.contentSha256 !== "string" || !/^[a-f0-9]{64}$/.test(record.contentSha256)) {
     throw new Error(`approval entry ${index} has an invalid content hash`);
@@ -85,6 +91,7 @@ export function approvalMatches(
     approval.suggestionId === entry.suggestionId &&
     approval.name === entry.name &&
     approval.type === entry.type &&
+    approval.target === manifestTarget(entry) &&
     approval.contentSha256 === hash &&
     approval.safetyVersion === ARTIFACT_SAFETY_VERSION
   );
@@ -99,11 +106,12 @@ export async function recordArtifactApproval(
   if (!entry.path) throw new Error("cannot approve a pathless artifact for export");
   const userHome = home ?? homedir();
   const approvals = (await loadArtifactApprovals(projectDir, userHome))
-    .filter(existing => existing.name !== entry.name);
+    .filter(existing => existing.name !== entry.name || existing.target !== manifestTarget(entry));
   approvals.push(validateApproval({
     suggestionId: entry.suggestionId,
     name: entry.name,
     type: entry.type,
+    target: manifestTarget(entry),
     contentSha256: artifactContentHash(content),
     safetyVersion: ARTIFACT_SAFETY_VERSION,
   }, approvals.length));

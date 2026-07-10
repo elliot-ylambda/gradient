@@ -1,10 +1,13 @@
 {
   "name": "gradient.md",
-  "version": "0.1.1",
-  "description": "Mine Claude Code workflows into reviewable skills, rules, insights, and team plugins.",
+  "version": "0.2.1",
+  "description": "Turn repeated Claude Code and Codex workflows into skills, rules, insights, and team plugins.",
   "keywords": [
     "claude",
     "claude-code",
+    "codex",
+    "openai",
+    "agent-skills",
     "cli",
     "automation",
     "skills",
@@ -35,7 +38,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepublishOnly": "npm test && npm run build && npm run smoke:bin"
   },
-  "dependencies": { "@anthropic-ai/sdk": "^0.40.0" },
+  "dependencies": { "@anthropic-ai/sdk": "^0.111.0" },
   "devDependencies": {
     "typescript": "^5.6.0",
     "vitest": "^3.2.7",

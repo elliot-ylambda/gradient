@@ -52,6 +52,7 @@ vi.mock("./commands/insights.js", () => ({
       errorPastes: 5,
     },
     recommendations: [{ metric: "nudges", line: "try: gradient autopilot nudge" }],
+    costs: [{ metric: "nudges", tokens: 120, prompts: 11, line: "≈120 tokens · 11 nudge prompts" }],
   })),
   writeInsightsHtml: vi.fn(async () => "/repo/.gradient/insights.html"),
 }));
@@ -100,6 +101,10 @@ describe("parseCliArgs", () => {
 
   it("parses the insights --html flag", () => {
     expect(parseCliArgs(["insights", "--html"]).flags.html).toBe(true);
+  });
+
+  it("parses the init assistant target", () => {
+    expect(parseCliArgs(["init", "--target", "both"]).flags.target).toBe("both");
   });
 
   it("returns empty command for empty argv", () => {
@@ -367,6 +372,9 @@ describe("bundle dispatch", () => {
     expect(output).toContain('"description": "Team workflows packaged by gradient"');
     expect(output).toContain('"name": "team-toolkit"');
     expect(output).toContain('"source": "./team-toolkit"');
+    expect(output).toContain("Codex marketplace entry");
+    expect(output).toContain('"path": "./plugins/team-toolkit"');
+    expect(output).toContain('"installation": "AVAILABLE"');
   });
 
   it("rejects hook export before building anything", async () => {

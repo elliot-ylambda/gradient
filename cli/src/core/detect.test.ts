@@ -229,4 +229,45 @@ describe("detect", () => {
     const malformed = { name: "bad", available: async () => true, complete: async () => "not json" };
     expect(await detect([source], malformed)).toHaveLength(1);
   });
+
+  it("aborts a hung classifier and degrades to locally reconstructed output", async () => {
+    let aborted = false;
+    const never = {
+      name: "never",
+      available: async () => true,
+      complete: ({ signal }: { signal?: AbortSignal }) => new Promise<string>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          aborted = true;
+          reject(new Error("aborted"));
+        });
+      }),
+    };
+    const result = await detect([cand("format the project", 5)], never, { timeoutMs: 10 });
+    expect(aborted).toBe(true);
+    expect(result).toHaveLength(1);
+    expect(result[0].payload.type).toBe("command");
+  });
+});
+
+it("briefs the model on sequence candidates and forwards their kind", () => {
+  const seq = { kind: "sequence" as const, signature: "review the spec → write the plan",
+    examples: ["review the spec ⏎ write the plan"], count: 5, sessions: 3,
+    sessionIds: ["a", "b", "c"], confidence: "high" as const };
+  const { system, prompt } = buildDetectPrompt([seq]);
+  expect(system).toContain("sequence");
+  expect(system).toContain("numbered");
+  expect(JSON.parse(prompt)[0].kind).toBe("sequence");
+});
+
+it("omits kind for unknown candidates (prompt stays unchanged for them)", () => {
+  const c = { kind: "unknown" as const, signature: "lgtm", examples: ["lgtm"],
+    count: 5, sessions: 3, sessionIds: ["a"], confidence: "high" as const };
+  expect(JSON.parse(buildDetectPrompt([c]).prompt)[0].kind).toBeUndefined();
+});
+
+it("briefs the model to flag only zero-judgment mechanical workflows", () => {
+  const { system } = buildDetectPrompt([]);
+  expect(system).toContain("mechanical:true");
+  expect(system).toContain("zero judgment");
+  expect(system).toContain("review a spec");
 });

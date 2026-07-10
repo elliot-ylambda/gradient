@@ -3,7 +3,7 @@
 The local-first `gradient` command-line tool.
 
 ```bash
-npx gradient.md init      # configure (reuses your `claude` auth — no API key needed)
+npx gradient.md init --target both # configure Claude Code + Codex (existing CLI auth)
 npx gradient.md scan      # mine bounded prompt, paste, answer, and sequence candidates
 npx gradient.md review    # approve the ones you want; gradient writes the artifacts
 npx gradient.md list      # see what it generated · npx gradient.md remove <name> to undo
@@ -17,14 +17,17 @@ npx gradient.md bundle team-kit # package approved artifacts as a plugin
 
 ## How it works
 
-1. Reads your Claude Code transcripts (`~/.claude/projects/**/*.jsonl`).
+1. Reads enabled local histories: Claude Code (`~/.claude/projects/**/*.jsonl`)
+   and Codex (`~/.codex/sessions/**/*.jsonl`). Spawned subagent logs are excluded.
 2. Clusters repeated prompts, failing-command pastes, recurring sequences, and
    conservative low-impact Q→A preferences locally (no LLM). Pasted bodies and
    command arguments are discarded; cross-project scans skip Q→A rules.
-3. Sends only the top candidates to an LLM (the `claude` CLI by default, with an
-   Anthropic API-key fallback) to name and type them.
+3. Sends only the top candidates to an LLM (`claude` by default, isolated
+   `codex exec --ephemeral` for a Codex-only target, with an Anthropic API-key
+   fallback) to name and type them.
 4. You inspect the exact rendered artifact and approve; it writes
-   `.claude/skills/<name>/SKILL.md` and project rules under `.claude/rules/`,
+   `.claude/skills/<name>/SKILL.md`, portable Codex skills under
+   `.agents/skills/<name>/SKILL.md`, and project rules under `.claude/rules/`,
    prints `/loop` instructions, or proposes local hook settings
    that call allowlisted `gradient` subcommands.
 
@@ -39,6 +42,12 @@ for legacy `.claude/commands/*.md` output. `gradient migrate --dry-run` previews
 conversion of manifest-tracked commands; `gradient migrate` performs it without
 touching hand-written files. Commands created before the hardened private
 approval ledger are skipped; re-scan, review, and apply those workflows first.
+
+Configure `"targets": ["claude-code", "codex"]` to fan approved skills out to
+both assistants. The default remains `["claude-code"]`. Mechanical Claude Code
+skills use `"cheapSkillModel": "haiku"` by default; set it to `""` to disable
+model frontmatter. Codex output stays portable and contains only the Agent
+Skills `name` and `description` metadata.
 
 `gradient recall on` installs an LLM-free `UserPromptSubmit` hook in
 `.claude/settings.local.json`. Its private user-cache index covers project and
@@ -59,7 +68,7 @@ user cache, not the repo, and returns to Claude as explicitly untrusted context.
 Raw assistant/tool-output prose is excluded, and `continuity off` deletes it.
 `--html` explicitly writes a private `.gradient/insights.html` report.
 
-`gradient bundle <name>` atomically rebuilds a Claude Code plugin under
+`gradient bundle <name>` atomically rebuilds a dual Claude Code/Codex plugin under
 `.gradient/bundle/<name>/` from manifest-tracked artifacts only. It copies no
 raw transcript or cache files, evidence counts, local provenance IDs, or hooks;
 artifact text can still quote or derive from redacted prompts. Every source must
@@ -84,15 +93,15 @@ It is consented per project, bounded by paid judge attempts (default 10,
 absolute ceiling 100), latches off when it
 sees no progress, and fails open — any error means the stop simply stands. The
 judge runs in safe mode with tools and customizations disabled; its text is never
-relayed. `full` mode is disabled in `0.1.1`. A committed `gradient.md` can only
+relayed. `full` mode is disabled in `0.2.1`. A committed `gradient.md` can only
 lower mode or budget through structured frontmatter; repository prose is ignored.
 
-## Usage and billing
+## Model use and billing
 
-gradient calls Claude by spawning `claude -p`, which draws on the **Agent SDK
-credit** included with a Pro or Max plan — a separate allowance from interactive
-Claude Code usage. `scan` costs one call per run; `autopilot` can call once per
-stop up to its attempt budget. For CI or anything shared, set
+gradient uses `claude -p` or isolated `codex exec --ephemeral` calls under the
+account and limits of your existing CLI login. `scan` costs one classification
+call per run; Claude Code autopilot can call once per stop up to its attempt
+budget. For CI or anything shared, use a service credential: set
 `ANTHROPIC_API_KEY` and pin `"backend": "anthropic"`; an unavailable pinned
 backend fails closed rather than silently falling back.
 
@@ -104,7 +113,7 @@ settings, and logs have hard resource ceilings; custom `ignorePatterns` use a
 capped, linear-looking regex subset. See the repository's
 [security and data-boundary documentation](https://github.com/elliot-ylambda/gradient#data-and-trust-boundaries).
 
-Full details: [Usage and billing](https://github.com/elliot-ylambda/gradient#usage-and-billing).
+Full details: [Model use and billing](https://github.com/elliot-ylambda/gradient#model-use-and-billing).
 
 ## Development
 

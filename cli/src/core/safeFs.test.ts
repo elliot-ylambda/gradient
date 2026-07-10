@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { safeAppendFile, safeReadFile, safeWriteFile } from "./safeFs.js";
+import { closeSync, writeSync } from "node:fs";
+import { safeAppendFile, safeOpenWriteSync, safeReadFile, safeWriteFile } from "./safeFs.js";
 
 describe("safe filesystem boundaries", () => {
   it("rejects a symlinked ancestor and preserves the external victim", async () => {
@@ -42,5 +43,17 @@ describe("safe filesystem boundaries", () => {
     await safeAppendFile(root, path, "1234", { maxBytes: 5 });
     await expect(safeAppendFile(root, path, "56", { maxBytes: 5 })).rejects.toMatchObject({ code: "EFBIG" });
     expect(await readFile(path, "utf8")).toBe("1234");
+  });
+
+  it("truncates the detached scan log on each run instead of growing forever", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gradient-safe-log-"));
+    const path = join(root, ".gradient", "last-scan.log");
+    let fd = safeOpenWriteSync(root, path);
+    writeSync(fd, "old output");
+    closeSync(fd);
+    fd = safeOpenWriteSync(root, path);
+    writeSync(fd, "new");
+    closeSync(fd);
+    expect(await readFile(path, "utf8")).toBe("new");
   });
 });

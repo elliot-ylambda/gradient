@@ -230,3 +230,18 @@ export function safeOpenAppendSync(base: string, path: string, mode = 0o600): nu
     mode,
   );
 }
+
+/** Open a private bounded-by-replacement log target without following links.
+ * Callers that write a fresh diagnostic log per run avoid unbounded append
+ * growth across repeated hook invocations. */
+export function safeOpenWriteSync(base: string, path: string, mode = 0o600): number {
+  const resolved = resolvedInside(base, path);
+  assertNoSymlinkPathSync(resolved.base, dirname(resolved.target));
+  mkdirSync(dirname(resolved.target), { recursive: true, mode: 0o700 });
+  assertNoSymlinkPathSync(resolved.base, resolved.target);
+  return openSync(
+    resolved.target,
+    constants.O_WRONLY | constants.O_TRUNC | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0),
+    mode,
+  );
+}

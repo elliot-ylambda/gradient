@@ -24,12 +24,8 @@ describe("binary bootstrap", () => {
     await saveRecallIndex(dir, {
       builtAt: new Date().toISOString(),
       entries: [{
-        name: "ship",
-        kind: "skill",
-        invocation: "/ship",
-        triggers: ["prepare this pull request for shipping"],
-        signature: "",
-        description: "",
+        name: "ship", kind: "skill", invocation: "/ship",
+        triggers: ["prepare this pull request for shipping"], signature: "", description: "",
       }],
     }, home);
     const output: string[] = [];

@@ -13,6 +13,8 @@ type RunFn = (
 ) => Promise<RunResult>;
 type WhichFn = (bin: string) => Promise<string | null>;
 const OUTPUT_MAX_CHARS = 2_000_000;
+const WHICH_OUTPUT_MAX_CHARS = 8_192;
+const WHICH_TIMEOUT_MS = 3_000;
 
 const defaultRun: RunFn = (cmd, args, input, opts) =>
   new Promise((resolveP) => {
@@ -39,11 +41,30 @@ const defaultRun: RunFn = (cmd, args, input, opts) =>
 
 const defaultWhich: WhichFn = (bin) =>
   new Promise((resolveP) => {
-    const child = spawn(process.platform === "win32" ? "where" : "which", [bin]);
+    const child = spawn(process.platform === "win32" ? "where" : "which", [bin], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
     let out = "";
-    child.stdout.on("data", d => (out += d));
-    child.on("close", code => resolveP(code === 0 && out.trim() ? out.trim().split("\n")[0] : null));
-    child.on("error", () => resolveP(null));
+    let settled = false;
+    const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveP(value);
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(null);
+    }, WHICH_TIMEOUT_MS);
+    child.stdout.on("data", d => {
+      out += d.toString();
+      if (out.length > WHICH_OUTPUT_MAX_CHARS) {
+        child.kill();
+        finish(null);
+      }
+    });
+    child.on("close", code => finish(code === 0 && out.trim() ? out.trim().split("\n")[0] : null));
+    child.on("error", () => finish(null));
   });
 
 /** Isolated text-only Claude CLI backend for untrusted transcript snippets. */

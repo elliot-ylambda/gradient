@@ -1,87 +1,165 @@
 import { isAbsolute, join, resolve } from "node:path";
-import type { Suggestion, ManifestEntry, ArtifactType } from "./types.js";
+import type { ArtifactType, Assistant, ManifestEntry, Suggestion } from "./types.js";
 import { emit, type EmitTarget } from "./emit/index.js";
 import { assertInside } from "./security.js";
-import { addEntry, loadManifest } from "./manifest.js";
-import { artifactHasMarker } from "./manifest.js";
-import { safeReadFile, safeWriteFile } from "./safeFs.js";
+import { addEntry, artifactHasMarker, loadManifest, manifestTarget } from "./manifest.js";
+import { safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
 import { validateSuggestion } from "./validate.js";
 import { recordArtifactApproval } from "./approvals.js";
 
 export interface ApplyResult {
   suggestion: Suggestion;
+  writes: { target: Assistant; path: string }[];
+  skippedTargets: Assistant[];
+  failures: { target: Assistant; error: string }[];
+  /** First written path, retained for callers predating multi-target apply. */
   written?: string;
   printed?: string;
 }
 
-async function trackedTarget(projectDir: string, s: Suggestion, target: string): Promise<ManifestEntry | undefined> {
-  const resolvedTarget = resolve(target);
+async function trackedTarget(
+  projectDir: string,
+  suggestion: Suggestion,
+  target: Assistant,
+  path: string,
+): Promise<ManifestEntry | undefined> {
+  const resolvedTarget = resolve(path);
   return (await loadManifest(projectDir)).find(entry => {
-    if (entry.name !== s.name || entry.suggestionId !== s.id || !entry.path) return false;
+    if (entry.name !== suggestion.name || manifestTarget(entry) !== target || !entry.path) return false;
     const entryPath = isAbsolute(entry.path) ? entry.path : join(projectDir, entry.path);
     return resolve(entryPath) === resolvedTarget;
   });
 }
 
-export async function applySuggestion(
-  s: Suggestion,
-  projectDir: string,
-  opts: { emitTarget?: EmitTarget; home?: string } = {},
-): Promise<ApplyResult> {
-  validateSuggestion(s);
-  const result = emit(s, { target: opts.emitTarget });
-  let type: ArtifactType;
-  let written: string | undefined;
-  let printed: string | undefined;
-  let approvalContent: string | undefined;
+function normalizeTargets(value: Assistant[] | undefined): Assistant[] {
+  const raw = value ?? ["claude-code"];
+  const out: Assistant[] = [];
+  for (const target of raw) {
+    if (target !== "claude-code" && target !== "codex") throw new Error(`unsupported assistant target: ${String(target)}`);
+    if (!out.includes(target)) out.push(target);
+  }
+  if (out.length === 0 || out.length > 2) throw new Error("apply requires one or two assistant targets");
+  return out;
+}
 
-  if (result.kind === "command" || result.kind === "skill" || result.kind === "rule") {
-    const abs = join(projectDir, result.path);
-    assertInside(join(projectDir, ".claude"), abs);
-    const tracked = await trackedTarget(projectDir, s, abs);
-    if (tracked) {
-      const existing = await safeReadFile(projectDir, abs, { maxBytes: 1_000_000 });
-      if (!artifactHasMarker(existing, tracked)) {
-        throw new Error(`refusing to overwrite artifact without matching gradient provenance: ${abs}`);
+export async function applySuggestion(
+  suggestion: Suggestion,
+  projectDir: string,
+  opts: {
+    emitTarget?: EmitTarget;
+    targets?: Assistant[];
+    cheapModel?: string;
+    home?: string;
+  } = {},
+): Promise<ApplyResult> {
+  validateSuggestion(suggestion);
+  const targets = normalizeTargets(opts.targets);
+  const writes: ApplyResult["writes"] = [];
+  const skippedTargets: Assistant[] = [];
+  const failures: ApplyResult["failures"] = [];
+  let printed: string | undefined;
+
+  for (const target of targets) {
+    if (target === "codex" && suggestion.payload.type !== "command" && suggestion.payload.type !== "rule") {
+      skippedTargets.push(target);
+      continue;
+    }
+
+    try {
+      const result = emit(suggestion, {
+        target: opts.emitTarget,
+        assistant: target,
+        cheapModel: opts.cheapModel,
+      });
+      let type: ArtifactType;
+      let written = "";
+      let approvalContent: string | undefined;
+      let previousContent: string | undefined;
+      let created = false;
+
+      if (result.kind === "command" || result.kind === "skill" || result.kind === "rule") {
+        const abs = join(projectDir, result.path);
+        const assistantRoot = target === "codex" ? ".agents" : ".claude";
+        assertInside(join(projectDir, assistantRoot), abs);
+        const tracked = await trackedTarget(projectDir, suggestion, target, abs);
+        if (tracked) {
+          previousContent = await safeReadFile(projectDir, abs, { maxBytes: 1_000_000 });
+          if (!artifactHasMarker(previousContent, tracked)) {
+            throw new Error(`refusing to overwrite artifact without matching gradient provenance: ${abs}`);
+          }
+          await safeWriteFile(projectDir, abs, result.content, { mode: 0o600 });
+        } else {
+          try {
+            await safeWriteFile(projectDir, abs, result.content, { exclusive: true, mode: 0o600 });
+            created = true;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+              throw new Error(`refusing to overwrite untracked artifact: ${abs}`);
+            }
+            throw error;
+          }
+        }
+        written = abs;
+        approvalContent = result.content;
+        type = result.kind;
+      } else if (result.kind === "loop") {
+        type = "loop";
+      } else if (result.kind === "rule-print") {
+        type = "rule";
+      } else {
+        type = "hook";
       }
-      await safeWriteFile(projectDir, abs, result.content, { mode: 0o600 });
-    } else {
+
+      const entry: ManifestEntry = {
+        name: suggestion.name,
+        type,
+        path: written,
+        createdAt: new Date().toISOString().slice(0, 10),
+        suggestionId: suggestion.id,
+        ...(target === "codex" ? { target } : {}),
+      };
+
       try {
-        await safeWriteFile(projectDir, abs, result.content, { exclusive: true, mode: 0o600 });
+        // The repo-local manifest and marker prove ownership, not human
+        // approval. Record exact bytes in the private per-project ledger first;
+        // a stale ledger entry is harmless if the manifest update then fails.
+        if (written && approvalContent) {
+          await recordArtifactApproval(projectDir, entry, approvalContent, opts.home);
+        }
+        await addEntry(projectDir, entry);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-          throw new Error(`refusing to overwrite untracked artifact: ${abs}`);
+        if (written) {
+          if (created) await safeUnlink(projectDir, written).catch(() => undefined);
+          else if (previousContent !== undefined) {
+            await safeWriteFile(projectDir, written, previousContent, { mode: 0o600 }).catch(() => undefined);
+          }
         }
         throw error;
       }
+
+      if (written) writes.push({ target, path: written });
+      const targetPrinted = result.kind === "loop"
+        ? result.command
+        : result.kind === "rule-print"
+          ? result.text
+          : result.kind === "hook"
+            ? result.settingsPatch
+            : undefined;
+      if (targetPrinted) printed = [printed, targetPrinted].filter(Boolean).join("\n");
+    } catch (error) {
+      failures.push({ target, error: (error as Error).message });
     }
-    written = abs;
-    approvalContent = result.content;
-    type = result.kind;
-  } else if (result.kind === "loop") {
-    printed = result.command;
-    type = "loop";
-  } else if (result.kind === "rule-print") {
-    printed = result.text;
-    type = "rule";
-  } else {
-    printed = result.settingsPatch; // hooks are surfaced for the user to approve into settings.json
-    type = "hook";
   }
 
-  const entry: ManifestEntry = {
-    name: s.name,
-    type,
-    path: written ?? "",
-    createdAt: new Date().toISOString().slice(0, 10),
-    suggestionId: s.id,
-  };
-  await addEntry(projectDir, entry);
-  // The repo-local manifest and marker prove ownership, not human approval.
-  // Keep the export authorization outside the repository and bind it to the
-  // exact bytes produced by the current hardened generator.
-  if (written && approvalContent && (type === "skill" || type === "command" || type === "rule")) {
-    await recordArtifactApproval(projectDir, entry, approvalContent, opts.home);
+  if (failures.length > 0 && writes.length === 0 && !printed) {
+    throw new Error(failures.map(failure => `${failure.target}: ${failure.error}`).join("; "));
   }
-  return { suggestion: s, written, printed };
+  return {
+    suggestion,
+    writes,
+    skippedTargets,
+    failures,
+    written: writes[0]?.path,
+    printed,
+  };
 }

@@ -74,6 +74,15 @@ describe("review", () => {
     expect(preview).toContain(".claude/rules/gradient-prefer-pnpm.md");
     expect(preview).toContain("this is not authorization");
   });
+
+  it("fans approval out to every configured assistant target", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await seed(dir, home, ["ship"]);
+    await saveConfig({ targets: ["claude-code", "codex"] }, home);
+    const [applied] = await review(dir, async () => "approve", { home });
+    expect(applied.writes.map(write => write.target)).toEqual(["claude-code", "codex"]);
+  });
 });
 
 describe("nudge hint", () => {
