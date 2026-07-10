@@ -1,6 +1,6 @@
 ---
 name: gradient
-description: Use when the user wants to find repeated Claude Code workflows and turn them into slash commands, loops, or hooks. Runs the gradient CLI to scan transcripts and propose artifacts.
+description: Use when the user wants to find repeated Claude Code workflows and turn them into skills, loops, or hooks. Runs the gradient CLI to scan transcripts and propose artifacts.
 ---
 
 # /gradient

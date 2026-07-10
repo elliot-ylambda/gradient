@@ -2,10 +2,10 @@
 
 # gradient
 
-**The prompts you keep retyping into Claude Code, compiled into commands.**
+**The prompts you keep retyping into Claude Code, compiled into skills.**
 
 `gradient` reads your own Claude Code history, finds the workflows you repeat,
-and generates the automations to stop — **slash commands, loops, and hooks** —
+and generates the automations to stop — **skills, loops, and hooks** —
 through a read-only **scan** → approve **review** → reversible **apply** flow.
 It only ever suggests: nothing runs without you turning it on.
 
@@ -23,7 +23,7 @@ the same things everyone does in Claude Code:
 - `continue` / `what's next?` typed **hundreds** of times → a loop you never set up
 - `/compact` run **143×** → a `PreCompact` checkpoint you keep forgetting
 - "write the implementation plan", "review the spec then write the plan",
-  "push and open a PR and review it" repeated every week → slash commands waiting
+  "push and open a PR and review it" repeated every week → skills waiting
   to be named
 
 `gradient` mines those patterns out of your history and hands you the artifact.
@@ -32,13 +32,13 @@ the same things everyone does in Claude Code:
 
 ```
 gradient/
-  cli/    →  the gradient CLI — the v1 analysis engine (TypeScript / npx)
+  cli/    →  the gradient CLI (TypeScript / npx)
   docs/   →  design spec and implementation plan
 ```
 
 | Dir | What it is |
 |-----|------------|
-| [`cli/`](cli/) | The `gradient` CLI — the v1 analysis engine. The read-only `scan` pipeline runs end-to-end today. See [`cli/README.md`](cli/README.md). |
+| [`cli/`](cli/) | The `gradient` CLI. Its local-first `scan` pipeline finds repeated workflows and emits approved artifacts. See [`cli/README.md`](cli/README.md). |
 | [`docs/`](docs/) | Design spec and implementation plan. |
 
 ## Quickstart (CLI)
@@ -48,7 +48,8 @@ npx gradient scan        # this project's history (all of it)
 npx gradient scan --user # all projects, last 7 days — your recent cross-project habits
 npx gradient scan --all  # all projects, no time limit (thorough; can be slow)
 npx gradient review      # inspect the ranked suggestions and their evidence
-npx gradient apply <id>  # generate an approved slash-command / loop / hook
+npx gradient apply <id>  # generate an approved skill / loop / hook
+npx gradient migrate     # convert older generated commands into skills
 ```
 
 **Scope.** `scan` defaults to the project you're in. `--user` widens to every
@@ -66,7 +67,7 @@ Clustering is local and LLM-free; only short candidate snippets ever reach a mod
 The most-mined pattern in every history is the nudge — `continue`, `what's
 next?` — typed hundreds of times. `gradient autopilot` automates exactly that:
 a `Stop` hook that answers the way *you* would, using the phrasings mined into
-your playbook (`~/.config/gradient/playbook.md`, yours to edit — `scan`
+your playbook (`~/.config/gradient/gradient.md`, yours to edit — `scan`
 refreshes only its marked region).
 
 ```bash
@@ -89,16 +90,24 @@ cd cli && npm install && npm test && npm run build
 
 ## Status
 
-v1 is the **offline analysis engine**: it mines transcripts and proposes
-slash-command / loop / hook artifacts you approve, with continuous mining
-keeping the playbook fresh. The autopilot loop — `gradient autopilot`, an
-opt-in `Stop`-hook auto-responder — has now shipped as well; see the
-"Autopilot (opt-in)" section above.
+Phase A of the v2 funnel makes both ends of mining more honest: continuation
+summaries, task notifications, configured injectors, and template floods are
+excluded from habit detection; approved command-type suggestions now become
+model-invoked Claude Code skills under `.claude/skills/` by default. Existing
+gradient-generated commands can be converted safely with `gradient migrate`
+(`--dry-run` previews the change). Set `emitTarget` to `"command"` in the
+gradient config only when legacy `.claude/commands/` output is required.
+
+The opt-in `gradient autopilot` Stop-hook responder also ships today. The next
+v2 phases close recall and adoption, add non-lexical detectors, surface local
+behavior insights, and package approved artifacts for teams.
 
 - Design spec: [`docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md`](docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md)
 - Implementation plan: [`docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md`](docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md)
 - Autopilot design spec: [`docs/superpowers/specs/2026-07-01-gradient-auto-responder-design.md`](docs/superpowers/specs/2026-07-01-gradient-auto-responder-design.md)
 - Autopilot implementation plan: [`docs/superpowers/plans/2026-07-01-gradient-auto-responder.md`](docs/superpowers/plans/2026-07-01-gradient-auto-responder.md)
+- v2 funnel design: [`docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md`](docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md)
+- Phase A implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md)
 
 ## License
 

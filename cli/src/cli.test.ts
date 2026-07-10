@@ -1,8 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { parseCliArgs, main } from "./cli.js";
 import { spawnDetached } from "./core/spawn.js";
+import { migrate } from "./commands/migrate.js";
 
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
+vi.mock("./commands/migrate.js", () => ({
+  migrate: vi.fn(async () => ({ migrated: ["ship"], skipped: ["ghost"] })),
+}));
 
 describe("parseCliArgs", () => {
   it("parses command, flags, and positionals", () => {
@@ -21,6 +25,12 @@ describe("parseCliArgs", () => {
   it("parses --limit flag", () => {
     const r = parseCliArgs(["scan", "--limit", "10"]);
     expect(r.flags.limit).toBe("10");
+  });
+
+  it("parses the migrate --dry-run flag", () => {
+    const r = parseCliArgs(["migrate", "--dry-run"]);
+    expect(r.command).toBe("migrate");
+    expect(r.flags["dry-run"]).toBe(true);
   });
 
   it("returns empty command for empty argv", () => {
@@ -50,6 +60,20 @@ describe("main", () => {
     const output = logs.join("\n");
     expect(output).toContain("gradient");
     expect(output).toContain("unknowncmd");
+  });
+
+  it("lists migrate in help and dispatches dry runs", async () => {
+    const help: string[] = [];
+    await main([], { log: message => help.push(message) });
+    expect(help.join("\n")).toContain("gradient migrate [--dry-run]");
+
+    vi.mocked(migrate).mockClear();
+    const logs: string[] = [];
+    const code = await main(["migrate", "--dry-run"], { log: message => logs.push(message) });
+    expect(code).toBe(0);
+    expect(vi.mocked(migrate)).toHaveBeenCalledWith(expect.any(String), { dryRun: true });
+    expect(logs.join("\n")).toContain("would migrate");
+    expect(logs.join("\n")).toContain("skipped ghost");
   });
 
   it("scan --detach does not forward --detach to child (fork-bomb guard)", async () => {
