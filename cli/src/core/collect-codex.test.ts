@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectCodex, readCodexSessionMeta } from "./collect-codex.js";
@@ -48,5 +48,16 @@ describe("collectCodex", () => {
       repositoryUrl: "git@example/repo",
       subagent: false,
     });
+  });
+
+  it("matches project paths through filesystem aliases", async () => {
+    const home = await mkdtemp(join(tmpdir(), "gradient-codex-"));
+    const parent = await mkdtemp(join(tmpdir(), "gradient-project-"));
+    const project = join(parent, "real-project");
+    const alias = join(parent, "project-alias");
+    await mkdir(project);
+    await symlink(project, alias, "dir");
+    const path = await rollout(home, "aliased", alias);
+    expect(await collectCodex({ scope: "project", projectPath: project, home })).toEqual([path]);
   });
 });

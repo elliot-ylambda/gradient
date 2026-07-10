@@ -1,4 +1,4 @@
-import { open, readdir, stat } from "node:fs/promises";
+import { open, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { CollectOptions } from "./collect.js";
@@ -81,8 +81,16 @@ export async function readCodexSessionMeta(path: string): Promise<CodexSessionMe
   }
 }
 
+async function canonical(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
 function isWithinProject(cwd: string, projectPath: string): boolean {
-  const rel = relative(resolve(projectPath), resolve(cwd));
+  const rel = relative(projectPath, cwd);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
@@ -91,6 +99,7 @@ export async function collectCodex(opts: CollectOptions): Promise<string[]> {
   const home = opts.home ?? homedir();
   const now = opts.now ?? Date.now();
   const projectPath = opts.projectPath ?? process.cwd();
+  const canonicalProject = await canonical(projectPath);
   const files = await walk(join(home, ".codex", "sessions"));
   const kept: string[] = [];
   for (const file of files) {
@@ -103,7 +112,7 @@ export async function collectCodex(opts: CollectOptions): Promise<string[]> {
     if (!matchesSince(fileStat.mtimeMs, opts.sinceDays, now)) continue;
     const meta = await readCodexSessionMeta(file);
     if (!meta || meta.subagent) continue;
-    if (opts.scope === "project" && !isWithinProject(meta.cwd, projectPath)) continue;
+    if (opts.scope === "project" && !isWithinProject(await canonical(meta.cwd), canonicalProject)) continue;
     kept.push(file);
   }
   return kept.sort();
