@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Suggestion } from "../core/types.js";
 import { gradientDir } from "../core/manifest.js";
 import { applySuggestion, type ApplyResult } from "../core/apply.js";
+import { loadConfig } from "../config.js";
 
 export async function loadSuggestions(projectDir: string): Promise<Suggestion[]> {
   try {
@@ -12,10 +13,16 @@ export async function loadSuggestions(projectDir: string): Promise<Suggestion[]>
   }
 }
 
-export async function applyByIds(ids: string[], projectDir: string): Promise<ApplyResult[]> {
+export async function applyByIds(
+  ids: string[],
+  projectDir: string,
+  opts: { home?: string } = {},
+): Promise<ApplyResult[]> {
   const all = await loadSuggestions(projectDir);
   const wanted = all.filter(s => ids.includes(s.id) || ids.includes(s.name));
+  const config = await loadConfig(opts.home);
+  const emitTarget = config.emitTarget ?? "skill";
   const out: ApplyResult[] = [];
-  for (const s of wanted) out.push(await applySuggestion(s, projectDir));
+  for (const s of wanted) out.push(await applySuggestion(s, projectDir, { emitTarget }));
   return out;
 }

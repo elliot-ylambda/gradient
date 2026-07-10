@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Suggestion, Turn, Config } from "../core/types.js";
 import { collect } from "../core/collect.js";
 import { parseFile } from "../core/parse.js";
-import { filterPrompts } from "../core/filter.js";
+import { filterPrompts, compileIgnorePatterns, isTemplateFlood } from "../core/filter.js";
 import { capByRecency } from "../core/cap.js";
 import { DEFAULT_MAX_PROMPTS, DEFAULT_DETECT_WINDOW } from "../core/scope.js";
 import { cluster } from "../core/cluster.js";
@@ -73,10 +73,10 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     log(`coverage check failed: ${(e as Error).message}`);
   }
 
-  const prompts = filterPrompts(turns);
-  log(`prompts: ${prompts.length} after filtering injected text`);
-
   const config = deps.config ?? (await loadConfig(opts.home));
+  const ignore = compileIgnorePatterns(config.ignorePatterns);
+  const prompts = filterPrompts(turns, ignore);
+  log(`prompts: ${prompts.length} after filtering injected text`);
   const isAll = opts.scope === "all";
   const max = opts.maxPrompts ?? config.maxPrompts ?? (isAll ? 0 : DEFAULT_MAX_PROMPTS);
   const { kept, dropped } = capByRecency(prompts, max);
@@ -84,7 +84,10 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     log(`capped to most recent ${max} prompts; ${dropped} older dropped (raise with --max-prompts)`);
   }
 
-  const candidates = cluster(kept);
+  const clustered = cluster(kept);
+  const floods = clustered.filter(isTemplateFlood);
+  const candidates = clustered.filter(c => !isTemplateFlood(c));
+  if (floods.length > 0) log(`excluded ${floods.length} machine-template pattern(s) (CI/hook-injected, not habits)`);
   const window = opts.limit ?? DEFAULT_DETECT_WINDOW;
   log(`clustering → ${candidates.length} candidate patterns; sending top ${window} to llm`);
 

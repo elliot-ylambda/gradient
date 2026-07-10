@@ -69,6 +69,8 @@ export function kindLabel(type: ArtifactType): string {
   switch (type) {
     case "command":
       return c.violet(type);
+    case "skill":
+      return c.orchid(type);
     case "loop":
       return c.coral(type);
     case "hook":

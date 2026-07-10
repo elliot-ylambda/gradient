@@ -11,6 +11,7 @@ import { stats } from "./commands/stats.js";
 import { explain } from "./commands/explain.js";
 import { respond, type StopHookInput } from "./commands/respond.js";
 import { setAutopilotMode, autopilotStatus } from "./commands/autopilot.js";
+import { migrate } from "./commands/migrate.js";
 import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
 import { spawnDetached } from "./core/spawn.js";
 import { resolveScanScope } from "./core/scope.js";
@@ -32,6 +33,7 @@ Usage:
   gradient explain <id|name>    show the evidence behind a suggestion
   gradient list                 show generated artifacts
   gradient remove <name>        delete a generated artifact
+  gradient migrate [--dry-run]  convert generated commands to skills
   gradient stats                show your most-repeated patterns + coverage
   gradient autopilot <off|nudge|full>
                                 auto-respond when Claude stops (opt-in)
@@ -56,6 +58,7 @@ export function parseCliArgs(argv: string[]): {
       "no-skill": { type: "boolean" },
       "session-scan": { type: "boolean" },
       detach: { type: "boolean" },
+      "dry-run": { type: "boolean" },
     },
   });
   return { command, positionals, flags: values as Record<string, string | boolean> };
@@ -186,6 +189,16 @@ export async function main(
         const ok = await remove(projectDir, positionals[0]);
         log(ok ? `${c.ok("removed")} ${positionals[0]}` : c.coral(`no such artifact: ${positionals[0]}`));
         return ok ? 0 : 1;
+      }
+      case "migrate": {
+        const dryRun = !!flags["dry-run"];
+        const result = await migrate(projectDir, { dryRun });
+        for (const name of result.migrated) {
+          log(`${c.ok(dryRun ? "would migrate" : "migrated")} ${name}`);
+        }
+        for (const name of result.skipped) log(c.muted(`skipped ${name}`));
+        log(c.dim(`${result.migrated.length} command(s) ${dryRun ? "ready to migrate" : "migrated"}; ${result.skipped.length} skipped`));
+        return 0;
       }
       case "stats": {
         log(banner(VERSION));

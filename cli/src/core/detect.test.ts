@@ -1,16 +1,30 @@
 import { describe, it, expect } from "vitest";
-import { detect, candidateToCommand } from "./detect.js";
+import { detect, candidateToCommand, buildDetectPrompt } from "./detect.js";
 import type { Candidate } from "./types.js";
 
 const cand = (signature: string, count: number, confidence: any = "high"): Candidate =>
   ({ kind: "unknown", signature, examples: [signature], count, sessions: count, sessionIds: ["s"], confidence });
 
 describe("candidateToCommand", () => {
-  it("derives a slash-command suggestion from a high-confidence candidate", () => {
+  it("derives a reusable command suggestion from a high-confidence candidate", () => {
     const s = candidateToCommand(cand("merge main into this pr", 9));
     expect(s.payload.type).toBe("command");
     if (s.payload.type === "command") expect(s.payload.commandName).toBe("merge-main-into");
     expect(s.confidence).toBe("high");
+  });
+
+  it("seeds degraded command triggers from the candidate signature", () => {
+    const s = candidateToCommand(cand("lgtm", 5));
+    expect(s.payload).toMatchObject({ type: "command", triggers: ["lgtm"] });
+  });
+});
+
+describe("buildDetectPrompt", () => {
+  it("asks the model for command triggers and explains that commands emit as skills", () => {
+    const { system } = buildDetectPrompt([]);
+    expect(system).toContain("triggers");
+    expect(system).toContain("skill");
+    expect(system).toContain("every merged cluster's signature");
   });
 });
 

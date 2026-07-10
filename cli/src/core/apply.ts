@@ -1,9 +1,9 @@
 import { writeFile, mkdir } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { Suggestion, ManifestEntry, ArtifactType } from "./types.js";
-import { emit } from "./emit/index.js";
+import { emit, type EmitTarget } from "./emit/index.js";
 import { assertInside } from "./security.js";
-import { addEntry } from "./manifest.js";
+import { addEntry, loadManifest } from "./manifest.js";
 
 export interface ApplyResult {
   suggestion: Suggestion;
@@ -11,22 +11,49 @@ export interface ApplyResult {
   printed?: string;
 }
 
-export async function applySuggestion(s: Suggestion, projectDir: string): Promise<ApplyResult> {
-  const result = emit(s);
-  const type = s.payload.type as ArtifactType;
+async function isTrackedTarget(projectDir: string, name: string, target: string): Promise<boolean> {
+  const resolvedTarget = resolve(target);
+  return (await loadManifest(projectDir)).some(entry => {
+    if (entry.name !== name || !entry.path) return false;
+    const entryPath = isAbsolute(entry.path) ? entry.path : join(projectDir, entry.path);
+    return resolve(entryPath) === resolvedTarget;
+  });
+}
+
+export async function applySuggestion(
+  s: Suggestion,
+  projectDir: string,
+  opts: { emitTarget?: EmitTarget } = {},
+): Promise<ApplyResult> {
+  const result = emit(s, { target: opts.emitTarget });
+  let type: ArtifactType;
   let written: string | undefined;
   let printed: string | undefined;
 
-  if (result.kind === "command") {
+  if (result.kind === "command" || result.kind === "skill") {
     const abs = join(projectDir, result.path);
     assertInside(join(projectDir, ".claude"), abs);
     await mkdir(dirname(abs), { recursive: true });
-    await writeFile(abs, result.content);
+    if (await isTrackedTarget(projectDir, s.name, abs)) {
+      await writeFile(abs, result.content);
+    } else {
+      try {
+        await writeFile(abs, result.content, { flag: "wx" });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new Error(`refusing to overwrite untracked artifact: ${abs}`);
+        }
+        throw error;
+      }
+    }
     written = abs;
+    type = result.kind;
   } else if (result.kind === "loop") {
     printed = result.command;
+    type = "loop";
   } else {
     printed = result.settingsPatch; // hooks are surfaced for the user to approve into settings.json
+    type = "hook";
   }
 
   const entry: ManifestEntry = {

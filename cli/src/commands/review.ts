@@ -3,16 +3,25 @@ import type { Suggestion } from "../core/types.js";
 import { applySuggestion, type ApplyResult } from "../core/apply.js";
 import { isNudge } from "../core/playbook.js";
 import { loadSuggestions } from "./apply.js";
+import { loadConfig } from "../config.js";
 
 export type Prompter = (s: Suggestion, index: number, total: number) => Promise<"approve" | "skip" | "quit">;
 
-export async function review(projectDir: string, prompt: Prompter): Promise<ApplyResult[]> {
+export async function review(
+  projectDir: string,
+  prompt: Prompter,
+  opts: { home?: string } = {},
+): Promise<ApplyResult[]> {
   const suggestions = await loadSuggestions(projectDir);
+  const config = await loadConfig(opts.home);
+  const emitTarget = config.emitTarget ?? "skill";
   const out: ApplyResult[] = [];
   for (let i = 0; i < suggestions.length; i++) {
     const decision = await prompt(suggestions[i], i, suggestions.length);
     if (decision === "quit") break;
-    if (decision === "approve") out.push(await applySuggestion(suggestions[i], projectDir));
+    if (decision === "approve") {
+      out.push(await applySuggestion(suggestions[i], projectDir, { emitTarget }));
+    }
   }
   return out;
 }

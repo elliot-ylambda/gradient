@@ -768,3 +768,27 @@ Expected: PASS; build clean.
 git add cli/src/commands/migrate.ts cli/src/commands/migrate.test.ts cli/src/cli.ts README.md cli/README.md
 git commit -m "feat(cli): gradient migrate — convert generated commands to skills; docs wording"
 ```
+
+---
+
+## Execution notes (2026-07-09)
+
+- **A3 exhaustiveness:** adding `"skill"` to `ArtifactType` required minimal
+  compile-time handling in `apply.ts` and `ui.ts` during A3. A4 then completed
+  the intended manifest type, config dispatch, and removal behavior.
+- **A4 test isolation:** `applyByIds` and `review` accept an optional `home` so
+  config-dependent tests never read the developer's real gradient config.
+- **A6 migration hardening:** migration resolves legacy relative manifest
+  paths, parses CRLF frontmatter, refuses tampered sources outside `.claude`,
+  and skips collisions with hand-written skills. These preserve the spec's
+  gradient-owned-files boundary while keeping `--dry-run` side-effect free.
+- **Final review safety fix:** apply now overwrites only the same path already
+  owned under the same manifest name; a same-named hand-written skill is never
+  replaced or subsequently made removable by gradient.
+- **Validation alignment:** the scan regression now exercises all 1,318
+  redacted security-review events, template thresholds are pinned at 240
+  characters / 25 occurrences / 90% session spread, and scan wiring for
+  `ignorePatterns` has direct coverage.
+- **Spec clarification:** `ci-template` remains a post-cluster candidate
+  classification, not a per-turn `PromptClass`, because it depends on aggregate
+  occurrence and session counts.

@@ -1,6 +1,6 @@
 export type Role = "user" | "assistant";
 export type Confidence = "high" | "inferred" | "flagged";
-export type ArtifactType = "command" | "loop" | "hook";
+export type ArtifactType = "command" | "loop" | "hook" | "skill";
 
 /** One genuine user prompt after parse + filter. (The mining pipeline consumes
  * only user text; assistant turns are rendered by core/tail.ts for autopilot.) */
@@ -26,7 +26,7 @@ export interface Candidate {
 
 /** Semantic content of a suggestion; emit/* formats it into an artifact. */
 export type SuggestionPayload =
-  | { type: "command"; commandName: string; body: string }
+  | { type: "command"; commandName: string; body: string; triggers?: string[] }
   | { type: "loop"; instruction: string; cadence?: string }
   | { type: "hook"; event: string; subcommand: string; description: string };
 
@@ -65,6 +65,10 @@ export interface Config {
   autopilotBudget?: number;
   /** Judge model (fast by design; the judge sits in the user's stop path). Defaults to "haiku". */
   autopilotModel?: string;
+  /** Extra regexes (source strings) classified as machine-injected during mining. */
+  ignorePatterns?: string[];
+  /** Artifact format for command-type suggestions. Default "skill". */
+  emitTarget?: "skill" | "command";
 }
 
 /** Autopilot authority ladder (spec §2 #1). */

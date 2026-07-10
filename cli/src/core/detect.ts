@@ -20,7 +20,12 @@ export function candidateToCommand(c: Candidate): Suggestion {
     evidence: { count: c.count, sessions: c.sessions },
     confidence: c.confidence,
     examples: c.examples.map(redact).slice(0, 5),
-    payload: { type: "command", commandName, body: c.examples[0] ?? c.signature },
+    payload: {
+      type: "command",
+      commandName,
+      body: c.examples[0] ?? c.signature,
+      triggers: [c.signature],
+    },
   };
 }
 
@@ -31,13 +36,14 @@ function degradeToCommands(cands: Candidate[]): Suggestion[] {
 export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt: string } {
   const system =
     "You convert clusters of a developer's repeated Claude Code prompts into reusable artifacts. " +
-    "For each cluster decide a type: 'command' (a repeated instruction → slash command), " +
+    "For each cluster decide a type: 'command' (a repeated instruction → emitted as a reusable Claude Code skill), " +
     "'loop' (a recurring cadence task), or 'hook' (an automation tied to a Claude Code lifecycle event; " +
     "the only supported hook event is PreCompact backed by the gradient subcommand 'checkpoint'). " +
     "Merge clusters that mean the same thing (e.g. 'lgtm' and 'looks good') into ONE suggestion. " +
     "Echo back EVERY merged cluster's exact 'signature' in a 'sourceSignatures' string array so evidence can be summed. " +
+    "For command payloads include triggers: the distinct short phrasings the user actually typed, taken from every merged cluster's signature (e.g. [\"lgtm\",\"looks good\"]). " +
     "Respond ONLY with JSON: {\"suggestions\":[{sourceSignatures,name,title,rationale,confidence,payload}]} where payload is one of " +
-    "{type:'command',commandName,body} | {type:'loop',instruction,cadence?} | {type:'hook',event:'PreCompact',subcommand:'checkpoint',description}. " +
+    "{type:'command',commandName,body,triggers?} | {type:'loop',instruction,cadence?} | {type:'hook',event:'PreCompact',subcommand:'checkpoint',description}. " +
     "confidence must be exactly one of \"high\", \"inferred\", or \"flagged\".";
   // Redact secrets from examples/signatures before they ever leave the machine (spec §7).
   const prompt = JSON.stringify(

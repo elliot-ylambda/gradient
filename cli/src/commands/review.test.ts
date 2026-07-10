@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { review } from "./review.js";
 import { isNudge } from "../core/playbook.js";
 import type { Suggestion } from "../core/types.js";
+import { saveConfig } from "../config.js";
 
 const mk = (name: string): Suggestion => ({
   id: `id-${name}`, name, title: "t", rationale: "r",
@@ -20,10 +21,20 @@ async function seed(dir: string, names: string[]) {
 describe("review", () => {
   it("approves selectively and stops on quit", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     await seed(dir, ["ship", "plan", "next"]);
     const answers: Record<string, "approve" | "skip" | "quit"> = { ship: "approve", plan: "skip", next: "quit" };
-    const applied = await review(dir, async (s) => answers[s.name]);
+    const applied = await review(dir, async (s) => answers[s.name], { home });
     expect(applied.map(a => a.suggestion.name)).toEqual(["ship"]);
+  });
+
+  it("honors the configured command emit target", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await seed(dir, ["ship"]);
+    await saveConfig({ emitTarget: "command" }, home);
+    const [applied] = await review(dir, async () => "approve", { home });
+    expect(applied.written).toBe(join(dir, ".claude", "commands", "ship.md"));
   });
 });
 
