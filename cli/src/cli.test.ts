@@ -3,6 +3,7 @@ import { parseCliArgs, main } from "./cli.js";
 import { spawnDetached } from "./core/spawn.js";
 import { migrate } from "./commands/migrate.js";
 import { recallHook, recallStatus, setRecall } from "./commands/recall.js";
+import { stats } from "./commands/stats.js";
 
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
 vi.mock("./commands/migrate.js", () => ({
@@ -12,6 +13,24 @@ vi.mock("./commands/recall.js", () => ({
   recallHook: vi.fn(async () => ({ context: "use the installed skill" })),
   recallStatus: vi.fn(async () => ({ installed: true, entries: 2, builtAt: "2026-07-09T00:00:00Z" })),
   setRecall: vi.fn(async (on: boolean) => ({ installed: on, settingsPath: "/repo/.claude/settings.json" })),
+}));
+vi.mock("./commands/stats.js", () => ({
+  stats: vi.fn(async () => ({
+    total: 0,
+    covered: 0,
+    coveragePct: 0,
+    sessionScanEnabled: false,
+    patterns: [],
+    adoption: [{
+      name: "dead",
+      type: "skill",
+      createdAt: "2026-05-01",
+      uses: 0,
+      lastUsed: undefined,
+      retypesCaught: 0,
+      suggestRemoval: true,
+    }],
+  })),
 }));
 
 describe("parseCliArgs", () => {
@@ -211,5 +230,17 @@ describe("recall dispatch", () => {
     const lines: string[] = [];
     expect(await main(["recall", "sideways"], { log: line => lines.push(line) })).toBe(2);
     expect(lines.join("\n")).toContain("unknown recall action");
+  });
+});
+
+describe("stats adoption rendering", () => {
+  it("shows uses, last use, retypes caught, and the removal nudge", async () => {
+    vi.mocked(stats).mockClear();
+    const lines: string[] = [];
+    expect(await main(["stats"], { log: line => lines.push(line) })).toBe(0);
+    const output = lines.join("\n");
+    expect(output).toContain("adoption:");
+    expect(output).toContain("0 use(s) · last never · 0 retype(s) caught");
+    expect(output).toContain("gradient remove dead");
   });
 });

@@ -3,6 +3,8 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stats } from "./stats.js";
+import { addEntry } from "../core/manifest.js";
+import { appendAdoption } from "./recall.js";
 
 async function seed(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "grad-stats-"));
@@ -34,7 +36,14 @@ describe("stats", () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-stats-empty-"));
     const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
     const report = await stats(dir, { home });
-    expect(report).toEqual({ total: 0, covered: 0, coveragePct: 0, sessionScanEnabled: false, patterns: [] });
+    expect(report).toEqual({
+      total: 0,
+      covered: 0,
+      coveragePct: 0,
+      sessionScanEnabled: false,
+      patterns: [],
+      adoption: [],
+    });
   });
 
   it("reports sessionScanEnabled from config", async () => {
@@ -44,5 +53,71 @@ describe("stats", () => {
     await writeFile(join(home, ".config", "gradient", "config.json"), JSON.stringify({ scanOnSessionStart: true }));
     const report = await stats(dir, { home });
     expect(report.sessionScanEnabled).toBe(true);
+  });
+
+  it("reports transcript uses, last use, and hinted retypes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-stats-adopt-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
+    await addEntry(dir, {
+      name: "ship",
+      type: "skill",
+      path: ".claude/skills/ship/SKILL.md",
+      createdAt: "2026-06-15",
+      suggestionId: "ship-id",
+    });
+    await appendAdoption(dir, {
+      ts: "2026-07-01T00:00:00Z",
+      artifact: "ship",
+      similarity: 0.8,
+      hinted: true,
+    });
+    await appendAdoption(dir, {
+      ts: "2026-07-02T00:00:00Z",
+      artifact: "ship",
+      similarity: 0.45,
+      hinted: false,
+    });
+
+    const report = await stats(dir, {
+      home,
+      now: Date.parse("2026-07-06T00:00:00Z"),
+      collectFn: async () => ["transcript"],
+      parseFn: async () => [
+        { ts: "2026-06-01T00:00:00Z", project: "p", role: "user", sessionId: "s0", text: "<command-name>/ship</command-name>" },
+        { ts: "2026-07-03T00:00:00Z", project: "p", role: "user", sessionId: "s1", text: "<command-name>/ship</command-name>" },
+      ],
+    });
+    expect(report.adoption).toEqual([expect.objectContaining({
+      name: "ship",
+      type: "skill",
+      uses: 1,
+      lastUsed: "2026-07-03T00:00:00Z",
+      retypesCaught: 1,
+      suggestRemoval: false,
+    })]);
+  });
+
+  it("suggests removal at 30 unused days with no hinted retypes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-stats-unused-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
+    await addEntry(dir, {
+      name: "dead",
+      type: "skill",
+      path: ".claude/skills/dead/SKILL.md",
+      createdAt: "2026-05-01",
+      suggestionId: "dead-id",
+    });
+    const report = await stats(dir, {
+      home,
+      now: Date.parse("2026-05-31T00:00:00Z"),
+      collectFn: async () => [],
+      parseFn: async () => [],
+    });
+    expect(report.adoption[0]).toMatchObject({
+      name: "dead",
+      uses: 0,
+      retypesCaught: 0,
+      suggestRemoval: true,
+    });
   });
 });

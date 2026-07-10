@@ -37,7 +37,7 @@ Usage:
   gradient migrate [--dry-run]  convert generated commands to skills
   gradient recall <on|off|status>
                                 hint when a prompt matches an artifact
-  gradient stats                show your most-repeated patterns + coverage
+  gradient stats                show pattern coverage + artifact adoption
   gradient autopilot <off|nudge|full>
                                 auto-respond when Claude stops (opt-in)
   gradient autopilot status     mode, budget, and recent auto-responses
@@ -253,6 +253,20 @@ export async function main(
         log(c.dim(`session-start scan: ${r.sessionScanEnabled ? "on" : "off"}`));
         for (const p of r.patterns) {
           log(`  ${confidenceChip(p.confidence)} ${c.bold(p.name)}  ${c.dim(`(seen ${p.count}× · ${p.sessions} sessions)`)}  ${p.covered ? c.ok("✓ automated") : c.muted("—")}`);
+        }
+        if (r.adoption.length > 0) {
+          log(c.dim("\nadoption:"));
+          for (const artifact of r.adoption) {
+            const lastUsed = artifact.lastUsed ? artifact.lastUsed.slice(0, 10) : "never";
+            const removal = artifact.suggestRemoval
+              ? c.coral(`  → unused 30d+, consider: gradient remove ${artifact.name}`)
+              : "";
+            log(
+              `  ${c.bold(artifact.name)}  ` +
+              c.dim(`${artifact.uses} use(s) · last ${lastUsed} · ${artifact.retypesCaught} retype(s) caught`) +
+              removal,
+            );
+          }
         }
         return 0;
       }
