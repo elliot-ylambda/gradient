@@ -35,6 +35,9 @@ describe("assertHookRunnable", () => {
   it("exposes checkpoint as known", () => {
     expect(KNOWN_SUBCOMMANDS.has("checkpoint")).toBe(true);
   });
+  it("exposes recap as a known continuity hook target", () => {
+    expect(KNOWN_SUBCOMMANDS.has("recap")).toBe(true);
+  });
   it("treats a SessionStart→scan hook as runnable", () => {
     const s: any = { id: "x", name: "n", title: "t", rationale: "r", confidence: "high",
       payload: { type: "hook", event: "SessionStart", subcommand: "scan", description: "d" } };

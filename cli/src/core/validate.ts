@@ -1,6 +1,6 @@
 import type { Suggestion } from "./types.js";
 
-export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan"]);
+export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan", "recap"]);
 const TYPES = new Set(["command", "loop", "hook", "rule"]);
 const CONFIDENCES = new Set(["high", "inferred", "flagged"]);
 

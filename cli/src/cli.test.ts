@@ -4,6 +4,9 @@ import { spawnDetached } from "./core/spawn.js";
 import { migrate } from "./commands/migrate.js";
 import { recallHook, recallStatus, setRecall } from "./commands/recall.js";
 import { stats } from "./commands/stats.js";
+import { insights, writeInsightsHtml } from "./commands/insights.js";
+import { continuityStatus, setContinuity } from "./commands/continuity.js";
+import { recap } from "./commands/recap.js";
 
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
 vi.mock("./commands/migrate.js", () => ({
@@ -32,6 +35,32 @@ vi.mock("./commands/stats.js", () => ({
     }],
   })),
 }));
+vi.mock("./commands/insights.js", () => ({
+  insights: vi.fn(async () => ({
+    label: "project scope · all history",
+    avoided: 0,
+    metrics: {
+      prompts: 12,
+      nudges: 11,
+      interrupts: 2,
+      continuations: 3,
+      notifications: 0,
+      compacts: 4,
+      modelSwitches: 1,
+      effortSwitches: 2,
+      errorPastes: 5,
+    },
+    recommendations: [{ metric: "nudges", line: "try: gradient autopilot nudge" }],
+  })),
+  writeInsightsHtml: vi.fn(async () => "/repo/.gradient/insights.html"),
+}));
+vi.mock("./commands/continuity.js", () => ({
+  continuityStatus: vi.fn(async () => ({ checkpoint: true, recap: true })),
+  setContinuity: vi.fn(async (on: boolean) => ({ on, settingsPath: "/repo/.claude/settings.json" })),
+}));
+vi.mock("./commands/recap.js", () => ({
+  recap: vi.fn(async () => null),
+}));
 
 describe("parseCliArgs", () => {
   it("parses command, flags, and positionals", () => {
@@ -56,6 +85,10 @@ describe("parseCliArgs", () => {
     const r = parseCliArgs(["migrate", "--dry-run"]);
     expect(r.command).toBe("migrate");
     expect(r.flags["dry-run"]).toBe(true);
+  });
+
+  it("parses the insights --html flag", () => {
+    expect(parseCliArgs(["insights", "--html"]).flags.html).toBe(true);
   });
 
   it("returns empty command for empty argv", () => {
@@ -242,5 +275,60 @@ describe("stats adoption rendering", () => {
     expect(output).toContain("adoption:");
     expect(output).toContain("0 use(s) · last never · 0 retype(s) caught");
     expect(output).toContain("gradient remove dead");
+  });
+});
+
+describe("insights dispatch", () => {
+  it("lists and renders the local behavior report", async () => {
+    const help: string[] = [];
+    await main([], { log: line => help.push(line) });
+    expect(help.join("\n")).toContain("gradient insights [--user] [--html]");
+
+    vi.mocked(insights).mockClear();
+    const lines: string[] = [];
+    expect(await main(["insights", "--user"], { log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(insights)).toHaveBeenCalledWith({ projectDir: expect.any(String), user: true });
+    expect(lines.join("\n")).toContain("prompts");
+    expect(lines.join("\n")).toContain("gradient autopilot nudge");
+  });
+
+  it("writes and reports the self-contained HTML view when requested", async () => {
+    vi.mocked(writeInsightsHtml).mockClear();
+    const lines: string[] = [];
+    expect(await main(["insights", "--html"], { log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(writeInsightsHtml)).toHaveBeenCalledWith(expect.any(String), expect.any(Object));
+    expect(lines.join("\n")).toContain(".gradient/insights.html");
+  });
+});
+
+describe("continuity dispatch", () => {
+  it("lists the manager and dispatches on, off, and status", async () => {
+    const help: string[] = [];
+    await main([], { log: line => help.push(line) });
+    expect(help.join("\n")).toContain("gradient continuity <on|off|status>");
+
+    vi.mocked(setContinuity).mockClear();
+    expect(await main(["continuity", "on"], { log: () => {} })).toBe(0);
+    expect(await main(["continuity", "off"], { log: () => {} })).toBe(0);
+    expect(vi.mocked(setContinuity)).toHaveBeenNthCalledWith(1, true, expect.any(String));
+    expect(vi.mocked(setContinuity)).toHaveBeenNthCalledWith(2, false, expect.any(String));
+
+    const lines: string[] = [];
+    expect(await main(["continuity", "status"], { log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(continuityStatus)).toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("checkpoint (PreCompact):");
+  });
+
+  it("rejects an unknown action", async () => {
+    const lines: string[] = [];
+    expect(await main(["continuity", "sideways"], { log: line => lines.push(line) })).toBe(2);
+    expect(lines.join("\n")).toContain("unknown continuity action");
+  });
+
+  it("keeps the recap hook silent when no checkpoint exists", async () => {
+    vi.mocked(recap).mockResolvedValueOnce(null);
+    const lines: string[] = [];
+    expect(await main(["recap"], { log: line => lines.push(line) })).toBe(0);
+    expect(lines).toEqual([]);
   });
 });

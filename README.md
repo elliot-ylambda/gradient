@@ -53,6 +53,8 @@ npx gradient.md apply <id>  # generate an approved skill / loop / hook
 npx gradient.md migrate     # convert older generated commands into skills
 npx gradient.md recall on   # hint when a typed prompt matches an installed artifact
 npx gradient.md stats       # coverage plus artifact adoption
+npx gradient.md insights    # local behavior report + concrete next actions
+npx gradient.md continuity on # checkpoint before compaction, recap after resume
 ```
 
 The npm package is **`gradient.md`**; the command it installs is **`gradient`**.
@@ -174,6 +176,21 @@ whether a hint was shown. Prompt text is never logged. `gradient stats` reports
 uses, last use, and retypes caught for each approved artifact, and suggests
 removing artifacts that remain unused for at least 30 days.
 
+## Insights & continuity
+
+`gradient insights` is a local-only report card for the way you work: typed
+nudges, interrupted turns, context deaths and compacts, repeated error pastes,
+and model/effort churn. It makes no model call. Each hot metric points to a
+specific action such as `gradient autopilot nudge`, `gradient scan`, or
+`gradient recall on`; `--user` uses the same recent cross-project window as
+scan, and `--html` writes a self-contained `.gradient/insights.html`.
+
+`gradient continuity on` productizes the checkpoint/resume loop. It installs a
+`PreCompact` checkpoint hook and a `SessionStart` hook limited to `resume` and
+`compact`. The checkpoint writes redacted recent intent and conversation tail
+to `progress.md`; recap prints that file back into context. `gradient
+continuity off` removes only those two hooks.
+
 ## Develop
 
 ```bash
@@ -194,9 +211,13 @@ generating a workflow and actually using it. Phase C detects repeated pasted
 failures and repeated short answers, turning them into self-service skills and
 standing project rules without retaining pasted error bodies.
 
-The opt-in `gradient autopilot` Stop-hook responder also ships today. The next
-v2 phases surface local behavior insights and package approved artifacts for
-teams.
+Phase D adds the LLM-free behavior report and the opt-in continuity pack:
+`gradient insights` turns local work signals into concrete next actions, while
+`gradient continuity on` preserves a redacted checkpoint across compaction and
+resumed sessions.
+
+The opt-in `gradient autopilot` Stop-hook responder also ships today. The final
+v2 phase packages approved artifacts for teams.
 
 - Design spec: [`docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md`](docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md)
 - Implementation plan: [`docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md`](docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md)
@@ -205,6 +226,8 @@ teams.
 - v2 funnel design: [`docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md`](docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md)
 - Phase A implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md)
 - Phase B implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md)
+- Phase C implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md)
+- Phase D implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md)
 
 ## License
 
