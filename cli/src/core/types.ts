@@ -12,6 +12,10 @@ export interface Turn {
   role: Role;
   text?: string;        // typed prompt (user), injected text removed
   sessionId: string;
+  /** Source assistant; absent means Claude Code for pre-multi-assistant fixtures. */
+  assistant?: Assistant;
+  /** Tokens consumed by the model turn this prompt initiated, when recorded. */
+  usageTokens?: number;
 }
 
 /** Pre-LLM grouping produced by cluster.ts (no model involved). */
@@ -23,6 +27,7 @@ export interface Candidate {
   sessions: number;
   sessionIds: string[];  // distinct session ids (for exact union when clusters merge)
   confidence: Confidence;
+  assistants?: Assistant[];
 }
 
 /** Semantic content of a suggestion; emit/* formats it into an artifact. */
@@ -38,7 +43,7 @@ export interface Suggestion {
   name: string;
   title: string;
   rationale: string;
-  evidence: { count: number; sessions: number };
+  evidence: { count: number; sessions: number; assistants?: Assistant[] };
   confidence: Confidence;
   examples?: string[];   // representative redacted prompts, for `explain`
   payload: SuggestionPayload;

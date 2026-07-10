@@ -1,4 +1,4 @@
-import type { Candidate } from "./types.js";
+import type { Assistant, Candidate } from "./types.js";
 import type { DialogueTurn } from "./parse.js";
 import { classifyPrompt } from "./filter.js";
 import { normalize, similarity } from "./cluster.js";
@@ -12,6 +12,7 @@ export interface AnswerPair {
   answer: string;
   sessionId: string;
   ts: string;
+  assistant: Assistant;
 }
 
 function questionStem(question: string): string {
@@ -43,6 +44,7 @@ export function extractAnswerPairs(dialogue: DialogueTurn[]): AnswerPair[] {
       answer,
       sessionId: answerTurn.sessionId,
       ts: answerTurn.ts,
+      assistant: answerTurn.assistant ?? "claude-code",
     });
   }
   return pairs;
@@ -78,6 +80,7 @@ export function mineAnswerCandidates(pairs: AnswerPair[]): Candidate[] {
         sessions: sessions.size,
         sessionIds: [...sessions],
         confidence: "inferred",
+        assistants: [...new Set(subgroup.map(pair => pair.assistant))],
       });
     }
   }

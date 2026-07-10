@@ -2,8 +2,10 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Suggestion, Turn, Config, Candidate } from "../core/types.js";
 import { collect } from "../core/collect.js";
+import { collectCodex } from "../core/collect-codex.js";
 import { parseFile } from "../core/parse.js";
 import { parseDialogueFile, type DialogueTurn } from "../core/parse.js";
+import { parseCodexDialogueFile, parseCodexFile } from "../core/parse-codex.js";
 import { filterPrompts, compileIgnorePatterns, hasTemplateFloodSupport, isTemplateFlood } from "../core/filter.js";
 import { capByRecency } from "../core/cap.js";
 import { DEFAULT_MAX_PROMPTS, DEFAULT_DETECT_WINDOW } from "../core/scope.js";
@@ -15,7 +17,7 @@ import { gradientDir } from "../core/manifest.js";
 import { writePlaybook } from "../core/playbook.js";
 import { findHusks, findMissingSessions } from "../core/coverage.js";
 import { selectBackend } from "../llm/index.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, resolveTargets } from "../config.js";
 import type { LLMBackend } from "../llm/backend.js";
 import { refreshRecallIndex } from "./recall.js";
 import { detectPasteCandidates, extractPasteKey } from "../core/paste.js";
@@ -36,9 +38,12 @@ export interface ScanDeps {
   /** Pre-loaded config, to avoid a redundant read by the caller. */
   config?: Config;
   collectFn?: (o: ScanOptions) => Promise<string[]>;
+  collectCodexFn?: (o: ScanOptions) => Promise<string[]>;
   parseFn?: (path: string) => Promise<Turn[]>;
+  parseCodexFn?: (path: string) => Promise<Turn[]>;
   /** Injectable assistant+user parser for repeated-answer mining. */
   parseDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
+  parseCodexDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
   /** Injectable Claude-Session trailer source for the coverage check. */
   gitLogFn?: (dir: string, sinceDays: number) => Promise<string>;
   log?: (msg: string) => void;
@@ -46,33 +51,48 @@ export interface ScanDeps {
 
 export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Suggestion[]> {
   const log = deps.log ?? (() => {});
+  const config = deps.config ?? (await loadConfig(opts.home));
+  const targets = resolveTargets(config);
   const collectFn = deps.collectFn ?? ((o: ScanOptions) => collect(o));
+  const collectCodexFn = deps.collectCodexFn ?? ((o: ScanOptions) => collectCodex(o));
   const parseFn = deps.parseFn ?? parseFile;
+  const parseCodexFn = deps.parseCodexFn ?? parseCodexFile;
+  const projectDir = opts.projectPath ?? process.cwd();
 
-  const files = await collectFn(opts);
-  log(`files: ${files.length} transcripts`);
+  const claudeFiles = targets.includes("claude-code") ? await collectFn(opts) : [];
+  const codexFiles = targets.includes("codex") ? await collectCodexFn(opts) : [];
+  const files = [...claudeFiles, ...codexFiles];
+  log(
+    targets.includes("codex")
+      ? `files: ${files.length} transcripts (Claude Code ${claudeFiles.length} · Codex ${codexFiles.length})`
+      : `files: ${files.length} transcripts`,
+  );
   const turns: Turn[] = [];
   const userTurnCounts = new Map<string, number>();
-  for (const f of files) {
+  for (const f of claudeFiles) {
     const t = await parseFn(f);
     userTurnCounts.set(f, t.length);
     turns.push(...t);
   }
-
-  const projectDir = opts.projectPath ?? process.cwd();
+  for (const f of codexFiles) turns.push(...(await parseCodexFn(f)));
+  if (targets.includes("codex")) {
+    const claudePrompts = turns.filter(turn => (turn.assistant ?? "claude-code") === "claude-code").length;
+    const codexPrompts = turns.filter(turn => turn.assistant === "codex").length;
+    log(`sources: Claude Code ${claudePrompts} prompt(s) · Codex ${codexPrompts} prompt(s)`);
+  }
 
   // Coverage sanity: a scan over a silently shrunken corpus (bridged sessions whose
   // prompts live only at claude.ai, transcripts reaped by retention) looks identical to
   // a complete one — make the gaps loud. Advisory only; never fails the scan.
   try {
-    const husks = await findHusks(files, userTurnCounts);
+    const husks = await findHusks(claudeFiles, userTurnCounts);
     if (husks.length > 0) {
       log(`coverage: ${husks.length} bridged transcript(s) contain no minable prompts — those conversations live only at claude.ai`);
     }
-    const missing = await findMissingSessions(projectDir, files, {
+    const missing = targets.includes("claude-code") ? await findMissingSessions(projectDir, claudeFiles, {
       sinceDays: opts.sinceDays,
       gitLogFn: deps.gitLogFn,
-    });
+    }) : [];
     if (missing.length > 0) {
       log(`coverage: ${missing.length} session(s) in recent Claude-Session git trailers have no local transcript (cloud-only, another machine, or cleaned up) — results under-represent them`);
     }
@@ -80,7 +100,6 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     log(`coverage check failed: ${(e as Error).message}`);
   }
 
-  const config = deps.config ?? (await loadConfig(opts.home));
   const ignore = compileIgnorePatterns(config.ignorePatterns);
   const prompts = filterPrompts(turns, ignore);
   log(`prompts: ${prompts.length} after filtering injected text`);
@@ -105,9 +124,13 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   // Production scans read a dialogue-shaped view in a second pass. Test callers
   // that replace parseFn can independently inject this view when they need it.
   const parseDialogueFn = deps.parseDialogueFn ?? (deps.parseFn ? undefined : parseDialogueFile);
+  const parseCodexDialogueFn = deps.parseCodexDialogueFn ?? (deps.parseCodexFn ? undefined : parseCodexDialogueFile);
   const dialogue: DialogueTurn[] = [];
   if (parseDialogueFn) {
-    for (const file of files) dialogue.push(...(await parseDialogueFn(file)));
+    for (const file of claudeFiles) dialogue.push(...(await parseDialogueFn(file)));
+  }
+  if (parseCodexDialogueFn) {
+    for (const file of codexFiles) dialogue.push(...(await parseCodexDialogueFn(file)));
   }
   const answers = mineAnswerCandidates(extractAnswerPairs(dialogue));
   if (answers.length > 0) log(`${answers.length} repeated-answer pattern(s) detected`);
@@ -132,6 +155,9 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     sessions: ch.sessions,
     sessionIds: ch.sessionIds,
     confidence: "high",
+    assistants: [...new Set(ch.sessionIds.map(sessionId =>
+      kept.find(turn => turn.sessionId === sessionId)?.assistant ?? "claude-code",
+    ))],
   }));
   const allCandidates = [...nonSequenceCandidates, ...seqCandidates];
   log(`mining → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);

@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { Turn, Role } from "./types.js";
+import type { Assistant, Turn, Role } from "./types.js";
 
 interface RawBlock { type?: string; text?: string }
 interface RawQuestion { question?: string }
@@ -14,7 +14,16 @@ interface Raw {
   cwd?: string;
   gitBranch?: string;
   timestamp?: string;
-  message?: { role?: string; content?: string | RawBlock[] };
+  message?: {
+    role?: string;
+    content?: string | RawBlock[];
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    };
+  };
   toolUseResult?: RawToolUseResult;
 }
 
@@ -25,13 +34,7 @@ function project(cwd: string | undefined): string {
 
 // Mining pipeline: genuine user prompts only. Assistant turns + tool activity
 // are consumed separately by core/tail.ts for the autopilot judge.
-function parseOne(line: string): Turn | null {
-  let raw: Raw;
-  try {
-    raw = JSON.parse(line) as Raw;
-  } catch {
-    return null;
-  }
+function parseOne(raw: Raw): Turn | null {
   if (raw.isSidechain || raw.type !== "user") return null;
   const content = raw.message?.content;
   let text: string | undefined;
@@ -48,15 +51,40 @@ function parseOne(line: string): Turn | null {
     sessionId: raw.sessionId ?? "?",
     role: "user",
     text,
+    assistant: "claude-code",
   };
+}
+
+function usageTokens(raw: Raw): number {
+  if (raw.isSidechain || raw.type !== "assistant") return 0;
+  const usage = raw.message?.usage;
+  if (!usage) return 0;
+  return [
+    usage.input_tokens,
+    usage.output_tokens,
+    usage.cache_creation_input_tokens,
+    usage.cache_read_input_tokens,
+  ].reduce<number>((sum, value) => sum + (typeof value === "number" && value > 0 ? value : 0), 0);
 }
 
 export function parseLines(lines: string[]): Turn[] {
   const out: Turn[] = [];
   for (const line of lines) {
     if (!line.trim()) continue;
-    const t = parseOne(line);
-    if (t) out.push(t);
+    let raw: Raw;
+    try {
+      raw = JSON.parse(line) as Raw;
+    } catch {
+      continue;
+    }
+    const turn = parseOne(raw);
+    if (turn) {
+      out.push(turn);
+      continue;
+    }
+    const tokens = usageTokens(raw);
+    const pending = out[out.length - 1];
+    if (pending && tokens > 0) pending.usageTokens = (pending.usageTokens ?? 0) + tokens;
   }
   return out;
 }
@@ -71,6 +99,7 @@ export interface DialogueTurn {
   text: string;
   ts: string;
   sessionId: string;
+  assistant?: Assistant;
 }
 
 /** Assistant-and-user view used only for adjacent question/answer mining. */
@@ -95,7 +124,7 @@ export function parseDialogueLines(lines: string[]): DialogueTurn[] {
         if (!question) continue;
         const answer = raw.toolUseResult.answers[question];
         if (typeof answer !== "string" || !answer.trim()) continue;
-        const common = { ts: raw.timestamp ?? "", sessionId: raw.sessionId ?? "?" };
+        const common = { ts: raw.timestamp ?? "", sessionId: raw.sessionId ?? "?", assistant: "claude-code" as const };
         out.push({ role: "assistant", text: question, ...common });
         out.push({ role: "user", text: answer, ...common });
       }
@@ -114,6 +143,7 @@ export function parseDialogueLines(lines: string[]): DialogueTurn[] {
       text,
       ts: raw.timestamp ?? "",
       sessionId: raw.sessionId ?? "?",
+      assistant: "claude-code",
     });
   }
   return out;

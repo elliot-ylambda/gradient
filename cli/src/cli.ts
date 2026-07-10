@@ -205,7 +205,10 @@ export async function main(
         }
         log(`${confidenceChip(s.confidence)} ${c.bold(s.name)}  ${c.muted(s.title)}`);
         log(c.dim(s.rationale));
-        log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions`));
+        const sources = s.evidence.assistants?.length === 2
+          ? " · sources: Claude Code + Codex"
+          : "";
+        log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions${sources}`));
         for (const ex of s.examples ?? []) log(`  ${c.muted("·")} ${ex}`);
         return 0;
       }

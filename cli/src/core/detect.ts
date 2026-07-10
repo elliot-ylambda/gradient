@@ -20,7 +20,11 @@ export function candidateToCommand(c: Candidate): Suggestion {
     name: commandName,
     title: `Reusable command for "${safeSignature}"`,
     rationale: `Repeated ${c.count}× across ${c.sessions} sessions.`,
-    evidence: { count: c.count, sessions: c.sessions },
+    evidence: {
+      count: c.count,
+      sessions: c.sessions,
+      ...(c.assistants?.length ? { assistants: c.assistants } : {}),
+    },
     confidence: c.confidence,
     examples: c.examples.map(redact).slice(0, 5),
     payload: {
@@ -111,13 +115,19 @@ export async function detect(
         const matched = sigs.map(sig => bySignature.get(redact(sig))).filter((c): c is Candidate => !!c);
         const count = matched.reduce((n, c) => n + c.count, 0);
         const sessions = new Set(matched.flatMap(c => c.sessionIds)).size;
+        const assistants = [...new Set(matched.flatMap(c => c.assistants ?? ["claude-code" as const]))]
+          .sort((a, b) => a === b ? 0 : a === "claude-code" ? -1 : 1);
         const examples = matched.flatMap(c => c.examples).map(redact).slice(0, 5);
         return {
           id: idFor(s.payload.type === "command" ? (s.payload.commandName ?? s.name) : s.name),
           name: s.name,
           title: s.title,
           rationale: s.rationale,
-          evidence: { count, sessions },
+          evidence: {
+            count,
+            sessions,
+            ...(assistants.length ? { assistants } : {}),
+          },
           confidence: ALLOWED_CONFIDENCE.has(s.confidence) ? s.confidence : "inferred",
           examples,
           payload: s.payload,

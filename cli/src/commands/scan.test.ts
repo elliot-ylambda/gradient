@@ -280,4 +280,47 @@ describe("scan", () => {
     // Degraded path: the sequence candidate surfaces as a high-confidence command suggestion.
     expect(out.some(s => s.payload.type === "command" && /review the spec → write the plan/.test(s.title))).toBe(true);
   });
+
+  it("merges the same habit across Claude Code and Codex evidence", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const claudeTurns = ["c1", "c2"].map(sessionId => ({
+      ts: "2026-07-01T00:00:00Z",
+      project: "gradient",
+      role: "user" as const,
+      sessionId,
+      text: "ship and open the PR",
+      assistant: "claude-code" as const,
+    }));
+    const codexTurns = ["codex:x1", "codex:x2"].map(sessionId => ({
+      ts: "2026-07-01T00:01:00Z",
+      project: "gradient",
+      role: "user" as const,
+      sessionId,
+      text: "ship and open the PR",
+      assistant: "codex" as const,
+    }));
+    const logs: string[] = [];
+    const out = await scan(
+      { scope: "project", projectPath: dir, home },
+      {
+        config: { targets: ["claude-code", "codex"] },
+        backend: null,
+        collectFn: async () => ["claude.jsonl"],
+        collectCodexFn: async () => ["codex.jsonl"],
+        parseFn: async () => claudeTurns,
+        parseCodexFn: async () => codexTurns,
+        parseDialogueFn: async () => [],
+        parseCodexDialogueFn: async () => [],
+        log: message => logs.push(message),
+      },
+    );
+    expect(logs.join("\n")).toContain("Claude Code 1 · Codex 1");
+    expect(logs.join("\n")).toContain("Claude Code 2 prompt(s) · Codex 2 prompt(s)");
+    expect(out[0].evidence).toMatchObject({
+      count: 4,
+      sessions: 4,
+      assistants: ["claude-code", "codex"],
+    });
+  });
 });
