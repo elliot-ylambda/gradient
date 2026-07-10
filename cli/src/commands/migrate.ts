@@ -1,6 +1,6 @@
 import { access } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { addEntry, loadManifest } from "../core/manifest.js";
+import { addEntry, artifactHasMarker, artifactMarker, loadManifest } from "../core/manifest.js";
 import { assertInside, sanitizeName } from "../core/security.js";
 import { refreshRecallIndex } from "./recall.js";
 import { safeReadFile, safeUnlink, safeWriteFile } from "../core/safeFs.js";
@@ -67,6 +67,10 @@ export async function migrate(
       skipped.push(entry.name);
       continue;
     }
+    if (!artifactHasMarker(raw, entry)) {
+      skipped.push(entry.name);
+      continue;
+    }
 
     const name = sanitizeName(entry.name);
     const skillPath = join(claudeDir, "skills", name, "SKILL.md");
@@ -83,11 +87,13 @@ export async function migrate(
     if (opts.dryRun) continue;
 
     const { description, body } = splitCommandFile(raw);
-    const bodyWithNewline = body.endsWith("\n") ? body : `${body}\n`;
-    const content =
-      `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n${bodyWithNewline}`;
+    const cleanBody = body.replace(/^<!-- gradient:generated[^\n]*-->\r?\n/, "");
+    const bodyWithNewline = cleanBody.endsWith("\n") ? cleanBody : `${cleanBody}\n`;
+    const markedContent =
+      `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n` +
+      `${artifactMarker(entry)}\n${bodyWithNewline}`;
     try {
-      await safeWriteFile(projectDir, skillPath, content, { exclusive: true });
+      await safeWriteFile(projectDir, skillPath, markedContent, { exclusive: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         migrated.pop();

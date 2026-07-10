@@ -2,6 +2,9 @@ import { open } from "node:fs/promises";
 import type { Turn, Role } from "./types.js";
 
 export const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
+export const MAX_PARSED_TURNS_PER_FILE = 20_000;
+export const MAX_TURN_TEXT_CHARS = 16_000;
+export const MAX_DIALOGUE_TEXT_CHARS = 2_000;
 
 /** Read only the newest bounded portion of a transcript. Starting mid-line is
  * harmless because the incomplete JSON record is discarded. */
@@ -64,6 +67,7 @@ function parseOne(line: string): Turn | null {
     text = parts.length ? parts.join(" ") : undefined;
   }
   if (!text) return null;
+  text = text.slice(0, MAX_TURN_TEXT_CHARS);
   return {
     ts: raw.timestamp ?? "",
     project: project(raw.cwd),
@@ -74,12 +78,15 @@ function parseOne(line: string): Turn | null {
   };
 }
 
-export function parseLines(lines: string[]): Turn[] {
+export function parseLines(lines: string[], maxTurns = MAX_PARSED_TURNS_PER_FILE): Turn[] {
   const out: Turn[] = [];
-  for (const line of lines) {
+  const start = Math.max(0, lines.length - maxTurns * 4);
+  for (let i = start; i < lines.length; i++) {
+    const line = lines[i];
     if (!line.trim()) continue;
     const t = parseOne(line);
     if (t) out.push(t);
+    if (out.length > maxTurns) out.shift();
   }
   return out;
 }
@@ -119,8 +126,8 @@ export function parseDialogueLines(lines: string[]): DialogueTurn[] {
         const answer = raw.toolUseResult.answers[question];
         if (typeof answer !== "string" || !answer.trim()) continue;
         const common = { ts: raw.timestamp ?? "", sessionId: raw.sessionId ?? "?" };
-        out.push({ role: "assistant", text: question, ...common });
-        out.push({ role: "user", text: answer, ...common });
+        out.push({ role: "assistant", text: question.slice(-MAX_DIALOGUE_TEXT_CHARS), ...common });
+        out.push({ role: "user", text: answer.slice(0, MAX_DIALOGUE_TEXT_CHARS), ...common });
       }
       continue;
     }
@@ -134,7 +141,7 @@ export function parseDialogueLines(lines: string[]): DialogueTurn[] {
     if (!text.trim()) continue;
     out.push({
       role: raw.type,
-      text,
+      text: text.slice(-MAX_DIALOGUE_TEXT_CHARS),
       ts: raw.timestamp ?? "",
       sessionId: raw.sessionId ?? "?",
     });
@@ -144,5 +151,5 @@ export function parseDialogueLines(lines: string[]): DialogueTurn[] {
 
 export async function parseDialogueFile(path: string): Promise<DialogueTurn[]> {
   const content = await readTranscriptTail(path);
-  return parseDialogueLines(content.split(/\r?\n/));
+  return parseDialogueLines(content.split(/\r?\n/)).slice(-MAX_PARSED_TURNS_PER_FILE);
 }

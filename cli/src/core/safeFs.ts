@@ -3,7 +3,7 @@ import {
   appendFile,
   lstat,
   mkdir,
-  readFile,
+  open,
   rename,
   unlink,
   writeFile,
@@ -78,9 +78,29 @@ export async function safeMkdir(base: string, path: string, mode = 0o700): Promi
   await assertNoSymlinkPath(base, path);
 }
 
-export async function safeReadFile(base: string, path: string): Promise<string> {
-  await assertNoSymlinkPath(base, path);
-  return readFile(path, "utf8");
+export async function safeReadFile(
+  base: string,
+  path: string,
+  opts: { maxBytes?: number } = {},
+): Promise<string> {
+  const resolved = resolvedInside(base, path);
+  await assertNoSymlinkPath(resolved.base, resolved.target);
+  const handle = await open(
+    resolved.target,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile()) {
+      throw Object.assign(new Error(`refusing non-file path: ${resolved.target}`), { code: "EISDIR" });
+    }
+    if (opts.maxBytes !== undefined && metadata.size > opts.maxBytes) {
+      throw Object.assign(new Error(`file exceeds ${opts.maxBytes} byte cap: ${resolved.target}`), { code: "EFBIG" });
+    }
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function safeWriteFile(

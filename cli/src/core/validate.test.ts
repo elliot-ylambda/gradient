@@ -35,6 +35,9 @@ describe("assertHookRunnable", () => {
   it("exposes checkpoint as known", () => {
     expect(KNOWN_SUBCOMMANDS.has("checkpoint")).toBe(true);
   });
+  it("exposes recap as a known continuity hook target", () => {
+    expect(KNOWN_SUBCOMMANDS.has("recap")).toBe(true);
+  });
   it("treats a SessionStart→scan hook as runnable", () => {
     const s: any = { id: "x", name: "n", title: "t", rationale: "r", confidence: "high",
       payload: { type: "hook", event: "SessionStart", subcommand: "scan", description: "d" } };
@@ -82,13 +85,13 @@ describe("rule validation", () => {
       ...base, payload: { type: "rule", target: "project", ruleName: "Not Safe", text: "t" },
     })).toThrow(/ruleName/);
     expect(() => validateSuggestion({
-      ...base, payload: { type: "rule", target: "project", ruleName: "safe", text: "bad\u001btext" },
+      ...base, payload: { type: "rule", target: "project", ruleName: "n", text: "bad\u001btext" },
     })).toThrow(/text/);
     expect(() => validateSuggestion({
-      ...base, payload: { type: "rule", target: "project", ruleName: "safe", text: "   " },
+      ...base, payload: { type: "rule", target: "project", ruleName: "n", text: "   " },
     })).toThrow(/text/);
     expect(() => validateSuggestion({
-      ...base, payload: { type: "rule", target: "project", ruleName: "safe", text: "x".repeat(2_001) },
+      ...base, payload: { type: "rule", target: "project", ruleName: "n", text: "x".repeat(2_001) },
     })).toThrow(/text/);
   });
 });

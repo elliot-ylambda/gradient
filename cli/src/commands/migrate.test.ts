@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { access, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addEntry, loadManifest } from "../core/manifest.js";
+import { addEntry, artifactMarker, loadManifest } from "../core/manifest.js";
 import { migrate, splitCommandFile } from "./migrate.js";
 
 let dir: string;
@@ -13,15 +13,16 @@ beforeEach(async () => {
 
 async function seedCommand(name: string, relative = false): Promise<string> {
   const absolute = join(dir, ".claude", "commands", `${name}.md`);
-  await mkdir(join(dir, ".claude", "commands"), { recursive: true });
-  await writeFile(absolute, `---\ndescription: "Fix the push"\n---\nDo the fix.\n`);
-  await addEntry(dir, {
+  const entry = {
     name,
-    type: "command",
+    type: "command" as const,
     path: relative ? `.claude/commands/${name}.md` : absolute,
     createdAt: "2026-07-01",
     suggestionId: "x",
-  });
+  };
+  await mkdir(join(dir, ".claude", "commands"), { recursive: true });
+  await writeFile(absolute, `---\ndescription: "Fix the push"\n---\n${artifactMarker(entry)}\nDo the fix.\n`);
+  await addEntry(dir, entry);
   return absolute;
 }
 
@@ -100,15 +101,16 @@ describe("migrate", () => {
   it("does not read or delete a tampered manifest path outside .claude", async () => {
     const victim = join(dir, "victim.md");
     await writeFile(victim, "keep me\n");
-    await addEntry(dir, {
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "manifest.json"), JSON.stringify([{
       name: "evil",
       type: "command",
       path: victim,
       createdAt: "2026-07-01",
       suggestionId: "evil",
-    });
+    }]));
 
-    expect(await migrate(dir)).toEqual({ migrated: [], skipped: ["evil"] });
+    await expect(migrate(dir)).rejects.toThrow(/path/);
     expect(await readFile(victim, "utf8")).toBe("keep me\n");
   });
 

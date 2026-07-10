@@ -46,6 +46,37 @@ export interface StatsOptions {
   parseFn?: typeof parseFile;
 }
 
+export async function adoptionFromTurns(
+  projectDir: string,
+  turns: Turn[],
+  opts: { home?: string; now?: number; manifest?: Awaited<ReturnType<typeof loadManifest>> } = {},
+): Promise<AdoptionRow[]> {
+  const manifest = opts.manifest ?? (await loadManifest(projectDir));
+  const since = new Map(manifest.map(entry => [entry.name, entry.createdAt]));
+  const uses = countArtifactUses(turns, since);
+  const retypes = await readRetypes(projectDir, since, opts.home);
+  const now = opts.now ?? Date.now();
+  return manifest.map(entry => {
+    const usage = uses.get(entry.name) ?? { uses: 0, lastUsed: undefined };
+    const retypesCaught = retypes.get(entry.name) ?? 0;
+    const age = now - Date.parse(entry.createdAt);
+    return {
+      name: entry.name,
+      type: entry.type,
+      createdAt: entry.createdAt,
+      uses: usage.uses,
+      lastUsed: usage.lastUsed,
+      retypesCaught,
+      suggestRemoval: (
+        usage.uses === 0 &&
+        retypesCaught === 0 &&
+        Number.isFinite(age) &&
+        age >= UNUSED_REMOVAL_DAYS * DAY_MS
+      ),
+    };
+  });
+}
+
 async function readRetypes(
   projectDir: string,
   since: Map<string, string>,
@@ -103,28 +134,10 @@ export async function stats(projectDir: string, opts: StatsOptions = {}): Promis
     for (const file of files) turns.push(...(await parseFn(file)));
   }
 
-  const since = new Map(manifest.map(entry => [entry.name, entry.createdAt]));
-  const uses = countArtifactUses(turns, since);
-  const retypes = await readRetypes(projectDir, since, opts.home);
-  const now = opts.now ?? Date.now();
-  const adoption: AdoptionRow[] = manifest.map(entry => {
-    const usage = uses.get(entry.name) ?? { uses: 0, lastUsed: undefined };
-    const retypesCaught = retypes.get(entry.name) ?? 0;
-    const age = now - Date.parse(entry.createdAt);
-    return {
-      name: entry.name,
-      type: entry.type,
-      createdAt: entry.createdAt,
-      uses: usage.uses,
-      lastUsed: usage.lastUsed,
-      retypesCaught,
-      suggestRemoval: (
-        usage.uses === 0 &&
-        retypesCaught === 0 &&
-        Number.isFinite(age) &&
-        age >= UNUSED_REMOVAL_DAYS * DAY_MS
-      ),
-    };
+  const adoption = await adoptionFromTurns(projectDir, turns, {
+    home: opts.home,
+    now: opts.now,
+    manifest,
   });
 
   return {

@@ -47,6 +47,23 @@ describe("applySuggestion", () => {
     expect(await loadManifest(dir)).toEqual([]);
   });
 
+  it("refuses a forged manifest that claims a hand-written skill", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const path = join(dir, ".claude", "skills", "ship", "SKILL.md");
+    await mkdir(join(dir, ".claude", "skills", "ship"), { recursive: true });
+    await writeFile(path, "hand-written skill\n");
+    await addEntry(dir, {
+      name: "ship", type: "skill", path,
+      createdAt: "2026-07-01", suggestionId: "x",
+    });
+    const suggestion: Suggestion = {
+      ...base, name: "ship",
+      payload: { type: "command", commandName: "ship", body: "generated body" },
+    };
+    await expect(applySuggestion(suggestion, dir)).rejects.toThrow(/provenance/);
+    expect(await readFile(path, "utf8")).toBe("hand-written skill\n");
+  });
+
   it("can update a skill already tracked under the same manifest name", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
     const first: Suggestion = {
@@ -124,7 +141,7 @@ describe("applySuggestion", () => {
     const suggestion: Suggestion = {
       ...base,
       id: "r2",
-      name: "prefer-recommended-global",
+      name: "prefer-recommended",
       payload: {
         type: "rule",
         target: "user",

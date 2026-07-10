@@ -3,7 +3,9 @@ import type { Suggestion, ManifestEntry, ArtifactType } from "./types.js";
 import { emit, type EmitTarget } from "./emit/index.js";
 import { assertInside } from "./security.js";
 import { addEntry, loadManifest } from "./manifest.js";
-import { safeWriteFile } from "./safeFs.js";
+import { artifactHasMarker } from "./manifest.js";
+import { safeReadFile, safeWriteFile } from "./safeFs.js";
+import { validateSuggestion } from "./validate.js";
 
 export interface ApplyResult {
   suggestion: Suggestion;
@@ -11,10 +13,10 @@ export interface ApplyResult {
   printed?: string;
 }
 
-async function isTrackedTarget(projectDir: string, name: string, target: string): Promise<boolean> {
+async function trackedTarget(projectDir: string, s: Suggestion, target: string): Promise<ManifestEntry | undefined> {
   const resolvedTarget = resolve(target);
-  return (await loadManifest(projectDir)).some(entry => {
-    if (entry.name !== name || !entry.path) return false;
+  return (await loadManifest(projectDir)).find(entry => {
+    if (entry.name !== s.name || entry.suggestionId !== s.id || !entry.path) return false;
     const entryPath = isAbsolute(entry.path) ? entry.path : join(projectDir, entry.path);
     return resolve(entryPath) === resolvedTarget;
   });
@@ -25,6 +27,7 @@ export async function applySuggestion(
   projectDir: string,
   opts: { emitTarget?: EmitTarget } = {},
 ): Promise<ApplyResult> {
+  validateSuggestion(s);
   const result = emit(s, { target: opts.emitTarget });
   let type: ArtifactType;
   let written: string | undefined;
@@ -33,7 +36,12 @@ export async function applySuggestion(
   if (result.kind === "command" || result.kind === "skill" || result.kind === "rule") {
     const abs = join(projectDir, result.path);
     assertInside(join(projectDir, ".claude"), abs);
-    if (await isTrackedTarget(projectDir, s.name, abs)) {
+    const tracked = await trackedTarget(projectDir, s, abs);
+    if (tracked) {
+      const existing = await safeReadFile(projectDir, abs, { maxBytes: 1_000_000 });
+      if (!artifactHasMarker(existing, tracked)) {
+        throw new Error(`refusing to overwrite artifact without matching gradient provenance: ${abs}`);
+      }
       await safeWriteFile(projectDir, abs, result.content, { mode: 0o600 });
     } else {
       try {

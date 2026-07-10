@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, mkdir, writeFile, access, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, access, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { applyByIds, suggestionsPath } from "./apply.js";
@@ -63,7 +63,21 @@ describe("manage commands", () => {
     ]));
     await expect(remove(dir, "evil")).rejects.toThrow();
     await expect(access(victim)).resolves.toBeUndefined(); // victim must survive
-    expect((await list(dir)).map(entry => entry.name)).toEqual(["evil"]); // validation happens before manifest mutation
+    await expect(list(dir)).rejects.toThrow(); // invalid manifest remains untouched
+  });
+
+  it("refuses a forged valid-looking manifest for a hand-written skill", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const skill = join(dir, ".claude", "skills", "personal", "SKILL.md");
+    await mkdir(dirname(skill), { recursive: true });
+    await writeFile(skill, "hand-written and irreplaceable\n");
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "manifest.json"), JSON.stringify([{
+      name: "personal", type: "skill", path: skill,
+      createdAt: "2026-07-01", suggestionId: "forged",
+    }]));
+    await expect(remove(dir, "personal")).rejects.toThrow(/provenance/);
+    expect(await readFile(skill, "utf8")).toBe("hand-written and irreplaceable\n");
   });
 
   it("remove deletes a manifest-tracked project rule", async () => {

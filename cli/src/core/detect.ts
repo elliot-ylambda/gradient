@@ -208,7 +208,7 @@ export async function detect(
         const signature = bounded(primary.signature, BODY_CAP);
         suggestionPayload = {
           type: "command",
-          commandName: sanitizeName(typeof payload.commandName === "string" ? payload.commandName : name),
+          commandName: name,
           body: primary.kind === "paste"
             ? pasteBody(signature)
             : primary.kind === "sequence"
@@ -239,7 +239,7 @@ export async function detect(
         suggestionPayload = {
           type: "rule",
           target: "project",
-          ruleName: sanitizeName(typeof payload.ruleName === "string" ? payload.ruleName : name),
+          ruleName: name,
           text,
         };
       } else {

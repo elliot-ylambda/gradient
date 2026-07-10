@@ -1,5 +1,6 @@
 import type { Suggestion } from "../types.js";
 import { sanitizeName } from "../security.js";
+import { artifactMarker } from "../manifest.js";
 
 /** Command payload → model-invokable Claude Code skill. Triggers (the mined
  * phrasings) go into the description so Claude auto-invokes it (spec §3 A2). */
@@ -11,6 +12,6 @@ export function emitSkill(s: Suggestion): { path: string; content: string } {
     .map(t => JSON.stringify(t.replace(/[\r\n]+/g, " ").trim()))
     .join(", ");
   const description = triggers ? `${title}. Use when the user says things like: ${triggers}.` : title;
-  const content = `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n${s.payload.body}\n`;
+  const content = `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n${artifactMarker(s)}\n${s.payload.body}\n`;
   return { path: `.claude/skills/${name}/SKILL.md`, content };
 }

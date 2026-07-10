@@ -1,7 +1,7 @@
 import type { Suggestion } from "./types.js";
 import { sanitizeName, stripUnsafeControls } from "./security.js";
 
-export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan"]);
+export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan", "recap"]);
 const TYPES = new Set(["command", "loop", "hook", "rule"]);
 const CONFIDENCES = new Set(["high", "inferred", "flagged"]);
 const HOOK_EVENTS = new Set(["PreCompact", "SessionStart"]);
@@ -17,6 +17,7 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
   for (const k of ["id", "name", "title", "rationale", "confidence"]) {
     if (!validText(s[k], k === "rationale" ? 2_000 : 500)) throw new Error(`suggestion.${k} must be safe bounded text`);
   }
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(s.id as string)) throw new Error("suggestion.id must be an opaque safe id");
   if (sanitizeName(s.name as string) !== s.name) throw new Error("suggestion.name must be sanitized");
   if (!CONFIDENCES.has(s.confidence as string)) {
     throw new Error(`invalid confidence: ${String(s.confidence)}`);
@@ -33,6 +34,7 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
     if (!validText(payload.commandName, 100) || !validText(payload.body)) {
       throw new Error("command payload needs safe bounded commandName + body");
     }
+    if (payload.commandName !== s.name) throw new Error("commandName must match suggestion.name");
     if (payload.triggers !== undefined) {
       if (!Array.isArray(payload.triggers) || payload.triggers.length > 20 || payload.triggers.some(t => !validText(t, 1_000))) {
         throw new Error("command payload triggers must be an array of strings");
@@ -70,6 +72,7 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
     if (!validText(payload.ruleName, 100) || sanitizeName(payload.ruleName) !== payload.ruleName) {
       throw new Error("rule payload needs a safe sanitized ruleName");
     }
+    if (payload.ruleName !== s.name) throw new Error("ruleName must match suggestion.name");
     if (!validText(payload.text, 2_000) || payload.text.trim().length === 0) {
       throw new Error("rule payload needs safe bounded text");
     }

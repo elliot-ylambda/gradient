@@ -66,6 +66,8 @@ export interface Config {
   autopilotProjects?: Record<string, AutopilotMode>;
   /** Canonical project paths where recall is locally consented. */
   recallProjects?: string[];
+  /** Canonical project paths where checkpoint/recap hooks are locally consented. */
+  continuityProjects?: string[];
   /** Max paid judge attempts per session. Defaults to 10. */
   autopilotBudget?: number;
   /** Judge model (fast by design; the judge sits in the user's stop path). Defaults to "haiku". */

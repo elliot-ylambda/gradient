@@ -29,3 +29,8 @@ Observed behavior is not treated as authorization: paste/sequence artifacts are
 advisory, preference rules exclude consequential approvals, and arbitrary model
 content is not written into artifacts. Gradient does not store
 `ANTHROPIC_API_KEY`.
+
+Continuity is separately consented per project. It privately retains bounded,
+redacted user intents (not assistant/tool-output prose) and returns them to
+Claude as untrusted context on resume/compact. Redaction remains best-effort;
+turn continuity off to revoke consent and delete the cached checkpoint.

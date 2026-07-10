@@ -1,7 +1,7 @@
 # gradient v2 — Close the Funnel — Design
 
 **Date:** 2026-07-06
-**Status:** Implementation in progress (Phases A–C complete; Phases D–E planned)
+**Status:** Implementation in progress (Phases A–D complete; Phase E planned)
 **Scope:** Spec 4. The v2 feature set: five sequenced phases (A–E), each of
 which becomes its own implementation plan. Builds on the shipped analysis
 engine (Spec 1), autopilot (Spec 2), and the approved `gradient.md` layering
@@ -184,7 +184,8 @@ export function classifyPrompt(text: string): PromptClass;
 
 ### B2. Adoption stats
 
-`stats` (and Phase D `insights`) gain an adoption section:
+`stats` owns the adoption section; project-scoped Phase D `insights` consumes
+its unused-artifact signal only to route users back to `gradient remove`:
 
 - **Uses:** count `<command-name>/x</command-name>` occurrences in the
   project's transcripts since each artifact's `createdAt` (skill and command
@@ -276,6 +277,8 @@ export function classifyPrompt(text: string): PromptClass;
 
 - New command: `gradient insights [--user] [--html]`. Local-only; no LLM
   required (and none used — the numbers speak).
+- `--user` uses the same `userScopeDays` window as `scan --user` (seven days
+  by default). Project scope remains all history.
 - **Division of labor:** `stats` stays the *artifact* view (pattern coverage
   + B2 adoption per artifact); `insights` is the *behavior* view (the metric
   table below + recommendations). Neither duplicates the other's sections.
@@ -291,25 +294,31 @@ export function classifyPrompt(text: string): PromptClass;
   | Adoption | B2 data | unused-artifact removals, recall hook if off |
   | Permission friction | n/a (not mined, Decision 8) | pointer to built-in `/fewer-permission-prompts` |
 
-- Every metric renders as number + one recommendation line, most of which
-  are existing gradient actions — insights is a router into the product,
-  not a dashboard for its own sake.
+- Every metric renders as a number. Hot metrics cross conservative thresholds
+  into recommendation lines, most of which are existing gradient actions;
+  the permissions pointer always renders. Insights is a router into the
+  product, not a dashboard for its own sake. Unused-artifact removal appears
+  only in all-history project scope; a seven-day user corpus cannot safely
+  prove 30-day non-use.
 - `--html` writes a self-contained `.gradient/insights.html` (inline CSS, no
-  deps) for sharing; terminal output is the primary surface.
-- **Continuity pack** (the productized `/sum`): a paired-hook suggestion
-  emitted like any other — `PreCompact` → existing `gradient checkpoint`,
-  plus `SessionStart` (matcher `resume|compact`) → new `gradient recap`,
-  which prints `progress.md` to stdout so it re-enters context after
-  compaction/resume. `checkpoint` is upgraded to also capture the last
-  assistant text tail (via `core/tail.ts`), not just recent user intents.
-  Emitted only as a suggestion; never auto-installed.
+  deps) for sharing; terminal output is the primary surface. The write uses the
+  same symlink-safe private-file boundary as other `.gradient` artifacts.
+- **Continuity pack** (the productized `/sum`): an explicit opt-in manager,
+  `gradient continuity on|off|status`, installs `PreCompact` → existing
+  `gradient checkpoint`, plus `SessionStart` (matcher `resume|compact`) → new
+  `gradient recap`. `checkpoint` stores a bounded, redacted recent conversation
+  tail (via `core/tail.ts`) plus recent user intents in the private per-project
+  user cache. `recap` returns it inside an explicit untrusted-context wrapper.
+  Both hook targets independently require private per-project consent, so a
+  committed or stale hook is inert. Nothing is installed until the user runs
+  `continuity on`; `off` revokes consent before removing only these two hooks.
 
 ### Testing (D)
 
 - Each metric against a synthetic fixture with known counts.
 - Insights runs green on an empty/new project (all zeros, no crash).
-- `recap` prints checkpoint content; silent (exit 0) when `progress.md`
-  is absent.
+- `recap` is silent (exit 0) when consent or the private checkpoint is absent;
+  symlinked caches and injected wrapper tags are rejected/neutralized.
 - HTML output contains no external references (CSP-safe single file).
 
 ---
@@ -407,7 +416,8 @@ Each phase lands as its own branch + implementation plan
   qualifying adjacent short-answer pairs; ignoring tool results would miss a
   material share of real preference answers. Generic tool output remains
   excluded.
-- **D:** whether `insights --user` shares `scan --user`'s recency window
-  default (`userScopeDays`) or reports all-time by default.
+- **D (resolved 2026-07-09):** `insights --user` shares `scan --user`'s
+  `userScopeDays` window (seven days by default). Consistency keeps the report
+  bounded and makes the label unambiguous.
 - **E:** minimum viable `plugin.json` fields for current Claude Code plugin
   loading (`name`, `description`, `version` assumed; verify).

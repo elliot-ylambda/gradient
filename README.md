@@ -53,6 +53,8 @@ npx gradient.md apply <id>  # generate an approved skill / loop / hook
 npx gradient.md migrate     # convert older generated commands into skills
 npx gradient.md recall on   # hint when a typed prompt matches an installed artifact
 npx gradient.md stats       # coverage plus artifact adoption
+npx gradient.md insights    # local behavior report + concrete next actions
+npx gradient.md continuity on # checkpoint before compaction, recap after resume
 ```
 
 The npm package is **`gradient.md`**; the command it installs is **`gradient`**.
@@ -191,6 +193,23 @@ per-project consent, so a repository cannot activate it by committing a hook.
 uses, last use, and retypes caught for each approved artifact, and suggests
 removing artifacts that remain unused for at least 30 days.
 
+## Insights & continuity
+
+`gradient insights` is a local-only report card for the way you work: typed
+nudges, interrupted turns, context deaths and compacts, repeated error pastes,
+and model/effort churn. It makes no model call. Each hot metric points to a
+specific action such as `gradient autopilot nudge`, `gradient scan`, or
+`gradient recall on`; `--user` uses the same recent cross-project window as
+scan, and `--html` writes a self-contained private
+`.gradient/insights.html`.
+
+`gradient continuity on` installs locally consented `PreCompact` checkpoint
+and `SessionStart` recap hooks. Bounded, redacted recent user intents plus a
+deterministic tool-activity count are stored in the private per-project user
+cache and returned as explicitly untrusted context only on `resume|compact`.
+Raw assistant/model/tool-output prose is not cached. `continuity off` revokes
+consent, deletes the checkpoint, then removes only those two hooks.
+
 ## Data and trust boundaries
 
 - `scan` reads user-authored turns from local Claude Code transcripts, writes a
@@ -210,6 +229,9 @@ removing artifacts that remain unused for at least 30 days.
 - Autopilot is opt-in per project and sends a bounded recent user/assistant tail
   plus the private personal playbook to the judge. Do not enable it for session
   content you are unwilling to send to the configured model.
+- Continuity is opt-in per project. On resume/compact it returns the cached,
+  best-effort-redacted user intents to Claude as untrusted context; do not enable
+  it for transcript content you are unwilling to put back into model context.
 - No API key is stored by Gradient. `ANTHROPIC_API_KEY` is read from the process
   environment by the official SDK.
 
@@ -237,9 +259,13 @@ multiple sessions. It produces advisory troubleshooting/checklist skills and
 guarded project-preference rules without retaining pasted error bodies or
 inferring authorization from prior behavior.
 
-The opt-in `gradient autopilot` Stop-hook responder also ships today. The next
-v2 phases surface local behavior insights and package approved artifacts for
-teams.
+Phase D adds the LLM-free behavior report and the opt-in continuity pack:
+`gradient insights` turns local work signals into concrete next actions, while
+`gradient continuity on` preserves a redacted checkpoint across compaction and
+resumed sessions.
+
+The opt-in `gradient autopilot` Stop-hook responder also ships today. The final
+v2 phase packages approved artifacts for teams.
 
 - Design spec: [`docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md`](docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md)
 - Implementation plan: [`docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md`](docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md)
@@ -248,6 +274,8 @@ teams.
 - v2 funnel design: [`docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md`](docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md)
 - Phase A implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md)
 - Phase B implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md)
+- Phase C implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md)
+- Phase D implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md)
 
 ## License
 

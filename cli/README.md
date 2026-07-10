@@ -10,6 +10,8 @@ npx gradient.md list      # see what it generated · npx gradient.md remove <nam
 npx gradient.md migrate   # convert older generated commands into skills
 npx gradient.md recall on # hint when prompts match installed artifacts
 npx gradient.md stats     # coverage and artifact adoption
+npx gradient.md insights  # local behavior report and recommended actions
+npx gradient.md continuity on # preserve context across compact/resume
 ```
 
 ## How it works
@@ -45,6 +47,15 @@ uses, last use, retypes caught, and stale-artifact removal suggestions.
 `scan` writes a private per-project user cache, but it does not install Claude
 artifacts or update the autopilot playbook. Approved artifacts are tracked in
 `.gradient/manifest.json` so `remove` cleanly undoes them.
+
+`gradient insights [--user] [--html]` is also LLM-free. It counts behavior
+signals such as nudges, interrupts, compacts, error pastes, and model churn,
+then routes them to concrete gradient actions. `gradient continuity on`
+records private per-project consent and installs paired checkpoint/recap hooks;
+the bounded, best-effort-redacted user-intent checkpoint lives in the private
+user cache, not the repo, and returns to Claude as explicitly untrusted context.
+Raw assistant/tool-output prose is excluded, and `continuity off` deletes it.
+`--html` explicitly writes a private `.gradient/insights.html` report.
 
 ## Autopilot (opt-in)
 

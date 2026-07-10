@@ -9,7 +9,7 @@ import { migrate } from "./migrate.js";
 import { remove } from "./remove.js";
 import { review } from "./review.js";
 import { scan } from "./scan.js";
-import { addEntry } from "../core/manifest.js";
+import { addEntry, artifactMarker } from "../core/manifest.js";
 import { projectKey, saveConfig } from "../config.js";
 import { suggestionsPath } from "./apply.js";
 
@@ -200,14 +200,15 @@ describe("recall index synchronization", () => {
   it("migrate refreshes the index after converting a command", async () => {
     const commandPath = join(dir, ".claude", "commands", "legacy.md");
     await mkdir(join(dir, ".claude", "commands"), { recursive: true });
-    await writeFile(commandPath, `---\ndescription: "Legacy workflow"\n---\nDo legacy work.\n`);
-    await addEntry(dir, {
+    const entry = {
       name: "legacy",
-      type: "command",
+      type: "command" as const,
       path: commandPath,
       createdAt: "2026-07-01",
       suggestionId: "legacy-id",
-    });
+    };
+    await writeFile(commandPath, `---\ndescription: "Legacy workflow"\n---\n${artifactMarker(entry)}\nDo legacy work.\n`);
+    await addEntry(dir, entry);
 
     await migrate(dir, { home });
     expect((await loadRecallIndex(dir, home))?.entries).toContainEqual(expect.objectContaining({
