@@ -54,6 +54,10 @@ describe("redact", () => {
     expect(redact("/Users/alice/project C:\\Users\\bob\\project")).not.toContain("alice");
     expect(redact("/Users/alice/project C:\\Users\\bob\\project")).not.toContain("bob");
   });
+  it("masks home paths case-insensitively — mining lowercases signatures", () => {
+    expect(redact("/users/alice/.claude/image-cache/a/1.png")).not.toContain("alice");
+    expect(redact("c:\\users\\bob\\project")).not.toContain("bob");
+  });
   it("strips terminal control sequences from untrusted text", () => {
     expect(redact("safe\u001b]52;c;payload\u0007text")).not.toContain("\u001b");
   });

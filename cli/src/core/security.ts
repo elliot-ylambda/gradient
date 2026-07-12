@@ -39,8 +39,9 @@ const SECRET_PATTERNS: RegExp[] = [
   /\b\d{3}-\d{2}-\d{4}\b/g,
   /\b(?:\d[ -]*?){13,19}\b/g,
   /\b(?=[A-Za-z0-9_-]{24,}\b)(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]+\b/g,
-  /\/(?:Users|home)\/[^/\s]+/g,
-  /\b[A-Za-z]:\\Users\\[^\\\s]+/g,
+  // Case-insensitive: mining lowercases signatures before they reach redaction.
+  /\/(?:Users|home)\/[^/\s]+/gi,
+  /\b[A-Za-z]:\\Users\\[^\\\s]+/gi,
 ];
 
 /** Remove terminal control characters while keeping ordinary whitespace. */
