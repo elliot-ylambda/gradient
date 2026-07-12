@@ -4,6 +4,7 @@ import { emit, type EmitTarget } from "./emit/index.js";
 import { assertInside } from "./security.js";
 import { addEntry, artifactHasMarker, loadManifest, manifestTarget } from "./manifest.js";
 import { safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
+import { installHook, removeHook } from "./settings.js";
 import { validateSuggestion } from "./validate.js";
 import { recordArtifactApproval } from "./approvals.js";
 
@@ -79,6 +80,7 @@ export async function applySuggestion(
       let approvalContent: string | undefined;
       let previousContent: string | undefined;
       let created = false;
+      let installedHook: { event: string; command: string; settingsFile: string } | undefined;
 
       if (result.kind === "command" || result.kind === "skill" || result.kind === "rule") {
         const abs = join(projectDir, result.path);
@@ -110,6 +112,14 @@ export async function applySuggestion(
       } else if (result.kind === "rule-print") {
         type = "rule";
       } else {
+        // Approval means installation: merge the hook into the project's
+        // settings rather than printing JSON the user would have to hand-merge.
+        if (suggestion.payload.type !== "hook") throw new Error("hook artifact requires a hook payload");
+        const command = `gradient ${suggestion.payload.subcommand}`;
+        const settingsFile = await installHook(projectDir, suggestion.payload.event, command, {
+          ...(suggestion.payload.matcher !== undefined ? { matcher: suggestion.payload.matcher } : {}),
+        });
+        installedHook = { event: suggestion.payload.event, command, settingsFile };
         type = "hook";
       }
 
@@ -120,6 +130,7 @@ export async function applySuggestion(
         createdAt: new Date().toISOString().slice(0, 10),
         suggestionId: suggestion.id,
         ...(target === "codex" ? { target } : {}),
+        ...(installedHook ? { hook: { event: installedHook.event, command: installedHook.command } } : {}),
       };
 
       try {
@@ -137,17 +148,19 @@ export async function applySuggestion(
             await safeWriteFile(projectDir, written, previousContent, { mode: 0o600 }).catch(() => undefined);
           }
         }
+        if (installedHook) {
+          await removeHook(projectDir, installedHook.event, installedHook.command).catch(() => undefined);
+        }
         throw error;
       }
 
       if (written) writes.push({ target, path: written });
+      else if (installedHook) writes.push({ target, path: installedHook.settingsFile });
       const targetPrinted = result.kind === "loop"
         ? result.command
         : result.kind === "rule-print"
           ? result.text
-          : result.kind === "hook"
-            ? result.settingsPatch
-            : undefined;
+          : undefined;
       if (targetPrinted) printed = [printed, targetPrinted].filter(Boolean).join("\n");
     } catch (error) {
       failures.push({ target, error: (error as Error).message });

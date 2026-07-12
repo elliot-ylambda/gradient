@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applySuggestion } from "./apply.js";
 import { addEntry, loadManifest } from "./manifest.js";
+import { installHook } from "./settings.js";
+import { remove } from "../commands/remove.js";
 import type { Suggestion } from "./types.js";
 import { approvalMatches, loadArtifactApprovals } from "./approvals.js";
 
@@ -260,5 +262,59 @@ describe("applySuggestion", () => {
     expect(result.printed).toContain("repository AGENTS.md");
     expect(result.printed).toContain("Use pnpm without asking.");
     expect(await loadManifest(dir)).toHaveLength(2);
+  });
+
+  it("approving a hook installs it into project settings instead of printing JSON", async () => {
+    const { dir, home } = await testDirs();
+    const suggestion: Suggestion = {
+      ...base,
+      name: "notify-when-waiting",
+      payload: {
+        type: "hook",
+        event: "Notification",
+        matcher: "permission_prompt|idle_prompt",
+        subcommand: "notify",
+        description: "Desktop notification when Claude needs input",
+      },
+    };
+    const result = await applySuggestion(suggestion, dir, { home });
+    expect(result.printed).toBeUndefined();
+    expect(result.writes).toHaveLength(1);
+    expect(result.writes[0].path).toBe(join(dir, ".claude", "settings.local.json"));
+    const settings = JSON.parse(await readFile(result.writes[0].path, "utf8"));
+    expect(settings.hooks.Notification[0]).toMatchObject({
+      matcher: "permission_prompt|idle_prompt",
+      hooks: [{ type: "command", command: "gradient notify" }],
+    });
+    expect((await loadManifest(dir))[0]).toMatchObject({
+      name: "notify-when-waiting",
+      type: "hook",
+      path: "",
+      hook: { event: "Notification", command: "gradient notify" },
+    });
+  });
+
+  it("removing a hook artifact un-merges it and preserves unrelated hooks", async () => {
+    const { dir, home } = await testDirs();
+    const suggestion: Suggestion = {
+      ...base,
+      name: "notify-when-waiting",
+      payload: {
+        type: "hook",
+        event: "Notification",
+        matcher: "permission_prompt|idle_prompt",
+        subcommand: "notify",
+        description: "Desktop notification when Claude needs input",
+      },
+    };
+    await applySuggestion(suggestion, dir, { home });
+    await installHook(dir, "Notification", "afplay /System/Library/Sounds/Ping.aiff");
+    expect(await remove(dir, "notify-when-waiting", { home })).toBe(true);
+    const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.local.json"), "utf8"));
+    const commands = (settings.hooks?.Notification ?? []).flatMap(
+      (group: { hooks: { command: string }[] }) => group.hooks.map(hook => hook.command),
+    );
+    expect(commands).toEqual(["afplay /System/Library/Sounds/Ping.aiff"]);
+    expect(await loadManifest(dir)).toEqual([]);
   });
 });

@@ -80,6 +80,20 @@ function validateEntry(projectDir: string, value: unknown, index: number): Manif
   if (typeof entry.suggestionId !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(entry.suggestionId)) {
     throw new Error(`manifest entry ${index} has an invalid suggestion id`);
   }
+  if (entry.hook !== undefined) {
+    const hook = entry.hook as Record<string, unknown>;
+    // A forged hook record must never be able to un-merge someone else's
+    // settings entry: only gradient-owned commands are removable.
+    if (
+      entry.type !== "hook" || !hook || typeof hook !== "object" || Array.isArray(hook) ||
+      typeof hook.event !== "string" || !/^[A-Za-z]{1,50}$/.test(hook.event) ||
+      typeof hook.command !== "string" || hook.command.length > 200 ||
+      !hook.command.startsWith("gradient ") ||
+      stripUnsafeControls(hook.command) !== hook.command
+    ) {
+      throw new Error(`manifest entry ${index} has an invalid hook record`);
+    }
+  }
 
   const typed = entry as unknown as ManifestEntry;
   const expectedRelative = expectedRelativePath(typed.type, typed.name, manifestTarget(typed));

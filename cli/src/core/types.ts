@@ -72,6 +72,8 @@ export interface ManifestEntry {
   suggestionId: string;
   /** Absent means claude-code for manifests written before multi-assistant support. */
   target?: Assistant;
+  /** Installed hook artifacts record what to un-merge from settings on removal. */
+  hook?: { event: string; command: string };
 }
 
 export interface Config {

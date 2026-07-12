@@ -61,7 +61,7 @@ function renderedText(
       ? rendered.command
       : rendered.kind === "rule-print"
         ? rendered.text
-        : rendered.settingsPatch;
+        : `.claude/settings.local.json (merged on approve)\n${rendered.settingsPatch}`;
   return `[${target}]\n${body}`;
 }
 
