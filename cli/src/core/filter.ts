@@ -22,6 +22,9 @@ const INJECTED_PATTERNS: RegExp[] = [
   // raw scheduling sentinels.
   /^# autonomous loop (check|tick)\b/i,
   /^<<autonomous-loop(-dynamic)?>>$/,
+  // A prompt that is only a slash-command invocation is already automation;
+  // mining it would suggest a skill that duplicates the command itself.
+  /^\/[\w:-]+$/,
 ];
 
 export type PromptClass = "human" | "injected" | "continuation" | "notification";

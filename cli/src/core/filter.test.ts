@@ -47,6 +47,15 @@ describe("isInjected", () => {
   it("keeps a genuine prompt that merely mentions the loop", () => {
     expect(isInjected("why did the autonomous loop tick fire twice?")).toBe(false);
   });
+  it("drops prompts that are only a slash-command invocation", () => {
+    expect(isInjected("/compact")).toBe(true);
+    expect(isInjected("/review-daily")).toBe(true);
+    expect(isInjected("/plugin:deploy")).toBe(true);
+  });
+  it("keeps prompts that mention or extend a slash command", () => {
+    expect(isInjected("what does /compact do?")).toBe(false);
+    expect(isInjected("/compact but keep the migration plan details")).toBe(false);
+  });
 });
 
 describe("filterPrompts", () => {
