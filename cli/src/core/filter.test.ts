@@ -56,6 +56,13 @@ describe("isInjected", () => {
     expect(isInjected("what does /compact do?")).toBe(false);
     expect(isInjected("/compact but keep the migration plan details")).toBe(false);
   });
+  it("drops prompts that are only pasted-image placeholders", () => {
+    expect(isInjected("[Image: source: /users/x/.claude/image-cache/abc/1.png]")).toBe(true);
+    expect(isInjected("[Image #1: source: /tmp/a.png] [Image #2: source: /tmp/b.png]")).toBe(true);
+  });
+  it("keeps prompts that add intent to a pasted image", () => {
+    expect(isInjected("[Image: source: /tmp/shot.png] why is the footer broken here?")).toBe(false);
+  });
 });
 
 describe("filterPrompts", () => {

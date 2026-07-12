@@ -25,6 +25,9 @@ const INJECTED_PATTERNS: RegExp[] = [
   // A prompt that is only a slash-command invocation is already automation;
   // mining it would suggest a skill that duplicates the command itself.
   /^\/[\w:-]+$/,
+  // Pasted-image placeholders arrive as user text; a prompt that is only
+  // image tags carries no mineable intent.
+  /^\s*(?:\[image(?::| #\d+)[^\]]*\]\s*)+$/i,
 ];
 
 export type PromptClass = "human" | "injected" | "continuation" | "notification";
