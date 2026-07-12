@@ -34,6 +34,19 @@ describe("isInjected", () => {
     expect(isInjected("<Button> not rendering correctly")).toBe(false);
     expect(isInjected("<config> tag in my xml isn't parsing")).toBe(false);
   });
+  it("drops harness-scheduled autonomous-loop wakeup prompts", () => {
+    expect(isInjected(
+      "# Autonomous loop tick (dynamic pacing)\n\nRun the autonomous check using the loop instructions established earlier in this conversation.",
+    )).toBe(true);
+    expect(isInjected(
+      "# Autonomous loop check\n\nYou're being invoked on a timer while the user is away or occupied.",
+    )).toBe(true);
+    expect(isInjected("<<autonomous-loop-dynamic>>")).toBe(true);
+    expect(isInjected("<<autonomous-loop>>")).toBe(true);
+  });
+  it("keeps a genuine prompt that merely mentions the loop", () => {
+    expect(isInjected("why did the autonomous loop tick fire twice?")).toBe(false);
+  });
 });
 
 describe("filterPrompts", () => {
