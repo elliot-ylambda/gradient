@@ -1,7 +1,7 @@
-import { lstat, opendir } from "node:fs/promises";
+import { lstat, opendir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { assertNoSymlinkPath } from "./safeFs.js";
+import { assertNoSymlinkPath, symlinkRefusalError } from "./safeFs.js";
 
 export interface CollectOptions {
   scope: "project" | "all";
@@ -33,6 +33,17 @@ const TRANSCRIPT_FILE_CAP = 5_000;
 const TRANSCRIPT_TOTAL_BYTES_CAP = 512 * 1024 * 1024;
 const TRANSCRIPT_FILE_BYTES_CAP = 8_000_000;
 const TRANSCRIPT_TREE_DEPTH_CAP = 20;
+
+/** The history root itself is the user's own config — a dotfiles-managed
+ * ~/.claude or a root moved to another disk must work out of the box. Resolve
+ * the root's own symlinks once; everything beneath it stays symlink-free. */
+export async function canonicalRoot(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return path; // missing root — the walk turns into a no-op
+  }
+}
 
 export function encodeProjectDir(cwd: string): string {
   // Claude's directory encoding replaces path separators. Cover both styles so
@@ -102,6 +113,10 @@ async function walk(
       await walk(base, full, out, onRefused, depth + 1);
     } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
       out.push(full);
+    } else if (entry.isSymbolicLink()) {
+      // Dirents never report a symlink as a directory or file, so traversal
+      // skips them naturally — but the skip must be visible, not silent.
+      onRefused(symlinkRefusalError(full));
     }
   }
 }
@@ -109,17 +124,17 @@ async function walk(
 export async function collect(opts: CollectOptions): Promise<string[]> {
   const home = opts.home ?? homedir();
   const now = opts.now ?? Date.now();
-  const projectsRoot = join(home, ".claude", "projects");
+  const projectsRoot = await canonicalRoot(join(home, ".claude", "projects"));
   const onRefused = symlinkWarner(opts.onWarn);
   let roots: string[];
   if (opts.scope === "all") {
     roots = [projectsRoot];
   } else {
     const cwd = opts.projectPath ?? process.cwd();
-    roots = await projectRoots(home, projectsRoot, cwd, onRefused);
+    roots = await projectRoots(projectsRoot, projectsRoot, cwd, onRefused);
   }
   const files: string[] = [];
-  for (const root of roots) await walk(home, root, files, onRefused);
+  for (const root of roots) await walk(projectsRoot, root, files, onRefused);
   const candidates: Array<{ path: string; mtimeMs: number; size: number }> = [];
   for (const path of files) {
     try {

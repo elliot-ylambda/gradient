@@ -38,6 +38,10 @@ function descendants(base: string, target: string, includeTarget = true): string
   return includeTarget ? paths : paths.slice(0, -1);
 }
 
+export function symlinkRefusalError(path: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`refusing symlinked path: ${path}`), { code: "ESYMLINK", path });
+}
+
 /** Reject every existing symlink beneath the trusted base. This closes the
  * gap left by lexical containment checks when a repository commits .claude or
  * .gradient as a symlink. */
@@ -50,7 +54,7 @@ export async function assertNoSymlinkPath(
   for (const path of descendants(resolved.base, resolved.target, opts.includeTarget ?? true)) {
     try {
       if ((await lstat(path)).isSymbolicLink()) {
-        throw Object.assign(new Error(`refusing symlinked path: ${path}`), { code: "ESYMLINK", path });
+        throw symlinkRefusalError(path);
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -67,7 +71,7 @@ export function assertNoSymlinkPathSync(
   for (const path of descendants(resolved.base, resolved.target, opts.includeTarget ?? true)) {
     try {
       if (lstatSync(path).isSymbolicLink()) {
-        throw Object.assign(new Error(`refusing symlinked path: ${path}`), { code: "ESYMLINK", path });
+        throw symlinkRefusalError(path);
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
