@@ -27,17 +27,18 @@ import { bundleCommand } from "./commands/bundle.js";
 import { notify } from "./commands/notify.js";
 import type { Assistant } from "./core/types.js";
 import { stripUnsafeControls } from "./core/security.js";
+import { readlineConfirm, type Confirm } from "./core/confirm.js";
 
 const HELP = `gradient — turn repeated Claude Code and Codex workflows into artifacts
 
 Usage:
   gradient init [--target claude-code|codex|both]
-                                configure + install the gradient skill
+                                configure + install the skill, then offer a first scan
   gradient init --session-scan  also run a scan at the start of each session
   gradient scan                 find prompts, advisory pastes/sequences, safe preferences
   gradient scan --user          cross-project patterns, last 7 days (no preference rules)
   gradient scan --all           cross-project patterns, no time limit (no preference rules)
-    [--since 7d] [--limit N] [--max-prompts N]
+    [--since 7d] [--limit N] [--max-prompts N] [--no-review]
   gradient review               approve cached suggestions
   gradient apply <id|name>...   generate specific suggestions
   gradient explain <id|name>    show the evidence behind a suggestion
@@ -76,6 +77,8 @@ export function parseCliArgs(argv: string[]): {
       "max-prompts": { type: "string" },
       "no-skill": { type: "boolean" },
       "session-scan": { type: "boolean" },
+      "no-review": { type: "boolean" },
+      "no-scan": { type: "boolean" },
       detach: { type: "boolean" },
       "dry-run": { type: "boolean" },
       html: { type: "boolean" },
@@ -114,16 +117,100 @@ function initTargets(flag: string | boolean | undefined): Assistant[] | undefine
   throw new Error(`unknown init target: ${String(flag)} (use claude-code|codex|both)`);
 }
 
+type LogFn = (s: string) => void;
+
+async function runReview(
+  projectDir: string,
+  home: string | undefined,
+  log: LogFn,
+  confirm: Confirm,
+): Promise<void> {
+  const config = await loadConfig(home);
+  const applied = await review(projectDir, readlinePrompter({
+    targets: resolveTargets(config),
+    cheapModel: resolveCheapModel(config),
+  }), { home, onSkip: log, clarifier: readlineClarifier() });
+  log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
+  for (const a of applied) {
+    for (const write of a.writes) {
+      log(`${c.ok("wrote")} ${c.muted(terminalSafeLine(write.path))}${write.target === "codex" ? c.dim(" [codex]") : ""}`);
+    }
+    if (a.printed) log(`  ${c.dim("run:")} ${a.printed}`);
+    for (const failure of a.failures) log(c.coral(`  ${failure.target}: ${terminalSafeLine(failure.error)}`));
+    for (const target of a.skippedTargets) log(c.muted(`  skipped ${target}: artifact type is not portable`));
+  }
+  if (applied.length === 0) return;
+  // Artifacts exist now — recall is what makes them discoverable while typing.
+  const status = await recallStatus(projectDir, home).catch(() => null);
+  if (!status || status.installed) return;
+  if (await confirm("\nEnable recall hints (a nudge when a typed prompt matches an installed artifact)?", false)) {
+    const result = await setRecall(true, projectDir, home);
+    log(`${c.ok("recall hook installed")} ${c.muted(terminalSafeLine(result.settingsPath))}`);
+  }
+}
+
+async function runScanFlow(
+  opts: {
+    user: boolean;
+    all: boolean;
+    since?: number;
+    limit?: number;
+    maxPrompts?: number;
+    noReview: boolean;
+  },
+  projectDir: string,
+  home: string | undefined,
+  log: LogFn,
+  confirm: Confirm,
+): Promise<void> {
+  const config = await loadConfig(home);
+  const resolved = resolveScanScope(
+    { user: opts.user, all: opts.all, since: opts.since },
+    config,
+  );
+  log(c.dim(resolved.label));
+  const out = await scan(
+    {
+      scope: resolved.scope,
+      projectPath: projectDir,
+      sinceDays: resolved.sinceDays,
+      limit: opts.limit,
+      maxPrompts: opts.maxPrompts,
+      home,
+    },
+    { log, config },
+  );
+  for (const s of out) {
+    log(
+      `  ${confidenceChip(s.confidence)} ${c.bold(terminalSafeLine(s.name))}  ${c.muted(terminalSafeLine(s.title))}  ${c.dim(`(seen ${s.evidence.count}×)`)}`,
+    );
+    if (isNudge(s)) {
+      log(`      ${c.dim("tip: this is what autopilot automates →")} ${c.violet("gradient autopilot nudge")}`);
+    }
+  }
+  if (out.length === 0) {
+    log(`\n${c.dim("no suggestions found — try a wider scan:")} ${c.violet("gradient scan --user")}`);
+    return;
+  }
+  if (!opts.noReview && await confirm(`\nReview these ${out.length} suggestion(s) now?`, true)) {
+    await runReview(projectDir, home, log, confirm);
+    return;
+  }
+  log(`\n${c.dim("Next:")} ${c.violet("gradient review")}`);
+}
+
 export async function main(
   argv: string[],
   io: {
     log?: (s: string) => void;
     readStdin?: () => Promise<Record<string, unknown>>;
     home?: string;
+    confirm?: Confirm;
   } = {},
 ): Promise<number> {
   const log = io.log ?? ((s: string) => process.stdout.write(s + "\n"));
   const readStdin = io.readStdin ?? readStdinJson;
+  const confirm = io.confirm ?? readlineConfirm();
 
   if (argv.length === 0) {
     log(`${banner(VERSION)}\n\n${HELP}`);
@@ -169,6 +256,14 @@ export async function main(
         log(
           `${c.muted("backend:")} ${terminalSafeLine(r.backend)}\n${c.muted("config:")} ${terminalSafeLine(r.configPath)}\n${c.muted("skill installed:")} ${r.skillPaths.length ? r.skillPaths.map(terminalSafeLine).join(", ") : "false"}\n${c.muted("session-start scan:")} ${r.sessionScanInstalled}`,
         );
+        // Setup is only useful once a first scan has run — flow straight into
+        // the funnel instead of leaving the next command to be remembered.
+        if (!flags["no-scan"] && await confirm("\nScan your history for suggestions now?", true)) {
+          await runScanFlow(
+            { user: false, all: false, noReview: false },
+            projectDir, io.home, log, confirm,
+          );
+        }
         return 0;
       }
       case "scan": {
@@ -178,49 +273,21 @@ export async function main(
           return 0;
         }
         log(banner(VERSION));
-        const config = await loadConfig(io.home);
-        const resolved = resolveScanScope(
-          { user: !!flags.user, all: !!flags.all, since: sinceDays(flags.since) },
-          config,
-        );
-        log(c.dim(resolved.label));
-        const out = await scan(
+        await runScanFlow(
           {
-            scope: resolved.scope,
-            projectPath: projectDir,
-            sinceDays: resolved.sinceDays,
+            user: !!flags.user,
+            all: !!flags.all,
+            since: sinceDays(flags.since),
             limit: flags.limit ? Number(flags.limit) : undefined,
             maxPrompts: flags["max-prompts"] ? Number(flags["max-prompts"]) : undefined,
-            home: io.home,
+            noReview: !!flags["no-review"],
           },
-          { log, config },
+          projectDir, io.home, log, confirm,
         );
-        for (const s of out) {
-          log(
-            `  ${confidenceChip(s.confidence)} ${c.bold(terminalSafeLine(s.name))}  ${c.muted(terminalSafeLine(s.title))}  ${c.dim(`(seen ${s.evidence.count}×)`)}`,
-          );
-          if (isNudge(s)) {
-            log(`      ${c.dim("tip: this is what autopilot automates →")} ${c.violet("gradient autopilot nudge")}`);
-          }
-        }
-        log(`\n${c.dim("Next:")} ${c.violet("gradient review")}`);
         return 0;
       }
       case "review": {
-        const config = await loadConfig(io.home);
-        const applied = await review(projectDir, readlinePrompter({
-          targets: resolveTargets(config),
-          cheapModel: resolveCheapModel(config),
-        }), { home: io.home, onSkip: log, clarifier: readlineClarifier() });
-        log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
-        for (const a of applied) {
-          for (const write of a.writes) {
-            log(`${c.ok("wrote")} ${c.muted(terminalSafeLine(write.path))}${write.target === "codex" ? c.dim(" [codex]") : ""}`);
-          }
-          if (a.printed) log(`  ${c.dim("run:")} ${a.printed}`);
-          for (const failure of a.failures) log(c.coral(`  ${failure.target}: ${terminalSafeLine(failure.error)}`));
-          for (const target of a.skippedTargets) log(c.muted(`  skipped ${target}: artifact type is not portable`));
-        }
+        await runReview(projectDir, io.home, log, confirm);
         return 0;
       }
       case "apply": {
