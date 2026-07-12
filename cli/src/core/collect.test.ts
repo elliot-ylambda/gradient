@@ -52,4 +52,27 @@ describe("collect", () => {
     await symlink(outside, join(home, ".claude", "projects"));
     expect(await collect({ scope: "all", home })).toEqual([]);
   });
+
+  it("warns instead of failing silently when the transcript root is a symlink", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "grad-linked-"));
+    await mkdir(join(home, ".claude"), { recursive: true });
+    await writeFile(join(outside, "real.jsonl"), '{"type":"user"}');
+    await symlink(outside, join(home, ".claude", "projects"));
+    const warnings: string[] = [];
+    expect(await collect({ scope: "all", home, onWarn: m => warnings.push(m) })).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(join(home, ".claude", "projects"));
+    expect(warnings[0]).toContain("symlink");
+  });
+
+  it("project scope emits one deduplicated warning per symlinked path", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "grad-linked-"));
+    await mkdir(join(home, ".claude"), { recursive: true });
+    await symlink(outside, join(home, ".claude", "projects"));
+    const warnings: string[] = [];
+    await collect({ scope: "project", projectPath: "/p/x", home, onWarn: m => warnings.push(m) });
+    expect(warnings).toHaveLength(1);
+  });
 });

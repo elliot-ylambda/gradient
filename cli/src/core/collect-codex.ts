@@ -3,7 +3,7 @@ import { lstat, open, opendir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { CollectOptions } from "./collect.js";
-import { matchesSince } from "./collect.js";
+import { matchesSince, symlinkWarner } from "./collect.js";
 import { assertNoSymlinkPath } from "./safeFs.js";
 
 export interface CodexSessionMeta {
@@ -28,19 +28,26 @@ function isSubagentSource(source: unknown): boolean {
   return "subagent" in value || value.type === "subagent" || value.kind === "subagent";
 }
 
-async function walk(base: string, dir: string, files: string[], depth = 0): Promise<void> {
+async function walk(
+  base: string,
+  dir: string,
+  files: string[],
+  onRefused: (error: unknown) => void,
+  depth = 0,
+): Promise<void> {
   if (depth > TREE_DEPTH_CAP || files.length >= DISCOVERY_CAP) return;
   let directory;
   try {
     await assertNoSymlinkPath(base, dir);
     directory = await opendir(dir);
-  } catch {
+  } catch (error) {
+    onRefused(error);
     return;
   }
   for await (const entry of directory) {
     if (files.length >= DISCOVERY_CAP) break;
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) await walk(base, path, files, depth + 1);
+    if (entry.isDirectory()) await walk(base, path, files, onRefused, depth + 1);
     else if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(path);
   }
 }
@@ -123,7 +130,7 @@ export async function collectCodex(opts: CollectOptions): Promise<string[]> {
   const canonicalProject = await canonical(projectPath);
   const sessionsRoot = join(home, ".codex", "sessions");
   const discovered: string[] = [];
-  await walk(home, sessionsRoot, discovered);
+  await walk(home, sessionsRoot, discovered, symlinkWarner(opts.onWarn));
   const candidates: Array<{ path: string; size: number; mtimeMs: number; meta: CodexSessionMeta }> = [];
 
   for (const path of discovered) {

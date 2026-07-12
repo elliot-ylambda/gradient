@@ -61,4 +61,16 @@ describe("collectCodex", () => {
     const path = await rollout(home, "aliased", alias);
     expect(await collectCodex({ scope: "project", projectPath: project, home })).toEqual([path]);
   });
+
+  it("warns instead of failing silently when the sessions root is a symlink", async () => {
+    const home = await mkdtemp(join(tmpdir(), "gradient-codex-"));
+    const outside = await mkdtemp(join(tmpdir(), "gradient-linked-"));
+    await mkdir(join(home, ".codex"), { recursive: true });
+    await symlink(outside, join(home, ".codex", "sessions"));
+    const warnings: string[] = [];
+    expect(await collectCodex({ scope: "all", home, onWarn: m => warnings.push(m) })).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(join(home, ".codex", "sessions"));
+    expect(warnings[0]).toContain("symlink");
+  });
 });

@@ -50,7 +50,7 @@ export async function assertNoSymlinkPath(
   for (const path of descendants(resolved.base, resolved.target, opts.includeTarget ?? true)) {
     try {
       if ((await lstat(path)).isSymbolicLink()) {
-        throw new Error(`refusing symlinked path: ${path}`);
+        throw Object.assign(new Error(`refusing symlinked path: ${path}`), { code: "ESYMLINK", path });
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -66,7 +66,9 @@ export function assertNoSymlinkPathSync(
   const resolved = resolvedInside(base, target);
   for (const path of descendants(resolved.base, resolved.target, opts.includeTarget ?? true)) {
     try {
-      if (lstatSync(path).isSymbolicLink()) throw new Error(`refusing symlinked path: ${path}`);
+      if (lstatSync(path).isSymbolicLink()) {
+        throw Object.assign(new Error(`refusing symlinked path: ${path}`), { code: "ESYMLINK", path });
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
