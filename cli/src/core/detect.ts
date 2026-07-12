@@ -68,7 +68,9 @@ function sequenceBody(steps: string[]): string {
 }
 
 function deterministicTitle(c: Candidate): string {
-  const signature = bounded(c.signature, 400);
+  // Titles are one-line display labels; the full signature stays available
+  // through evidence examples and triggers.
+  const signature = boundedOneLine(c.signature, 120);
   if (c.kind === "paste") return `Advisory troubleshooting guide for “${signature}”`;
   if (c.kind === "sequence") return `Observed workflow checklist: ${signature}`;
   return `Reusable workflow for “${signature}”`;

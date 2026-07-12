@@ -61,6 +61,13 @@ describe("candidateToCommand", () => {
     expect(suggestion.payload.body).toContain("do not rerun a command");
     expect(suggestion.payload.triggers).toEqual(["help with make dev"]);
   });
+
+  it("keeps titles one line and display-bounded for pathological signatures", () => {
+    const noisy = cand(`# a long pasted heading\nwith continuation lines ${"x".repeat(500)}`, 3);
+    const suggestion = candidateToCommand(noisy);
+    expect(suggestion.title).not.toContain("\n");
+    expect(suggestion.title.length).toBeLessThanOrEqual(160);
+  });
 });
 
 describe("buildDetectPrompt", () => {
