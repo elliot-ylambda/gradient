@@ -1,6 +1,6 @@
 {
   "name": "gradient.md",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Turn repeated Claude Code and Codex workflows into skills, rules, insights, and team plugins.",
   "keywords": [
     "claude",
@@ -22,13 +22,22 @@
     "url": "git+https://github.com/elliot-ylambda/gradient.git",
     "directory": "cli"
   },
-  "bugs": { "url": "https://github.com/elliot-ylambda/gradient/issues" },
+  "bugs": {
+    "url": "https://github.com/elliot-ylambda/gradient/issues"
+  },
   "license": "MIT",
   "author": "ylambda",
   "type": "module",
-  "bin": { "gradient": "dist/bin.js" },
-  "engines": { "node": ">=20" },
-  "files": ["dist", "src/skill"],
+  "bin": {
+    "gradient": "dist/bin.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "src/skill"
+  ],
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/bin.js',0o755)\"",
@@ -38,7 +47,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepublishOnly": "npm test && npm run build && npm run smoke:bin"
   },
-  "dependencies": { "@anthropic-ai/sdk": "^0.111.0" },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.111.0"
+  },
   "devDependencies": {
     "typescript": "^7.0.2",
     "vitest": "^4.1.10",
