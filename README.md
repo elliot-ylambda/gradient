@@ -62,6 +62,12 @@ npx gradient.md bundle team-kit # package approved artifacts for teammates
 The npm package is **`gradient.md`**; the command it installs is **`gradient`**.
 So `npx gradient.md scan` and, once installed globally, plain `gradient scan`.
 
+The funnel leads you through itself: `init` offers to run your first scan,
+`scan` offers to open `review` when it finds something (`--no-review` to
+skip), and the first applied artifacts offer `recall`. Every offer is a
+single enter-press and only appears on an interactive terminal — hooks,
+pipes, and `--detach` never prompt.
+
 **Scope.** `scan` defaults to the project you're in. `--user` widens to every
 project but bounds it to a recent window (last 7 days, set via `userScopeDays`
 in config or `--since`), so it stays fast. A recency cap (`--max-prompts`,
@@ -223,8 +229,10 @@ removing artifacts that remain unused for at least 30 days.
 
 If Claude asked a question and waited at least five minutes for an answer in five
 or more sessions, `scan` adds one high-confidence Notification-hook suggestion.
-Approve it through the normal review flow to get a desktop ping for
-`permission_prompt` and `idle_prompt` notifications. `gradient notify` uses
+Approve it through the normal review flow and gradient merges the hook into
+`.claude/settings.local.json` (remove it later with `gradient remove
+notify-when-waiting`) for a desktop ping on `permission_prompt` and
+`idle_prompt` notifications. `gradient notify` uses
 static text only—never transcript content—and fails open through macOS
 `osascript` or Linux `notify-send`. This hook is Claude Code-specific; Codex
 history remains part of shared habit mining but cannot produce a Claude
