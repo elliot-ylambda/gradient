@@ -17,9 +17,12 @@ const user = (message: string, ts: string) => line({
   timestamp: ts,
   payload: { type: "user_message", message, images: [] },
 });
-const tokens = (total: number) => line({
+const tokens = (total: number, cached = 0) => line({
   type: "event_msg",
-  payload: { type: "token_count", info: { total_token_usage: { total_tokens: total } } },
+  payload: {
+    type: "token_count",
+    info: { total_token_usage: { total_tokens: total, cached_input_tokens: cached } },
+  },
 });
 
 describe("parseCodexLines", () => {
@@ -56,6 +59,15 @@ describe("parseCodexLines", () => {
         usageTokens: 75,
       },
     ]);
+  });
+
+  it("excludes cached input from token attribution", () => {
+    const result = parseCodexLines([
+      meta(),
+      user("ship it", "2026-07-09T00:01:00Z"),
+      tokens(1000, 900),
+    ]);
+    expect(result.turns[0].usageTokens).toBe(100);
   });
 
   it("does not double-count response_item user copies when event messages exist", () => {
