@@ -34,6 +34,41 @@ describe("isInjected", () => {
     expect(isInjected("<Button> not rendering correctly")).toBe(false);
     expect(isInjected("<config> tag in my xml isn't parsing")).toBe(false);
   });
+  it("drops harness-scheduled autonomous-loop wakeup prompts", () => {
+    expect(isInjected(
+      "# Autonomous loop tick (dynamic pacing)\n\nRun the autonomous check using the loop instructions established earlier in this conversation.",
+    )).toBe(true);
+    expect(isInjected(
+      "# Autonomous loop check\n\nYou're being invoked on a timer while the user is away or occupied.",
+    )).toBe(true);
+    expect(isInjected("<<autonomous-loop-dynamic>>")).toBe(true);
+    expect(isInjected("<<autonomous-loop>>")).toBe(true);
+  });
+  it("keeps a genuine prompt that merely mentions the loop", () => {
+    expect(isInjected("why did the autonomous loop tick fire twice?")).toBe(false);
+  });
+  it("drops prompts that are only a slash-command invocation", () => {
+    expect(isInjected("/compact")).toBe(true);
+    expect(isInjected("/review-daily")).toBe(true);
+    expect(isInjected("/plugin:deploy")).toBe(true);
+  });
+  it("keeps prompts that mention or extend a slash command", () => {
+    expect(isInjected("what does /compact do?")).toBe(false);
+    expect(isInjected("/compact but keep the migration plan details")).toBe(false);
+  });
+  it("drops prompts that are only pasted-image placeholders", () => {
+    expect(isInjected("[Image: source: /users/x/.claude/image-cache/abc/1.png]")).toBe(true);
+    expect(isInjected("[Image #1: source: /tmp/a.png] [Image #2: source: /tmp/b.png]")).toBe(true);
+  });
+  it("keeps prompts that add intent to a pasted image", () => {
+    expect(isInjected("[Image: source: /tmp/shot.png] why is the footer broken here?")).toBe(false);
+  });
+  it("drops harness-injected feature instruction blocks", () => {
+    expect(isInjected(
+      "# Claude in Chrome browser automation\n\nYou have access to browser automation tools (mcp__claude-in-chrome__*) for interacting with web pages.",
+    )).toBe(true);
+    expect(isInjected("why does claude in chrome keep losing my tab?")).toBe(false);
+  });
 });
 
 describe("filterPrompts", () => {

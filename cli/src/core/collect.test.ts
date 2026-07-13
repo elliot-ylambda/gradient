@@ -44,12 +44,44 @@ describe("collect", () => {
     expect(files[0].endsWith("a.jsonl")).toBe(true);
   });
 
-  it("does not follow a symlinked transcript root outside the user home", async () => {
+  // The transcript root itself is the user's own config: a dotfiles-managed
+  // ~/.claude (or a projects dir moved to another disk) must work out of the
+  // box. Only symlinks discovered BENEATH the resolved root are refused.
+  it("follows a user-managed symlinked transcript root", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    const outside = await mkdtemp(join(tmpdir(), "grad-transcript-victim-"));
+    const outside = await mkdtemp(join(tmpdir(), "grad-dotfiles-"));
     await mkdir(join(home, ".claude"), { recursive: true });
-    await writeFile(join(outside, "stolen.jsonl"), '{"type":"user"}');
+    await writeFile(join(outside, "real.jsonl"), '{"type":"user"}');
     await symlink(outside, join(home, ".claude", "projects"));
-    expect(await collect({ scope: "all", home })).toEqual([]);
+    const warnings: string[] = [];
+    const files = await collect({ scope: "all", home, onWarn: m => warnings.push(m) });
+    expect(files).toHaveLength(1);
+    expect(files[0].endsWith("real.jsonl")).toBe(true);
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns and refuses a symlink beneath the transcript root", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "grad-victim-"));
+    const root = join(home, ".claude", "projects");
+    await mkdir(root, { recursive: true });
+    await writeFile(join(outside, "stolen.jsonl"), '{"type":"user"}');
+    await symlink(outside, join(root, "linked-project"));
+    const warnings: string[] = [];
+    expect(await collect({ scope: "all", home, onWarn: m => warnings.push(m) })).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(join(root, "linked-project"));
+    expect(warnings[0]).toContain("symlink");
+  });
+
+  it("project scope warns once when the project's own transcript dir is a symlink", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "grad-victim-"));
+    const root = join(home, ".claude", "projects");
+    await mkdir(root, { recursive: true });
+    await symlink(outside, join(root, encodeProjectDir("/p/x")));
+    const warnings: string[] = [];
+    await collect({ scope: "project", projectPath: "/p/x", home, onWarn: m => warnings.push(m) });
+    expect(warnings).toHaveLength(1);
   });
 });

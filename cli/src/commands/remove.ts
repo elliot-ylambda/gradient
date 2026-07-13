@@ -10,6 +10,7 @@ import {
 import { assertInside } from "../core/security.js";
 import { refreshRecallIndex } from "./recall.js";
 import { assertNoSymlinkPath, safeReadFile, safeUnlink } from "../core/safeFs.js";
+import { removeHook } from "../core/settings.js";
 import { revokeArtifactApproval } from "../core/approvals.js";
 
 export async function remove(
@@ -45,6 +46,13 @@ export async function remove(
     if (artifact.skill) {
       await assertNoSymlinkPath(projectDir, dirname(artifact.path));
       try { await rmdir(dirname(artifact.path)); } catch { /* non-empty or already gone */ }
+    }
+  }
+  // Installed hooks own no file; un-merge them from the shared settings.
+  // The manifest validator only accepts gradient-owned hook commands here.
+  for (const entry of entries) {
+    if (entry.type === "hook" && entry.hook) {
+      await removeHook(projectDir, entry.hook.event, entry.hook.command);
     }
   }
   await removeEntries(projectDir, name);

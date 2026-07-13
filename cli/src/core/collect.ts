@@ -1,7 +1,7 @@
-import { lstat, opendir } from "node:fs/promises";
+import { lstat, opendir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { assertNoSymlinkPath } from "./safeFs.js";
+import { assertNoSymlinkPath, symlinkRefusalError } from "./safeFs.js";
 
 export interface CollectOptions {
   scope: "project" | "all";
@@ -9,6 +9,23 @@ export interface CollectOptions {
   sinceDays?: number;
   now?: number;
   home?: string;
+  onWarn?: (message: string) => void;
+}
+
+// Symlinked history roots are refused by design (safeFs hardening), but a
+// dotfiles-managed ~/.claude or ~/.codex must not read as an empty history:
+// surface each refused path once instead of failing silently.
+export function symlinkWarner(onWarn?: (message: string) => void): (error: unknown) => void {
+  const warned = new Set<string>();
+  return error => {
+    const failure = error as NodeJS.ErrnoException;
+    if (!onWarn || failure?.code !== "ESYMLINK" || !failure.path || warned.has(failure.path)) return;
+    warned.add(failure.path);
+    onWarn(
+      `coverage: ${failure.path} is a symlink — refusing to traverse it; ` +
+      "replace it with a real directory to include its transcripts",
+    );
+  };
 }
 
 const TRANSCRIPT_DISCOVERY_CAP = 10_000;
@@ -16,6 +33,17 @@ const TRANSCRIPT_FILE_CAP = 5_000;
 const TRANSCRIPT_TOTAL_BYTES_CAP = 512 * 1024 * 1024;
 const TRANSCRIPT_FILE_BYTES_CAP = 8_000_000;
 const TRANSCRIPT_TREE_DEPTH_CAP = 20;
+
+/** The history root itself is the user's own config — a dotfiles-managed
+ * ~/.claude or a root moved to another disk must work out of the box. Resolve
+ * the root's own symlinks once; everything beneath it stays symlink-free. */
+export async function canonicalRoot(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return path; // missing root — the walk turns into a no-op
+  }
+}
 
 export function encodeProjectDir(cwd: string): string {
   // Claude's directory encoding replaces path separators. Cover both styles so
@@ -27,14 +55,20 @@ export function encodeProjectDir(cwd: string): string {
 // <encoded>--claude-worktrees-<branch>, not into the project's own directory, so a
 // project-scoped scan that only reads the exact-match directory silently misses all
 // worktree sessions. Sweep those siblings too.
-async function projectRoots(base: string, projectsRoot: string, cwd: string): Promise<string[]> {
+async function projectRoots(
+  base: string,
+  projectsRoot: string,
+  cwd: string,
+  onRefused: (error: unknown) => void,
+): Promise<string[]> {
   const encoded = encodeProjectDir(cwd);
   const exact = join(projectsRoot, encoded);
   let directory;
   try {
     await assertNoSymlinkPath(base, projectsRoot);
     directory = await opendir(projectsRoot);
-  } catch {
+  } catch (error) {
+    onRefused(error);
     return [exact];
   }
   const worktreePrefix = `${encoded}--claude-worktrees-`;
@@ -55,13 +89,20 @@ export function matchesSince(mtimeMs: number, sinceDays: number | undefined, now
   return now - mtimeMs <= sinceDays * 86_400_000;
 }
 
-async function walk(base: string, dir: string, out: string[], depth = 0): Promise<void> {
+async function walk(
+  base: string,
+  dir: string,
+  out: string[],
+  onRefused: (error: unknown) => void,
+  depth = 0,
+): Promise<void> {
   if (depth > TRANSCRIPT_TREE_DEPTH_CAP || out.length >= TRANSCRIPT_DISCOVERY_CAP) return;
   let directory;
   try {
     await assertNoSymlinkPath(base, dir);
     directory = await opendir(dir);
-  } catch {
+  } catch (error) {
+    onRefused(error);
     return;
   }
   for await (const entry of directory) {
@@ -69,9 +110,13 @@ async function walk(base: string, dir: string, out: string[], depth = 0): Promis
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === "subagents") continue; // exclude subagent transcripts
-      await walk(base, full, out, depth + 1);
+      await walk(base, full, out, onRefused, depth + 1);
     } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
       out.push(full);
+    } else if (entry.isSymbolicLink()) {
+      // Dirents never report a symlink as a directory or file, so traversal
+      // skips them naturally — but the skip must be visible, not silent.
+      onRefused(symlinkRefusalError(full));
     }
   }
 }
@@ -79,16 +124,17 @@ async function walk(base: string, dir: string, out: string[], depth = 0): Promis
 export async function collect(opts: CollectOptions): Promise<string[]> {
   const home = opts.home ?? homedir();
   const now = opts.now ?? Date.now();
-  const projectsRoot = join(home, ".claude", "projects");
+  const projectsRoot = await canonicalRoot(join(home, ".claude", "projects"));
+  const onRefused = symlinkWarner(opts.onWarn);
   let roots: string[];
   if (opts.scope === "all") {
     roots = [projectsRoot];
   } else {
     const cwd = opts.projectPath ?? process.cwd();
-    roots = await projectRoots(home, projectsRoot, cwd);
+    roots = await projectRoots(projectsRoot, projectsRoot, cwd, onRefused);
   }
   const files: string[] = [];
-  for (const root of roots) await walk(home, root, files);
+  for (const root of roots) await walk(projectsRoot, root, files, onRefused);
   const candidates: Array<{ path: string; mtimeMs: number; size: number }> = [];
   for (const path of files) {
     try {

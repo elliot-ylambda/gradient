@@ -61,8 +61,8 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const window = boundedDetectLimit(requestedWindow, DEFAULT_DETECT_WINDOW);
   if (window !== requestedWindow) log(`candidate limit safety-capped to ${window}`);
 
-  const collectFn = deps.collectFn ?? ((options: ScanOptions) => collect(options));
-  const collectCodexFn = deps.collectCodexFn ?? ((options: ScanOptions) => collectCodex(options));
+  const collectFn = deps.collectFn ?? ((options: ScanOptions) => collect({ ...options, onWarn: log }));
+  const collectCodexFn = deps.collectCodexFn ?? ((options: ScanOptions) => collectCodex({ ...options, onWarn: log }));
   const parseFn = deps.parseFn ?? parseFile;
   const projectDir = opts.projectPath ?? process.cwd();
   const claudeFiles = targets.includes("claude-code") ? await collectFn(opts) : [];

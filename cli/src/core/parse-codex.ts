@@ -146,12 +146,15 @@ export function parseCodexLines(lines: string[]): CodexParseResult {
       const info = payload.info;
       if (!info || typeof info !== "object") continue;
       const totalUsage = (info as Record<string, unknown>).total_token_usage;
-      const total = totalUsage && typeof totalUsage === "object"
-        ? numeric((totalUsage as Record<string, unknown>).total_tokens)
-        : undefined;
-      if (total === undefined || total < previousCumulative) continue;
-      const delta = total - previousCumulative;
-      previousCumulative = total;
+      if (!totalUsage || typeof totalUsage !== "object") continue;
+      const total = numeric((totalUsage as Record<string, unknown>).total_tokens);
+      // Cached input re-reads the whole context on every call; excluding it
+      // keeps deltas to genuinely new tokens (mirrors the Claude parser).
+      const cached = numeric((totalUsage as Record<string, unknown>).cached_input_tokens) ?? 0;
+      const adjusted = total === undefined ? undefined : Math.max(0, total - cached);
+      if (adjusted === undefined || adjusted < previousCumulative) continue;
+      const delta = adjusted - previousCumulative;
+      previousCumulative = adjusted;
       const pending = pendingEvent ?? pendingFallback;
       if (pending && delta > 0) pending.usageTokens = Math.min(MAX_TOKEN_COUNT, (pending.usageTokens ?? 0) + delta);
     }

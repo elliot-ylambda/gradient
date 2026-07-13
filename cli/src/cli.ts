@@ -329,7 +329,8 @@ export async function main(
         const showTargets = entries.some(entry => entry.target === "codex");
         for (const e of entries) {
           const target = showTargets ? `\t${c.dim(e.target ?? "claude-code")}` : "";
-          log(`  ${c.bold(terminalSafeLine(e.name))}\t${kindLabel(e.type)}${target}\t${c.muted(terminalSafeLine(e.path || "(printed)"))}\t${c.dim(terminalSafeLine(e.createdAt))}`);
+          const location = e.path || (e.hook ? `${e.hook.event} hook in .claude/settings.local.json` : "(printed)");
+          log(`  ${c.bold(terminalSafeLine(e.name))}\t${kindLabel(e.type)}${target}\t${c.muted(terminalSafeLine(location))}\t${c.dim(terminalSafeLine(e.createdAt))}`);
         }
         return 0;
       }
@@ -480,7 +481,7 @@ export async function main(
         );
         for (const file of result.files) log(`  ${c.dim(relative(result.dir, file))}`);
         for (const skipped of result.skipped) {
-          log(c.muted(`  skipped ${skipped} (re-review/re-apply, unreadable, or sensitive)`));
+          log(c.muted(`  skipped ${skipped} (not portable in a plugin — hooks/loops — or needs re-review, or is unreadable/sensitive)`));
         }
         if (displayDir) log(`\n${c.dim("try it:")} claude --plugin-dir ${posixShellQuote(displayDir)}`);
 

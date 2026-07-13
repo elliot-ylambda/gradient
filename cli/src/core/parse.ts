@@ -86,11 +86,14 @@ function usageTokens(raw: Raw): number {
   if (raw.isSidechain || raw.type !== "assistant") return 0;
   const usage = raw.message?.usage;
   if (!usage) return 0;
+  // cache_read_input_tokens is deliberately excluded: every API step re-reads
+  // the whole cached context, so summing it across a turn's tool calls counts
+  // the same tokens dozens of times (at the cheapest price class). A single
+  // "continue" otherwise attributes millions of tokens to a two-word prompt.
   return Math.min(MAX_USAGE_TOKENS, [
     usage.input_tokens,
     usage.output_tokens,
     usage.cache_creation_input_tokens,
-    usage.cache_read_input_tokens,
   ].reduce<number>((sum, value) =>
     sum + (Number.isSafeInteger(value) && (value as number) > 0 ? value as number : 0), 0));
 }

@@ -17,6 +17,20 @@ const INJECTED_PATTERNS: RegExp[] = [
   /^<plugins_instructions>/i,
   /^<multi_agent_mode>/i,
   /^\[Request interrupted/i,
+  // Harness-scheduled autonomous-loop wakeups arrive in the user role but are
+  // machine text, not habits: match the resolved tick/check headers and the
+  // raw scheduling sentinels.
+  /^# autonomous loop (check|tick)\b/i,
+  /^<<autonomous-loop(-dynamic)?>>$/,
+  // A prompt that is only a slash-command invocation is already automation;
+  // mining it would suggest a skill that duplicates the command itself.
+  /^\/[\w:-]+$/,
+  // Pasted-image placeholders arrive as user text; a prompt that is only
+  // image tags carries no mineable intent.
+  /^\s*(?:\[image(?::| #\d+)[^\]]*\]\s*)+$/i,
+  // Feature-instruction blocks the harness injects when a capability connects
+  // mid-session (observed: Claude-in-Chrome browser automation guidelines).
+  /^# claude in chrome browser automation\b/i,
 ];
 
 export type PromptClass = "human" | "injected" | "continuation" | "notification";
