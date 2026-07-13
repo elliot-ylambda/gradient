@@ -63,6 +63,12 @@ describe("isInjected", () => {
   it("keeps prompts that add intent to a pasted image", () => {
     expect(isInjected("[Image: source: /tmp/shot.png] why is the footer broken here?")).toBe(false);
   });
+  it("drops harness-injected feature instruction blocks", () => {
+    expect(isInjected(
+      "# Claude in Chrome browser automation\n\nYou have access to browser automation tools (mcp__claude-in-chrome__*) for interacting with web pages.",
+    )).toBe(true);
+    expect(isInjected("why does claude in chrome keep losing my tab?")).toBe(false);
+  });
 });
 
 describe("filterPrompts", () => {

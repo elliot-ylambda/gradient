@@ -28,6 +28,9 @@ const INJECTED_PATTERNS: RegExp[] = [
   // Pasted-image placeholders arrive as user text; a prompt that is only
   // image tags carries no mineable intent.
   /^\s*(?:\[image(?::| #\d+)[^\]]*\]\s*)+$/i,
+  // Feature-instruction blocks the harness injects when a capability connects
+  // mid-session (observed: Claude-in-Chrome browser automation guidelines).
+  /^# claude in chrome browser automation\b/i,
 ];
 
 export type PromptClass = "human" | "injected" | "continuation" | "notification";
