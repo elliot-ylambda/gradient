@@ -49,7 +49,7 @@
     "prepublishOnly": "npm test && npm run build && npm run smoke:bin"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.111.0"
+    "@anthropic-ai/sdk": "^0.112.1"
   },
   "devDependencies": {
     "esbuild": "0.28.1",
