@@ -37,8 +37,8 @@ npx gradient.md bundle team-kit # package approved artifacts as a plugin
 4. You inspect the exact rendered artifact and approve; it writes
    `.claude/skills/<name>/SKILL.md`, portable Codex skills under
    `.agents/skills/<name>/SKILL.md`, and project rules under `.claude/rules/`,
-   prints `/loop` instructions, or proposes local hook settings
-   that call allowlisted `gradient` subcommands.
+   prints `/loop` instructions, or installs explicitly reviewed local hook
+   settings that call allowlisted `gradient` subcommands.
 
 Paste and sequence findings are advisory: prior behavior is never treated as
 authorization to rerun a command or execute later workflow steps. Preference
