@@ -3,6 +3,7 @@ import type { Assistant, Candidate, Clarify, Confidence, Suggestion, SuggestionP
 import { redact, sanitizeName } from "./security.js";
 import { candidateLeverage, estMinutesSavedPerMonth } from "./leverage.js";
 import { spanDays } from "./temporal.js";
+import { normalize, similarity } from "./cluster.js";
 import type { LLMBackend } from "../llm/backend.js";
 
 const ALLOWED_CONFIDENCE = new Set<Confidence>(["high", "inferred", "flagged"]);
@@ -325,6 +326,71 @@ function kindsAreCompatible(kinds: Set<Candidate["kind"]>, payloadType: string):
   return payloadType === "command" || payloadType === "loop" || payloadType === "hook";
 }
 
+const NEAR_DUPLICATE_THRESHOLD = 0.6;
+
+/** The part of each payload that actually varies between habits, deliberately
+ * excluding shared boilerplate (AUTHORIZATION_GUARD / RULE_AUTHORIZATION_TAIL)
+ * that every command/loop/rule body carries — comparing full bodies would
+ * make near-unrelated suggestions look identical. */
+function mergeDistinctiveText(payload: SuggestionPayload): string {
+  if (payload.type === "command") {
+    return payload.triggers?.length ? payload.triggers.join(" ") : payload.commandName;
+  }
+  if (payload.type === "loop") {
+    return payload.instruction.startsWith(AUTHORIZATION_GUARD)
+      ? payload.instruction.slice(AUTHORIZATION_GUARD.length)
+      : payload.instruction;
+  }
+  if (payload.type === "rule") {
+    const text = payload.text.endsWith(RULE_AUTHORIZATION_TAIL)
+      ? payload.text.slice(0, payload.text.length - RULE_AUTHORIZATION_TAIL.length)
+      : payload.text;
+    return `${payload.ruleName} ${text}`;
+  }
+  return payload.description;
+}
+
+function mergeText(s: Suggestion): string {
+  return normalize(`${s.name} ${mergeDistinctiveText(s.payload)}`);
+}
+
+/** Deterministic backstop for the LLM's `sourceIds` grouping: the model is
+ * asked to merge synonymous clusters, but nothing guarantees it will (the
+ * dogfood case — "lgtm" and "looks good" returned as two separate command
+ * suggestions for one habit). Hosts are considered in leverage order; a
+ * suggestion folds into the first host of the same payload type whose
+ * distinctive text is near-identical (trigram similarity ≥ 0.6). A merge
+ * that can't re-resolve every unioned sourceSignature back to a candidate
+ * (e.g. a signature outside this detect() window) leaves the host untouched
+ * and simply drops the duplicate rather than fabricate evidence. */
+export function mergeNearDuplicates(suggestions: Suggestion[], bySignature: Map<string, Candidate>): Suggestion[] {
+  const hosts: Suggestion[] = [];
+  for (const suggestion of [...suggestions].sort(byLeverage)) {
+    const hostIndex = hosts.findIndex(host =>
+      host.payload.type === suggestion.payload.type &&
+      similarity(mergeText(host), mergeText(suggestion)) >= NEAR_DUPLICATE_THRESHOLD);
+    if (hostIndex === -1) {
+      hosts.push(suggestion);
+      continue;
+    }
+
+    const host = hosts[hostIndex];
+    const unionSignatures = [...new Set([...(host.sourceSignatures ?? []), ...(suggestion.sourceSignatures ?? [])])];
+    const matched = unionSignatures.map(sig => bySignature.get(sig));
+    if (!matched.every((c): c is Candidate => c !== undefined)) continue; // unresolvable union: drop duplicate, host unchanged
+
+    const unionExamples = [...new Set([...(host.examples ?? []), ...(suggestion.examples ?? [])])].slice(0, 5);
+    hosts[hostIndex] = {
+      ...host,
+      evidence: evidenceFor(matched, host.payload.type),
+      id: idFor(unionSignatures, host.payload.type),
+      sourceSignatures: unionSignatures,
+      examples: unionExamples,
+    };
+  }
+  return hosts;
+}
+
 export async function detect(
   cands: Candidate[],
   llm: LLMBackend | null,
@@ -466,7 +532,17 @@ export async function detect(
       claimed.add(id);
       names.add(suggestion.name);
     }
-    return out.sort(byLeverage);
+
+    // Every top-candidate memberSignature (host + absorbed near-duplicates)
+    // maps back to its owning candidate, so a post-merge can re-resolve a
+    // unioned sourceSignatures set and recompute honest evidence for it.
+    const bySignature = new Map<string, Candidate>();
+    for (const candidate of top) {
+      for (const sig of candidate.memberSignatures.length ? candidate.memberSignatures : [candidate.signature]) {
+        bySignature.set(bounded(sig), candidate);
+      }
+    }
+    return mergeNearDuplicates(out, bySignature).sort(byLeverage);
   } catch {
     // Backend failure or invalid output degrades only to locally reconstructed,
     // high-confidence advisory commands.

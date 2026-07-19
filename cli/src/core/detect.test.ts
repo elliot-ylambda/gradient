@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  AUTHORIZATION_GUARD,
   buildDetectPrompt,
   byLeverage,
   candidateRef,
@@ -9,6 +10,7 @@ import {
   detect,
   idFor,
   MAX_DETECT_CANDIDATES,
+  mergeNearDuplicates,
   sanitizeClarify,
 } from "./detect.js";
 import type { Candidate, Suggestion } from "./types.js";
@@ -652,6 +654,113 @@ describe("detect", () => {
     const out = await detect([loop], llm);
     expect(out).toHaveLength(1);
     expect(out[0].payload.type).toBe("command");
+  });
+
+  // Regression (dogfood): the model classified the same "acknowledge and
+  // approve" habit as two separate command suggestions — one sourced from an
+  // "lgtm" cluster, the other from a "looks good" cluster — instead of
+  // merging them via sourceIds. The deterministic post-merge pass must
+  // consolidate them into one suggestion because their distinctive text
+  // (name + triggers) is near-identical, even though the model never grouped
+  // their candidate ids together.
+  it("deterministically merges near-duplicate command suggestions the model failed to consolidate (dogfood: lgtm vs looks good)", async () => {
+    const lgtm: Candidate = {
+      kind: "unknown", signature: "lgtm", examples: ["lgtm", "lgtm", "lgtm"],
+      count: 3, sessions: 2, sessionIds: ["s1", "s2"],
+      occurrences: [
+        { ts: "2026-06-01T10:00:00Z", sessionId: "s1" },
+        { ts: "2026-06-01T10:05:00Z", sessionId: "s1" },
+        { ts: "2026-06-02T09:00:00Z", sessionId: "s2" },
+      ],
+      memberSignatures: ["lgtm"], confidence: "high",
+    };
+    const looksGood: Candidate = {
+      kind: "unknown", signature: "looks good", examples: ["looks good", "looks good", "looks good"],
+      count: 3, sessions: 2, sessionIds: ["s2", "s3"],
+      occurrences: [
+        { ts: "2026-06-02T09:30:00Z", sessionId: "s2" },
+        { ts: "2026-06-03T09:00:00Z", sessionId: "s3" },
+        { ts: "2026-06-03T09:05:00Z", sessionId: "s3" },
+      ],
+      memberSignatures: ["looks good"], confidence: "high",
+    };
+    const llm = {
+      name: "fake",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => {
+        const wire = JSON.parse(prompt) as { id: string; signature: string }[];
+        const lgtmId = wire.find(w => w.signature === "lgtm")!.id;
+        const looksGoodId = wire.find(w => w.signature === "looks good")!.id;
+        return JSON.stringify({ suggestions: [
+          {
+            sourceIds: [lgtmId], name: "acknowledge the reviewer approve x", confidence: "high",
+            payload: { type: "command", commandName: "acknowledge-the-reviewer-approve-x" },
+          },
+          {
+            sourceIds: [looksGoodId], name: "acknowledge the reviewer approve y", confidence: "high",
+            payload: { type: "command", commandName: "acknowledge-the-reviewer-approve-y" },
+          },
+        ] });
+      },
+    };
+    const out = await detect([lgtm, looksGood], llm);
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence.count).toBe(6);
+    expect(out[0].evidence.sessions).toBe(3);
+    expect(out[0].sourceSignatures?.slice().sort()).toEqual(["lgtm", "looks good"]);
+    expect(out[0].id).toBe(idFor(["lgtm", "looks good"], "command"));
+  });
+});
+
+describe("mergeNearDuplicates", () => {
+  const baseEvidence = { count: 5, sessions: 5, estMinutesSavedPerMonth: 5 };
+
+  // Counter-test: identical distinctive text must still not merge a loop with
+  // a command — the payload-type gate must be checked before similarity.
+  it("does not merge a loop and a command sharing identical distinctive text", () => {
+    const loop: Suggestion = {
+      id: "loop1", name: "run-the-tests", title: "t", rationale: "r", confidence: "high",
+      evidence: baseEvidence,
+      sourceSignatures: ["run the tests (loop)"],
+      payload: { type: "loop", instruction: `${AUTHORIZATION_GUARD} Reminder: run the tests` },
+    };
+    const command: Suggestion = {
+      id: "cmd1", name: "run-the-tests", title: "t", rationale: "r", confidence: "high",
+      evidence: baseEvidence,
+      sourceSignatures: ["run the tests (command)"],
+      payload: { type: "command", commandName: "run-the-tests", body: "irrelevant", triggers: ["run the tests"] },
+    };
+    const out = mergeNearDuplicates([loop, command], new Map());
+    expect(out).toHaveLength(2);
+  });
+
+  // Guard test: two unrelated commands whose bodies share only the fixed
+  // AUTHORIZATION_GUARD boilerplate must not merge. Their full bodies are
+  // highly similar (same ~300-char guard dominates), but mergeText must
+  // compare only name + triggers, which are unrelated here.
+  it("does not merge two unrelated commands that share only the AUTHORIZATION_GUARD boilerplate", () => {
+    const a: Suggestion = {
+      id: "a", name: "deploy-staging", title: "t", rationale: "r", confidence: "high",
+      evidence: baseEvidence,
+      sourceSignatures: ["deploy the app to staging"],
+      payload: {
+        type: "command", commandName: "deploy-staging",
+        body: `${AUTHORIZATION_GUARD}\n\nObserved workflow:\ndeploy the app to staging`,
+        triggers: ["deploy the app to staging"],
+      },
+    };
+    const b: Suggestion = {
+      id: "b", name: "write-parser-tests", title: "t", rationale: "r", confidence: "high",
+      evidence: baseEvidence,
+      sourceSignatures: ["write unit tests for the parser"],
+      payload: {
+        type: "command", commandName: "write-parser-tests",
+        body: `${AUTHORIZATION_GUARD}\n\nObserved workflow:\nwrite unit tests for the parser`,
+        triggers: ["write unit tests for the parser"],
+      },
+    };
+    const out = mergeNearDuplicates([a, b], new Map());
+    expect(out).toHaveLength(2);
   });
 });
 
