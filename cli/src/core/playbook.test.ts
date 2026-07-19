@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, readFile, writeFile, mkdir, stat } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, mkdir, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import {
   generatePlaybook, writePlaybook, loadPlaybook, playbookPath,
   isNudge, DEFAULT_PLAYBOOK, MINED_START, MINED_END,
   parseProjectPlaybook, clampMode, projectPlaybookPath, loadProjectPlaybook,
+  renderMinedSection,
 } from "./playbook.js";
 import type { Suggestion } from "./types.js";
 
@@ -155,11 +156,38 @@ describe("parseProjectPlaybook", () => {
     expect(r.clamps.malformed).toBe(true);
   });
 
-  it("recognized key with trailing text → malformed, never silently ignored", () => {
+  it("trailing YAML comment on max-mode is descriptive, not a value", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: nudge   # ceiling here\n---\nx\n");
+    expect(r.clamps).toEqual({ maxMode: "nudge" });
+  });
+
+  it("trailing YAML comment on budget is descriptive, not a value", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  budget: 5   # per session\n---\nx\n");
+    expect(r.clamps).toEqual({ budget: 5 });
+  });
+
+  it("recognized key with trailing NON-comment text → malformed, never silently ignored", () => {
     // If this were ignored instead, the repo would get MORE authority than
-    // the author intended — the one direction clamps must never fail.
-    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: nudge # weekdays only\n---\nx\n");
+    // the author intended — the one direction clamps must never fail. Only a
+    // `#` comment (whitespace-preceded, per YAML) is strippable; bare trailing
+    // text is an unparseable value.
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode: nudge extra\n---\nx\n");
     expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("`#` without preceding whitespace is part of the value, so still fails closed", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  budget: 5#3\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("a value that is only a comment → malformed (empty after stripping)", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  max-mode:   # unset\n---\nx\n");
+    expect(r.clamps.malformed).toBe(true);
+  });
+
+  it("a whole-line comment inside the block is ignored, clamps still apply", () => {
+    const r = parseProjectPlaybook("---\nautopilot:\n  # which ceiling?\n  max-mode: off\n---\nx\n");
+    expect(r.clamps).toEqual({ maxMode: "off" });
   });
 
   it("recognized key with empty value → malformed", () => {
@@ -219,5 +247,52 @@ describe("projectPlaybookPath / loadProjectPlaybook", () => {
     await mkdir(gradPath);
     const r = await loadProjectPlaybook(dir);
     expect(r?.clamps.malformed).toBe(true);
+  });
+
+  it("refuses a symlinked project playbook instead of reading outside the repo", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-proj-"));
+    const outside = await mkdtemp(join(tmpdir(), "grad-outside-"));
+    const victim = join(outside, "private.md");
+    await writeFile(victim, "---\nautopilot:\n  budget: 999\n---\nSECRET\n");
+    await symlink(victim, join(dir, "gradient.md"));
+    const result = await loadProjectPlaybook(dir);
+    expect(result?.clamps.malformed).toBe(true);
+    expect(result?.prose).not.toContain("SECRET");
+  });
+});
+
+import { PLAYBOOK_MAX_CHAINS } from "./playbook.js";
+import type { ChainFinding } from "./sequence.js";
+
+const chain = (a: string, b: string, count = 5, sessions = 3): ChainFinding =>
+  ({ steps: [a, b], count, sessions, sessionIds: ["s1", "s2", "s3"], examples: [[a, b]] });
+
+describe("renderMinedSection with chains", () => {
+  it("renders chain lines under the workflows heading", () => {
+    const out = renderMinedSection([], [chain("review the spec", "write the plan")]);
+    expect(out).toContain("## My workflows (mined)");
+    expect(out).toContain('- After "review the spec", you usually follow with "write the plan" (5× · 3 sessions)');
+  });
+  it("renders 3-step chains with a then-clause", () => {
+    const c: ChainFinding = { ...chain("a", "b"), steps: ["a", "b", "c"] };
+    expect(renderMinedSection([], [c])).toContain('- After "a", you usually follow with "b" then "c" (5× · 3 sessions)');
+  });
+  it("caps chains at PLAYBOOK_MAX_CHAINS", () => {
+    const many = Array.from({ length: PLAYBOOK_MAX_CHAINS + 2 }, (_, i) => chain(`a${i}`, `b${i}`));
+    const out = renderMinedSection([], many);
+    expect(out.match(/you usually follow with/g)).toHaveLength(PLAYBOOK_MAX_CHAINS);
+  });
+  it("generatePlaybook splices chains inside markers, user Rules untouched", () => {
+    const out = generatePlaybook([], undefined, [chain("a", "b")]);
+    expect(out).toContain('you usually follow with "b"');
+    expect(out!.indexOf("you usually follow")).toBeLessThan(out!.indexOf("## Rules"));
+  });
+  it("redacts secrets and neutralizes marker/control injection in chain text", () => {
+    const secret = `npm_${"a".repeat(36)}`;
+    const injected = chain(`review ${MINED_END}\n\u001b[31m ${secret}`, "write the plan");
+    const out = generatePlaybook([], undefined, [injected])!;
+    expect(out).not.toContain(secret);
+    expect(out).not.toContain("\u001b");
+    expect(out.match(new RegExp(MINED_END, "g"))).toHaveLength(1);
   });
 });

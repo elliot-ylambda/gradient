@@ -1,10 +1,24 @@
 # gradient v2 Phase E — `gradient bundle` (Team Distribution) — Implementation Plan
 
+> **Security revision (0.1.1):** This historical plan's hook export and raw file
+> copy were superseded by the public-release audit. The shipped implementation
+> requires exact validated manifest paths plus matching provenance markers,
+> requires private exact-content approval under the hardened generator, strips
+> local suggestion IDs, refuses sensitive-looking artifacts, caps export work,
+> atomically swaps symlink-safe generated trees, and disables hook export until
+> recipients have an independent consent boundary. Raw transcript/cache files
+> are not copied, but reviewed artifact text may quote or derive from prompts.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `gradient bundle <name>` packages manifest-tracked, approved artifacts into a Claude Code plugin directory (`.gradient/bundle/<name>/`) with `plugin.json`, `skills/`, optional `commands/`, `rules/`, and (opt-in) `hooks/hooks.json` — evidence counts stripped, publishing left to the user. Spec: `docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md` §7.
+**Goal:** `gradient bundle <name>` packages validated, provenance-marked,
+approved artifacts into a reviewable Claude Code plugin directory with private
+telemetry stripped and publishing left to the user.
 
-**Architecture:** `core/bundle.ts` reads the manifest, copies artifact files into the plugin layout, synthesizes `plugin.json` and a provenance README, and (with `--with-hooks`) reconstructs `hooks/hooks.json` from the applied hook suggestions still present in `suggestions.json`. `commands/bundle.ts` + CLI wire-up print the tree and a marketplace snippet.
+**Architecture:** `core/bundle.ts` validates the manifest, verifies each source's
+provenance, scans for sensitive-looking content, strips local IDs, and writes the
+plugin layout through the safe filesystem layer. `commands/bundle.ts` + CLI
+wire-up print the tree and a marketplace snippet. Hooks are not exported.
 
 **Tech Stack:** TypeScript (ESM, `.js` import suffixes), Node ≥ 20, vitest, zero new runtime dependencies. All work in `cli/`.
 
@@ -13,9 +27,10 @@
 - **Depends on Phase A** (skill artifacts); rules (Phase C) are bundled when present, tolerated when absent. Branch: `spec/v2-phase-e`.
 - **Only manifest entries ship.** Unapproved `suggestions.json` content must never leak into a bundle (spec §7). Evidence counts (personal telemetry) appear nowhere in bundle output — no "seen N×" strings, no `suggestions.json` copy.
 - **Rules caveat:** Claude Code plugins have no `rules/` auto-load; bundled rules land in `rules/` with a README instruction to copy them into a project's `.claude/rules/`. Recorded in the bundle README, not silently.
-- **Hooks are opt-in (`--with-hooks`)** and only ever `gradient <subcommand>` commands; the README states teammates need `gradient` installed for them.
-- All bundle writes go through `assertInside(join(projectDir, ".gradient"), …)`.
-- **Verify at build time (spec §11):** minimum `plugin.json` fields against the current plugin docs (assumed: `name`, `description`, `version`); the marketplace snippet is labeled "verify against current docs" in CLI output.
+- **Hooks are disabled** until the recipient can grant local consent; creator
+  approval is not authority over a teammate's machine.
+- All bundle reads, rebuilds, and writes use validated paths plus `safeFs`.
+- **Verified against current docs (2026-07-09):** `plugin.json` uses `name`, `description`, and `version`; root-level `skills/`, `commands/`, and `hooks/hooks.json` are auto-discovered. A marketplace catalog requires top-level `owner` and plugin-entry `name` + `source`.
 - Tests: vitest, temp dirs, no network. Run from `cli/`: `npm test`, `npm run typecheck`.
 
 ## File structure
@@ -24,7 +39,7 @@
 |------|----------------|
 | `cli/src/core/bundle.ts` (create) | manifest → plugin layout; plugin.json; README; hooks.json |
 | `cli/src/commands/bundle.ts` (create) | orchestration + result shaping for the CLI |
-| `cli/src/cli.ts` (modify) | `bundle` dispatch, `--with-hooks` flag, HELP |
+| `cli/src/cli.ts` (modify) | `bundle` dispatch and HELP; legacy `--with-hooks` is rejected |
 | `README.md` (modify) | team distribution section |
 
 ---
@@ -184,7 +199,10 @@ git commit -m "feat(core): gradient bundle layout — manifest artifacts into a 
 
 ---
 
-### Task E2: `--with-hooks` — hooks.json from applied hook suggestions
+### Task E2 (superseded): hook export
+
+The implementation below is retained as historical plan context only. The
+0.1.1 security revision rejects `--with-hooks` pending recipient-side consent.
 
 **Files:**
 - Modify: `cli/src/core/bundle.ts`
@@ -351,3 +369,30 @@ Expected: PASS.
 git add cli/src/commands/bundle.ts cli/src/cli.ts cli/src/cli.test.ts README.md
 git commit -m "feat(cli): gradient bundle — package approved artifacts for the team"
 ```
+
+---
+
+## Execution notes (security revision, 2026-07-10)
+
+- **Source trust:** a validated manifest entry can address only the exact path
+  implied by its type and sanitized name. The source must be a regular,
+  non-symlink file with the matching provenance marker and a private
+  exact-content approval under the current generator safety version. This
+  excludes forged repo manifests, changed files, and pre-hardening artifacts.
+- **Atomic projection:** source count and bytes are capped and fully prepared
+  before any prior bundle is touched. Output is built in a symlink-safe temporary
+  sibling, then swapped with a Gradient-owned target; validation or write
+  failures preserve the previous bundle.
+- **Privacy:** raw transcript/cache files, evidence counts, local suggestion IDs,
+  and hooks are not copied. Artifact text may still quote or derive from redacted
+  prompts, sensitive-looking files are skipped, and every output requires manual
+  review because best-effort scanning is not DLP.
+- **Recipient authority:** hook export is disabled. The creator's local approval
+  cannot authorize automation on a teammate's machine.
+- **CLI integrity:** printed plugin paths use POSIX single-quote escaping, and
+  executable output is omitted for paths containing terminal control characters.
+- **Marketplace schema:** the catalog includes `name`, `owner`, `description`,
+  and a plugin entry with `name`, relative `source`, and description.
+- **Cache readers:** suggestion, manifest, approval, settings, playbook, and
+  related readers validate types and enforce byte/entry caps. Invalid future or
+  attacker-controlled content fails closed or is explicitly skipped.

@@ -2,11 +2,12 @@
 
 # gradient
 
-**The prompts you keep retyping into Claude Code, compiled into commands.**
+**The prompts you keep retyping into Claude Code and Codex, compiled into skills.**
 
-`gradient` reads your own Claude Code history, finds the workflows you repeat,
-and generates the automations to stop — **slash commands, loops, and hooks** —
-through a read-only **scan** → approve **review** → reversible **apply** flow.
+`gradient` reads your own Claude Code and Codex history, finds repeated prompts, error
+pastes, short preference answers, and recurring sequences, then generates the
+automations to stop — **skills, rules, loops, and hooks** — through a
+local-mining **scan** → approve **review** → reversible **apply** flow.
 It only ever suggests: nothing runs without you turning it on.
 
 [gradient.md](https://gradient.md) · open source · MIT
@@ -23,7 +24,7 @@ the same things everyone does in Claude Code:
 - `continue` / `what's next?` typed **hundreds** of times → a loop you never set up
 - `/compact` run **143×** → a `PreCompact` checkpoint you keep forgetting
 - "write the implementation plan", "review the spec then write the plan",
-  "push and open a PR and review it" repeated every week → slash commands waiting
+  "push and open a PR and review it" repeated every week → skills waiting
   to be named
 
 `gradient` mines those patterns out of your history and hands you the artifact.
@@ -32,18 +33,32 @@ the same things everyone does in Claude Code:
 
 ```
 gradient/
-  cli/               →  the gradient CLI — the v1 analysis engine (TypeScript / npx)
+  cli/               →  the gradient CLI (TypeScript / npx)
   plugin/            →  the Claude Code plugin — bundled CLI + skills; see plugin/README.md
   .claude-plugin/    →  marketplace manifest so this repo doubles as a plugin marketplace
   docs/              →  design spec and implementation plan
+  skills/            →  reusable skills for Claude Code + Codex
 ```
 
 | Dir | What it is |
 |-----|------------|
-| [`cli/`](cli/) | The `gradient` CLI — the v1 analysis engine. The read-only `scan` pipeline runs end-to-end today. See [`cli/README.md`](cli/README.md). |
+| [`cli/`](cli/) | The `gradient` CLI. Its local-first `scan` pipeline finds repeated workflows and emits approved artifacts. See [`cli/README.md`](cli/README.md). |
 | [`plugin/`](plugin/) | The Claude Code plugin — bundled CLI + skills; see [`plugin/README.md`](plugin/README.md). |
 | [`.claude-plugin/`](.claude-plugin/) | Marketplace manifest so this repo doubles as a plugin marketplace. |
 | [`docs/`](docs/) | Design spec and implementation plan. |
+| [`skills/`](skills/) | Open-standard skills that work in Claude Code and Codex. |
+
+## Skills library
+
+The public skills library starts with [`vibe-security-check`](skills/vibe-security-check/SKILL.md), a defensive pre-launch audit for the auth, data, storage, spend, SSRF, payment, upload, and AI-tool guards commonly missing from rapidly built apps.
+
+Install it globally for both Claude Code and Codex:
+
+```bash
+npx skills add elliot-ylambda/gradient --skill vibe-security-check -g -a claude-code -a codex
+```
+
+See the [skills catalog](skills/) for usage and the full audit checklist.
 
 ## Quickstart
 
@@ -55,42 +70,119 @@ every automation stays opt-in.
 **CLI (npx):**
 
 ```bash
-npx gradient scan        # this project's history (all of it)
-npx gradient scan --user # all projects, last 7 days — your recent cross-project habits
-npx gradient scan --all  # all projects, no time limit (thorough; can be slow)
-npx gradient review      # inspect the ranked suggestions and their evidence
-npx gradient apply <id>  # generate an approved slash-command / loop / hook
+npx gradient.md init --target both # install the gradient skill for Claude Code + Codex
+npx gradient.md scan        # prompts, advisory paste/sequence patterns, and safe preferences
+npx gradient.md scan --user # all projects, last 7 days — your recent cross-project habits
+npx gradient.md scan --all  # all projects, no time limit (thorough; can be slow)
+npx gradient.md review      # inspect the ranked suggestions and their evidence
+npx gradient.md apply <id>  # generate an approved skill / loop / hook
+npx gradient.md migrate     # convert older generated commands into skills
+npx gradient.md recall on   # hint when a typed prompt matches an installed artifact
+npx gradient.md stats       # coverage plus artifact adoption
+npx gradient.md insights    # local behavior report + concrete next actions
+npx gradient.md continuity on # checkpoint before compaction, recap after resume
+npx gradient.md bundle team-kit # package approved artifacts for teammates
 ```
+
+The npm package is **`gradient.md`**; the command it installs is **`gradient`**.
+So `npx gradient.md scan` and, once installed globally, plain `gradient scan`.
+
+The funnel leads you through itself: `init` offers to run your first scan,
+`scan` offers to open `review` when it finds something (`--no-review` to
+skip), and the first applied artifacts offer `recall`. Every offer is a
+single enter-press and only appears on an interactive terminal — hooks,
+pipes, and `--detach` never prompt.
 
 **Scope.** `scan` defaults to the project you're in. `--user` widens to every
 project but bounds it to a recent window (last 7 days, set via `userScopeDays`
 in config or `--since`), so it stays fast. A recency cap (`--max-prompts`,
-default 1500) protects the clustering step from very large histories and reports
-anything it drops.
+default 1500, absolute ceiling 5000) protects the clustering step from very
+large histories and reports anything it drops. Transcript discovery also has
+file-count, depth, per-file, and aggregate-byte ceilings. Cross-project scans
+deliberately skip Q→A preference mining, so a preference learned in one
+repository cannot become a rule in another.
 
-The default backend reuses your existing `claude` CLI auth — no API key required.
-Clustering is local and LLM-free; only short candidate snippets ever reach a model
-— never whole transcripts — and a redaction pass strips secrets first.
+Approved skills can be written for both assistants. Add this to
+`~/.config/gradient/config.json`:
+
+```json
+{
+  "targets": ["claude-code", "codex"],
+  "cheapSkillModel": "haiku"
+}
+```
+
+Claude Code skills go to `.claude/skills`; portable Codex skills go to the
+documented repository location `.agents/skills`. `cheapSkillModel` is used only
+for workflows the judge marks mechanical, and an empty string disables it.
+
+The default backend reuses the CLI auth you already have: `claude` for the
+default Claude Code target and `codex exec --ephemeral` for a Codex-only target.
+No API key is required for local use.
+Clustering is local and LLM-free. `scan` sends bounded candidate snippets—not
+whole transcripts—to the selected model after redacting common credential and
+PII formats. Redaction is defense in depth, not a guarantee that arbitrary
+private or proprietary text is removed; review the
+[data and trust boundaries](#data-and-trust-boundaries) before scanning
+sensitive history.
+
+When a frequent pattern is genuinely ambiguous, `review` asks one judge-authored
+multiple-choice question. The judge can propose only bounded, redacted labels;
+Gradient reconstructs each body from a fixed local authorization guard. Choosing
+an interpretation promotes the suggestion to high confidence, then shows the
+exact rendered artifact for separate approval. The private cache keeps the
+choice for `explain`; declining leaves it flagged and unapplied.
+
+## Model use and billing
+
+gradient uses the selected assistant's non-interactive CLI for short text-only
+decisions: `claude -p` or an isolated `codex exec --ephemeral`. Those calls use
+the account and limits attached to that CLI login. Two features make calls:
+
+- **`scan`** — one call per run, to name and rank the mined clusters.
+- **`autopilot`** — at most `autopilotBudget` judge attempts per session
+  (default 10, absolute ceiling 100, clampable lower per repo in `gradient.md`).
+  Stand-downs and failed or timed-out calls consume the budget too.
+
+An always-on autopilot is therefore recurring usage, not a free operation. If that
+matters, lower the budget or set `max-mode: off` in the repos you don't want it
+running in.
+
+**For CI or anything shared, use a service credential rather than a personal
+login.** gradient's built-in API path uses Anthropic: set `ANTHROPIC_API_KEY`
+and pin the backend. Pinned backends fail closed when unavailable; Gradient
+never silently switches identity or billing path:
+
+```json
+// ~/.config/gradient/config.json
+{ "backend": "anthropic", "model": "claude-sonnet-4-6" }
+```
+
+(Note that an exported `ANTHROPIC_API_KEY` also redirects the default `claude`
+CLI backend to API billing, so setting it is enough to move off the subscription
+either way.)
 
 ## Autopilot (opt-in)
 
 The most-mined pattern in every history is the nudge — `continue`, `what's
 next?` — typed hundreds of times. `gradient autopilot` automates exactly that:
-a `Stop` hook that answers the way *you* would, using the phrasings mined into
-your `gradient.md` (`~/.config/gradient/gradient.md`, yours to edit — `scan`
-refreshes only its marked region).
+a local `Stop` hook whose isolated judge can return only the fixed nudge
+`Continue.`. Approved patterns are recorded in your private
+`~/.config/gradient/gradient.md`; unapproved scan output never reaches it.
 
 ```bash
-npx gradient autopilot nudge   # opt in (this project): push unfinished work forward
-npx gradient autopilot full    # also answer routine questions / start your usual next step
-npx gradient autopilot status  # what did it do while I was away?
-npx gradient autopilot off     # remove the hook
+npx gradient.md autopilot nudge   # opt in (this project): push unfinished work forward
+npx gradient.md autopilot status  # what did it do while I was away?
+npx gradient.md autopilot off     # remove the hook
 ```
 
-Bounded by design: a per-session budget (default 10), a progress gate that
-stands down when Claude stops twice with no new tool activity, and fail-open
-errors — anything unexpected means Claude just stops normally. Your permission
-prompts still gate dangerous tools; autopilot cannot answer those.
+Arbitrary-response `full` mode is disabled in `0.3.1` pending additional
+prompt-injection hardening. Enabling nudge records consent for the canonical
+project path in private user config and installs the hook in
+`.claude/settings.local.json`. A stale or committed hook is inert without that
+local consent.
+
+Bounded by design — see [How the loop is bounded](#how-the-loop-is-bounded) below.
 
 **Per-repo limits.** Drop a committed `gradient.md` at a repo root to bound
 autopilot for everyone who works there. Optional frontmatter clamps authority —
@@ -99,16 +191,153 @@ it can only *lower* it, never raise your global setting:
 ```yaml
 ---
 autopilot:
-  max-mode: nudge   # ceiling here: off | nudge | full
-  budget: 5         # max auto-responses per session in this repo
+  max-mode: nudge   # ceiling here: off | nudge
+  budget: 5         # max judge attempts per session in this repo
 ---
 ## Rules
 - Never push, deploy, or publish from autopilot in this repo.
 ```
 
-Everything below the frontmatter is prose the auto-responder reads as context.
-Malformed frontmatter turns autopilot off for that repo; `gradient autopilot
-status` shows the effective mode.
+Only the structured frontmatter clamps are read by autopilot. Repository prose
+is never passed to the judge as instructions. Trailing `#` comments are
+descriptive and ignored. Anything else the parser
+can't read — an unclosed block, `max-mode: turbo` — turns autopilot off for that
+repo rather than guessing; `gradient autopilot status` shows the effective mode.
+
+### How the loop is bounded
+
+Claude Code passes a `stop_hook_active` flag so a `Stop` hook can tell it is
+already continuing a session, and avoid looping forever. **gradient deliberately
+does not gate on it.** For an auto-responder that flag is true whenever the
+feature is working — bailing on it would mean autopilot could nudge exactly once
+per session and never again.
+
+Three other bounds replace it, and each is independent:
+
+- **Budget** — a hard cap on judge attempts per session (default 10, absolute
+  ceiling 100), clampable further per repo.
+- **Progress gate** — if Claude stops again having done no tool work since the
+  last nudge, autopilot latches off for the session rather than nudging into a
+  wall.
+- **Fail-open** — any error (no backend, judge timeout, unparseable reply) means
+  the stop simply stands. Autopilot's failure mode is "off", never "loops".
+
+The judge runs in Claude safe mode, with built-in tools, skills, plugins, hooks,
+MCP servers, Chrome, and session persistence disabled. Prompt text is sent over
+stdin rather than process arguments. The model's response text is never relayed;
+only its continue/stand-down decision is used, and continue maps to `Continue.`.
+
+## Recall & adoption
+
+Generating a skill is only half the loop; remembering it at typing time is the
+other half. `gradient recall` installs a per-project, LLM-free
+`UserPromptSubmit` hook that compares a typed prompt with project and user-level
+commands and skills. A close match adds a one-line context hint so Claude can
+follow the installed workflow without rewriting or blocking the prompt.
+
+```bash
+npx gradient.md recall on      # install the hook and build its local index
+npx gradient.md recall status  # hook state, artifact count, and index timestamp
+npx gradient.md recall off     # remove only the recall hook
+```
+
+The index and adoption log live in private `0600` files under
+`~/.config/gradient/projects/`, keyed by project path—not in the repository.
+Matching events contain only artifact name, timestamp, similarity, and whether
+a hint was shown; prompt text is never logged. Recall also requires local
+per-project consent, so a repository cannot activate it by committing a hook.
+`gradient stats` reports
+uses, last use, and retypes caught for each approved artifact, and suggests
+removing artifacts that remain unused for at least 30 days.
+
+## Attention hooks
+
+If Claude asked a question and waited at least five minutes for an answer in five
+or more sessions, `scan` adds one high-confidence Notification-hook suggestion.
+Approve it through the normal review flow and gradient merges the hook into
+`.claude/settings.local.json` (remove it later with `gradient remove
+notify-when-waiting`) for a desktop ping on `permission_prompt` and
+`idle_prompt` notifications. `gradient notify` uses
+static text only—never transcript content—and fails open through macOS
+`osascript` or Linux `notify-send`. This hook is Claude Code-specific; Codex
+history remains part of shared habit mining but cannot produce a Claude
+lifecycle hook.
+
+## Insights & continuity
+
+`gradient insights` is a local-only report card for the way you work: typed
+nudges, interrupted turns, context deaths and compacts, repeated error pastes,
+and model/effort churn. It makes no model call. Each hot metric points to a
+specific action such as `gradient autopilot nudge`, `gradient scan`, or
+`gradient recall on`; `--user` uses the same recent cross-project window as
+scan, and `--html` writes a self-contained private
+`.gradient/insights.html`.
+
+`gradient continuity on` installs locally consented `PreCompact` checkpoint
+and `SessionStart` recap hooks. Bounded, redacted recent user intents plus a
+deterministic tool-activity count are stored in the private per-project user
+cache and returned as explicitly untrusted context only on `resume|compact`.
+Raw assistant/model/tool-output prose is not cached. `continuity off` revokes
+consent, deletes the checkpoint, then removes only those two hooks.
+
+## Data and trust boundaries
+
+- `scan` reads user-authored turns from enabled local Claude Code and Codex
+  transcripts (excluding Codex subagent rollouts), writes a
+  private per-project cache under `~/.config/gradient/projects/`, and sends only
+  capped/redacted candidate snippets to the selected model. Project-scoped
+  preference mining also reads bounded assistant questions; cross-project scans
+  skip that pass. `--user --since` filters individual turn timestamps; every
+  scope keeps the default 1,500-prompt processing cap and an absolute 5,000
+  prompt ceiling. Transcript traversal, individual files, total input bytes,
+  candidate count, caches, settings, playbooks, and append-only logs are also
+  bounded. Site-specific `ignorePatterns` accept only a capped, linear-looking
+  regex subset to avoid backtracking denial of service.
+- Suggestions must map to opaque IDs for exact local source candidates; redacted
+  text is never used as a provenance key. Artifact bodies, titles, triggers,
+  rule text, and hook commands are reconstructed locally, and `review` shows the
+  exact rendered artifact before approval. Observed pastes and sequences become
+  advisory guides/checklists, not permission to rerun commands or later steps.
+- Project writes reject symlinked ancestors and final targets. Caches and user
+  state use private modes and atomic writes. Hooks default to
+  `.claude/settings.local.json`.
+- Headless Claude/Codex classifier children run in fresh private directories,
+  receive prompt text over stdin, and do not inherit project instructions.
+  Tools, plugins, MCP/apps, browsing, hooks, project docs, rules, and session
+  persistence are disabled; Codex additionally runs with a read-only sandbox.
+- Autopilot is opt-in per project and sends a bounded recent user/assistant tail
+  plus the private personal playbook to the judge. Do not enable it for session
+  content you are unwilling to send to the configured model.
+- Continuity is opt-in per project. On resume/compact it returns the cached,
+  best-effort-redacted user intents to Claude as untrusted context; do not enable
+  it for transcript content you are unwilling to put back into model context.
+- No API key is stored by Gradient. `ANTHROPIC_API_KEY` is read from the process
+  environment by the official SDK.
+
+See [SECURITY.md](SECURITY.md) for supported versions and vulnerability reports.
+
+## Share with your team
+
+After reviewing and applying the workflows you want, package only those
+manifest-tracked artifacts as a dual Claude Code/Codex plugin:
+
+```bash
+npx gradient.md bundle team-kit              # skills, commands, and project rules
+claude --plugin-dir .gradient/bundle/team-kit
+```
+
+The bundle includes both `.claude-plugin/plugin.json` and a validated
+`.codex-plugin/plugin.json`, with shared portable skills. It copies no raw
+transcript or cache files, evidence counts, local
+suggestion IDs, hooks, or other personal telemetry. Artifact text can quote or
+derive from redacted prompts, so review every bundled file before sharing.
+Export additionally requires a private, exact-content approval recorded by the
+hardened generator; legacy, changed, unapproved, unmarked, and sensitive-looking
+artifacts are skipped. Secret detection is best effort, not a DLP guarantee.
+Rules include an explicit manual review/copy instruction because plugins do not
+auto-load project rules. Hook export is disabled pending a recipient-side
+consent design. The command prints a current-schema marketplace catalog you can
+add to a repository alongside the generated plugin directory.
 
 ## Develop
 
@@ -118,16 +347,55 @@ cd cli && npm install && npm test && npm run build
 
 ## Status
 
-v1 is the **offline analysis engine**: it mines transcripts and proposes
-slash-command / loop / hook artifacts you approve, with continuous mining
-keeping your `gradient.md` fresh. The autopilot loop — `gradient autopilot`, an
-opt-in `Stop`-hook auto-responder — has now shipped as well; see the
-"Autopilot (opt-in)" section above.
+Phase A of the v2 funnel makes both ends of mining more honest: continuation
+summaries, task notifications, configured injectors, and template floods are
+excluded from habit detection; approved command-type suggestions now become
+model-invoked Claude Code skills under `.claude/skills/` by default. Existing
+current-safe gradient-generated commands can be converted with `gradient
+migrate` (`--dry-run` previews the change). Pre-0.1.1 commands lack the private
+exact-content approval and are skipped; re-scan, review, and apply them first.
+Set `emitTarget` to `"command"` in the gradient config only when legacy
+`.claude/commands/` output is required. Phase B
+adds local recall hints and artifact adoption reporting, closing the gap between
+generating a workflow and actually using it. Phase C detects repeated pasted
+failures, exact recurring sequences, and repeated low-impact preferences across
+multiple sessions. It produces advisory troubleshooting/checklist skills and
+guarded project-preference rules without retaining pasted error bodies or
+inferring authorization from prior behavior.
+
+Phase D adds the LLM-free behavior report and the opt-in continuity pack:
+`gradient insights` turns local work signals into concrete next actions, while
+`gradient continuity on` preserves a redacted checkpoint across compaction and
+resumed sessions. Phase E closes the v2 funnel by packaging current-safe,
+exact-content-approved artifacts as validated team plugins, with hook export
+disabled and personal evidence stripped.
+
+The multi-assistant stage writes each approved skill for every configured
+target, tracks/removes each copy independently, mines both assistants into one
+shared evidence pool, and reports the approximate token cost of unautomated
+nudges, context re-explains, and repeated error pastes.
+
+Flagged-suggestion clarification and attention hooks complete the remaining
+Tier 2 review gaps: ambiguous intent is resolved offline during `review`, and
+repeated waiting-on-you gaps can become a narrowly matched desktop ping.
+
+The opt-in `gradient autopilot` Stop-hook responder also ships today. All five
+v2 phases are implemented.
 
 - Design spec: [`docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md`](docs/superpowers/specs/2026-06-29-gradient-analysis-engine-design.md)
 - Implementation plan: [`docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md`](docs/superpowers/plans/2026-06-29-gradient-analysis-engine.md)
 - Autopilot design spec: [`docs/superpowers/specs/2026-07-01-gradient-auto-responder-design.md`](docs/superpowers/specs/2026-07-01-gradient-auto-responder-design.md)
 - Autopilot implementation plan: [`docs/superpowers/plans/2026-07-01-gradient-auto-responder.md`](docs/superpowers/plans/2026-07-01-gradient-auto-responder.md)
+- v2 funnel design: [`docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md`](docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md)
+- Phase A implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-a-input-skills.md)
+- Phase B implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-b-recall-adoption.md)
+- Phase C implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-c-detectors.md)
+- Phase D implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-d-insights.md)
+- Phase E implementation plan: [`docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md`](docs/superpowers/plans/2026-07-06-gradient-v2-phase-e-bundle.md)
+- Codex and cost design: [`docs/superpowers/specs/2026-07-09-gradient-codex-and-cost-design.md`](docs/superpowers/specs/2026-07-09-gradient-codex-and-cost-design.md)
+- Codex Stage 2 and cost plan: [`docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md`](docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md)
+- Review clarification and attention design: [`docs/superpowers/specs/2026-07-09-gradient-review-clarify-design.md`](docs/superpowers/specs/2026-07-09-gradient-review-clarify-design.md)
+- Review clarification and attention plan: [`docs/superpowers/plans/2026-07-09-gradient-review-clarify.md`](docs/superpowers/plans/2026-07-09-gradient-review-clarify.md)
 
 ## License
 

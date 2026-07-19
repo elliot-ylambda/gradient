@@ -1,0 +1,23 @@
+import type { Suggestion } from "../types.js";
+import { redact, sanitizeName } from "../security.js";
+import { artifactMarker } from "../manifest.js";
+
+/** Emit standing instructions without ever mutating the user's global CLAUDE.md. */
+export function emitRule(s: Suggestion): { path: string; content: string } | { printed: string } {
+  if (s.payload.type !== "rule") throw new Error("emitRule needs a rule payload");
+  const text = redact(s.payload.text).slice(0, 2_000).trim();
+  if (s.payload.target === "user") {
+    return {
+      printed: `add to ~/.claude/CLAUDE.md (gradient never edits it):\n  ${text}`,
+    };
+  }
+
+  const name = sanitizeName(s.payload.ruleName);
+  const suggestionName = sanitizeName(s.name);
+  const title = redact(s.title).replace(/[\r\n]+/g, " ").trim().slice(0, 500);
+  const content =
+    `${artifactMarker(s)}\n` +
+    `<!-- remove with: gradient remove ${suggestionName} -->\n` +
+    `# ${title}\n\n${text}\n`;
+  return { path: `.claude/rules/gradient-${name}.md`, content };
+}

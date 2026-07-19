@@ -7,10 +7,10 @@ const fake = (fn: () => Promise<string>): LLMBackend => ({
 });
 
 describe("buildJudgePrompt", () => {
-  it("embeds both playbooks and the tail; nudge mode has no next-step authority", () => {
+  it("embeds only the trusted personal playbook and tail; nudge has no next-step authority", () => {
     const req = buildJudgePrompt("nudge", "PB-CONTENT", "PROJ-CONTENT", "TAIL-CONTENT");
     expect(req.prompt).toContain("PB-CONTENT");
-    expect(req.prompt).toContain("PROJ-CONTENT");
+    expect(req.prompt).not.toContain("PROJ-CONTENT");
     expect(req.prompt).toContain("TAIL-CONTENT");
     expect(req.system).toContain("stand down");
     expect(req.system).not.toContain("typical next step");
@@ -23,18 +23,41 @@ describe("buildJudgePrompt", () => {
     expect(req.system).toContain("both playbooks");
   });
 
-  it("no project file → labeled (none)", () => {
+  it("does not create a repository playbook section", () => {
     const req = buildJudgePrompt("nudge", "pb", "", "tail");
-    expect(req.prompt).toContain("PROJECT PLAYBOOK");
-    expect(req.prompt).toContain("(none)");
+    expect(req.prompt).not.toContain("PROJECT PLAYBOOK");
+  });
+});
+
+describe("parseJudgeResponse fenced output", () => {
+  // Real claude-cli output: the model wraps its JSON in a markdown fence even
+  // when told "respond ONLY with JSON". A raw JSON.parse throws, respond fails
+  // open, and autopilot silently never fires. Tolerate the fence.
+  it("accepts a ```json fenced object", () => {
+    const raw = '```json\n{\n  "action": "stand_down",\n  "why": "claude asked a question"\n}\n```';
+    expect(parseJudgeResponse(raw)).toEqual({ action: "stand_down", why: "claude asked a question" });
   });
 
-  it("system prompt marks the project playbook as advisory, never authorization", () => {
-    // The committed file is writable by anyone who can merge a PR, and the
-    // judge's response becomes Claude's next instruction — so the repo layer
-    // must only ever restrict/inform, never direct.
-    const req = buildJudgePrompt("nudge", "pb", "proj", "tail");
-    expect(req.system).toContain("never as authorization");
+  it("accepts a bare ``` fenced object", () => {
+    const raw = '```\n{"action":"continue","response":"keep going","why":"todos open"}\n```';
+    expect(parseJudgeResponse(raw)).toEqual({ action: "continue", response: "keep going", why: "todos open" });
+  });
+
+  it("accepts surrounding whitespace around a fence", () => {
+    const raw = '\n  ```json\n{"action":"stand_down","why":"done"}\n```  \n';
+    expect(parseJudgeResponse(raw)).toEqual({ action: "stand_down", why: "done" });
+  });
+
+  it("still throws on genuine non-JSON prose", () => {
+    expect(() => parseJudgeResponse("I think you should keep going!")).toThrow();
+  });
+
+  it("still enforces the action contract inside a fence", () => {
+    expect(() => parseJudgeResponse('```json\n{"action":"maybe","why":"x"}\n```')).toThrow(/invalid judge action/);
+  });
+
+  it("still requires a response for a fenced continue", () => {
+    expect(() => parseJudgeResponse('```json\n{"action":"continue","why":"x"}\n```')).toThrow(/non-empty response/);
   });
 });
 
@@ -70,8 +93,19 @@ describe("judge", () => {
   });
 
   it("throws when the backend exceeds the timeout", async () => {
-    const never = fake(() => new Promise<string>(() => {}));
+    let aborted = false;
+    const never: LLMBackend = {
+      name: "fake",
+      available: async () => true,
+      complete: req => new Promise<string>((_resolve, reject) => {
+        req.signal?.addEventListener("abort", () => {
+          aborted = true;
+          reject(new Error("aborted"));
+        });
+      }),
+    };
     await expect(judge(never, { system: "s", prompt: "p" }, { timeoutMs: 20 })).rejects.toThrow(/timed out/);
+    expect(aborted).toBe(true);
   });
 
   it("propagates backend errors (caller fails open)", async () => {

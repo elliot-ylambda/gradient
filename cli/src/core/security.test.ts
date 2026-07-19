@@ -33,4 +33,32 @@ describe("redact", () => {
     expect(redact("ghp_" + "a".repeat(36))).toContain("[REDACTED]");
     expect(redact("api_key=hunter2value")).toContain("[REDACTED]");
   });
+  it("masks common cloud, package, bearer, JWT, database, and private-key credentials", () => {
+    const samples = [
+      `AWS_ACCESS_KEY_ID=${"AKIA" + "A".repeat(16)}`,
+      `npm_${"a".repeat(36)}`,
+      `xoxb-${"a".repeat(24)}`,
+      `github_pat_${"A1".repeat(20)}`,
+      `sk_live_${"a1".repeat(12)}`,
+      `Authorization: Bearer ${"a".repeat(32)}`,
+      `eyJ${"a".repeat(12)}.${"b".repeat(12)}.${"c".repeat(12)}`,
+      "postgres://user:password@example.com/db",
+      "-----BEGIN PRIVATE KEY-----\nsecret material\n-----END PRIVATE KEY-----",
+    ];
+    for (const sample of samples) {
+      expect(redact(sample)).toContain("[REDACTED]");
+      expect(redact(sample)).not.toContain("secret material");
+    }
+  });
+  it("masks Unix and Windows home-directory usernames", () => {
+    expect(redact("/Users/alice/project C:\\Users\\bob\\project")).not.toContain("alice");
+    expect(redact("/Users/alice/project C:\\Users\\bob\\project")).not.toContain("bob");
+  });
+  it("masks home paths case-insensitively — mining lowercases signatures", () => {
+    expect(redact("/users/alice/.claude/image-cache/a/1.png")).not.toContain("alice");
+    expect(redact("c:\\users\\bob\\project")).not.toContain("bob");
+  });
+  it("strips terminal control sequences from untrusted text", () => {
+    expect(redact("safe\u001b]52;c;payload\u0007text")).not.toContain("\u001b");
+  });
 });

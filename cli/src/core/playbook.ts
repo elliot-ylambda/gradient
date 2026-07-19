@@ -1,10 +1,14 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import type { Suggestion, AutopilotMode } from "./types.js";
+import { safeReadFile, safeWriteFile } from "./safeFs.js";
+import type { ChainFinding } from "./sequence.js";
+import { redact } from "./security.js";
 
 export const MINED_START = "<!-- gradient:mined:start -->";
 export const MINED_END = "<!-- gradient:mined:end -->";
+export const PLAYBOOK_MAX_CHAINS = 5;
+const PLAYBOOK_FILE_MAX_BYTES = 256_000;
 
 export const DEFAULT_PLAYBOOK = `# gradient.md — autopilot playbook
 
@@ -31,16 +35,34 @@ export function isNudge(s: Suggestion): boolean {
   return s.payload.type === "loop" && !s.payload.cadence;
 }
 
-export function renderMinedSection(suggestions: Suggestion[]): string {
+function chainLine(ch: ChainFinding): string {
+  const [first, second, third] = ch.steps.map(safePlaybookText);
+  const tail = third ? ` then "${third}"` : "";
+  return `- After "${first}", you usually follow with "${second}"${tail} (${ch.count}× · ${ch.sessions} sessions)`;
+}
+
+function safePlaybookText(value: string): string {
+  return redact(value)
+    .replaceAll(MINED_START, "[marker removed]")
+    .replaceAll(MINED_END, "[marker removed]")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/"/g, "'")
+    .trim()
+    .slice(0, 300);
+}
+
+export function renderMinedSection(suggestions: Suggestion[], chains: ChainFinding[] = []): string {
   const nudgeLines = suggestions
     .filter(isNudge)
     .map(s => (s.payload.type === "loop"
-      ? `- "${s.payload.instruction}" (seen ${s.evidence.count}× · ${s.evidence.sessions} sessions)`
+      ? `- "${safePlaybookText(s.payload.instruction)}" (seen ${s.evidence.count}× · ${s.evidence.sessions} sessions)`
       : ""))
     .filter(Boolean);
   const cmdLines = suggestions
     .filter(s => s.payload.type === "command")
-    .map(s => `- /${s.name} — ${s.title}`);
+    .map(s => `- /${safePlaybookText(s.name)} — ${safePlaybookText(s.title)}`);
+  const chainLines = chains.slice(0, PLAYBOOK_MAX_CHAINS).map(chainLine);
+  const workflowLines = [...cmdLines, ...chainLines];
   return [
     "## How I nudge (mined)",
     "",
@@ -48,44 +70,45 @@ export function renderMinedSection(suggestions: Suggestion[]): string {
     "",
     "## My workflows (mined)",
     "",
-    ...(cmdLines.length ? cmdLines : ["_no workflow commands mined yet_"]),
+    ...(workflowLines.length ? workflowLines : ["_no workflow commands mined yet_"]),
   ].join("\n");
 }
 
 /** Splice the mined section into `existing` (or the default template). Returns
  * null when the markers are gone — the user owns the file, leave it alone. */
-export function generatePlaybook(suggestions: Suggestion[], existing?: string): string | null {
+export function generatePlaybook(suggestions: Suggestion[], existing?: string, chains: ChainFinding[] = []): string | null {
   const base = existing ?? DEFAULT_PLAYBOOK;
   const start = base.indexOf(MINED_START);
   const end = base.indexOf(MINED_END);
   if (start === -1 || end === -1 || end < start) return null;
   return (
     base.slice(0, start + MINED_START.length) +
-    "\n" + renderMinedSection(suggestions) + "\n" +
+    "\n" + renderMinedSection(suggestions, chains) + "\n" +
     base.slice(end)
   );
 }
 
-export async function writePlaybook(suggestions: Suggestion[], home?: string): Promise<string | null> {
+export async function writePlaybook(suggestions: Suggestion[], home?: string, chains: ChainFinding[] = []): Promise<string | null> {
+  const userHome = home ?? homedir();
   const path = playbookPath(home);
   let existing: string | undefined;
   try {
-    existing = await readFile(path, "utf8");
+    existing = await safeReadFile(userHome, path, { maxBytes: PLAYBOOK_FILE_MAX_BYTES });
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") return null; // unreadable — leave it alone
     existing = undefined; // ENOENT → first run
   }
-  const next = generatePlaybook(suggestions, existing);
+  const next = generatePlaybook(suggestions, existing, chains);
   if (next === null) return null;
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, next);
+  await safeWriteFile(userHome, path, next);
   return path;
 }
 
 /** The judge's playbook. Built-in defaults when no file exists — autopilot works before the first scan. */
 export async function loadPlaybook(home?: string): Promise<string> {
+  const userHome = home ?? homedir();
   try {
-    return await readFile(playbookPath(home), "utf8");
+    return await safeReadFile(userHome, playbookPath(userHome), { maxBytes: PLAYBOOK_FILE_MAX_BYTES });
   } catch {
     return DEFAULT_PLAYBOOK;
   }
@@ -115,15 +138,24 @@ export function projectPlaybookPath(cwd: string): string {
 
 const isMode = (v: string): v is AutopilotMode => v === "off" || v === "nudge" || v === "full";
 
+/** Strip a YAML trailing comment — a `#` at the value's start or preceded by
+ * whitespace. `nudge # ceiling` → `nudge`; `5#3` keeps the `#` and so still
+ * fails closed, as does bare trailing text like `nudge extra`. */
+function stripComment(v: string): string {
+  const m = v.match(/(?:^|\s)#/);
+  return (m === null ? v : v.slice(0, m.index)).trim();
+}
+
 /**
  * Lenient line scanner for the optional frontmatter clamp block. Recognizes
  * `max-mode:` and `budget:` lines anywhere inside the block (the `autopilot:`
  * grouping line is decorative); unknown keys ignored. No frontmatter → all
  * prose, empty clamps. Unclosed block, or a recognized key whose value is
  * anything but a clean valid token → { malformed: true } (caller clamps that
- * repo to off). Key-first, then validate: a recognized key with a bad or
- * decorated value must fail closed, never be silently ignored. Key matching
- * tolerates surrounding whitespace and is case-insensitive.
+ * repo to off). Key-first, then validate: a recognized key with a bad value
+ * must fail closed, never be silently ignored. A trailing `#` comment is
+ * descriptive and stripped before validation (YAML); bare trailing text is
+ * not. Key matching tolerates surrounding whitespace and is case-insensitive.
  */
 export function parseProjectPlaybook(raw: string): ProjectPlaybook {
   const lines = raw.split(/\r?\n/);
@@ -139,14 +171,14 @@ export function parseProjectPlaybook(raw: string): ProjectPlaybook {
   for (let i = 1; i < end; i++) {
     const modeM = lines[i].match(/^\s*max-mode\s*:(.*)$/i);
     if (modeM) {
-      const v = modeM[1].trim();
+      const v = stripComment(modeM[1]);
       if (!isMode(v)) return malformed();
       clamps.maxMode = v;
       continue;
     }
     const budgetM = lines[i].match(/^\s*budget\s*:(.*)$/i);
     if (budgetM) {
-      const v = budgetM[1].trim();
+      const v = stripComment(budgetM[1]);
       const n = Number(v);
       if (v === "" || !Number.isInteger(n) || n < 0) return malformed();
       clamps.budget = n;
@@ -164,7 +196,11 @@ function bodyAfter(lines: string[], end: number): string {
  * (a present-but-unreadable gradient.md must not grant authority). */
 export async function loadProjectPlaybook(cwd: string): Promise<ProjectPlaybook | null> {
   try {
-    return parseProjectPlaybook(await readFile(projectPlaybookPath(cwd), "utf8"));
+    return parseProjectPlaybook(await safeReadFile(
+      cwd,
+      projectPlaybookPath(cwd),
+      { maxBytes: PLAYBOOK_FILE_MAX_BYTES },
+    ));
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
     if (err.code === "ENOENT") return null; // no file → no clamp, no prose

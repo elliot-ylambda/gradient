@@ -10,7 +10,7 @@ const tmpHome = () => mkdtemp(join(tmpdir(), "grad-home-"));
 describe("session state", () => {
   it("returns fresh state for a missing file", async () => {
     const home = await tmpHome();
-    expect(await loadState("s1", home)).toEqual({ count: 0, lastFingerprint: "", stoodDown: false, log: [] });
+    expect(await loadState("s1", home)).toEqual({ count: 0, attempts: 0, lastFingerprint: "", stoodDown: false, log: [] });
   });
 
   it("returns fresh state for a corrupt file (bounded worst case: budget restarts)", async () => {
@@ -24,6 +24,7 @@ describe("session state", () => {
     const home = await tmpHome();
     const s: SessionState = {
       count: 3,
+      attempts: 4,
       lastFingerprint: "tools:7",
       stoodDown: false,
       log: Array.from({ length: 25 }, (_, i) => ({ ts: `t${i}`, action: "continue" as const, why: "w", excerpt: "e" })),
@@ -41,6 +42,15 @@ describe("session state", () => {
     const files = await readdir(stateDir(home));
     expect(files).toHaveLength(1);
     expect(files[0]).not.toContain("..");
+  });
+
+  it("bounds very long session ids and rejects invalid numeric state", async () => {
+    const home = await tmpHome();
+    await saveState("x".repeat(10_000), freshState(), home);
+    expect((await readdir(stateDir(home)))[0].length).toBeLessThan(120);
+    await mkdir(stateDir(home), { recursive: true });
+    await writeFile(join(stateDir(home), "bad.json"), '{"count":1e999,"attempts":0,"lastFingerprint":"","stoodDown":false,"log":[]}');
+    expect(await loadState("bad", home)).toEqual(freshState());
   });
 
   it("cleanupStale removes only files older than 7 days", async () => {

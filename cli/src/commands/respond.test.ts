@@ -7,6 +7,7 @@ import { respond, type RespondDeps, type StopHookInput } from "./respond.js";
 import { loadState, saveState, freshState } from "../core/state.js";
 import type { LLMBackend } from "../llm/backend.js";
 import type { Config } from "../core/types.js";
+import { projectKey } from "../config.js";
 
 const tmpHome = () => mkdtemp(join(tmpdir(), "grad-home-"));
 
@@ -27,10 +28,14 @@ const transcript = (tools: number): string[] => [
 ];
 
 const input: StopHookInput = { session_id: "sess1", transcript_path: "t.jsonl", cwd: "/nonexistent-repo" };
+const consent = (cwd: string, mode: "nudge" | "full" | "off" = "nudge", extra: Partial<Config> = {}): Config => ({
+  ...extra,
+  autopilotProjects: { [projectKey(cwd)]: mode },
+});
 
 async function run(over: Partial<RespondDeps> & { home: string; tools?: number }) {
   const deps: RespondDeps = {
-    config: { autopilot: "nudge" } as Config,
+    config: consent(input.cwd!),
     backend: fakeBackend(CONTINUE),
     readLines: async () => transcript(over.tools ?? 3),
     env: {},
@@ -51,25 +56,25 @@ describe("respond gates (all fail-open)", () => {
   it("gate 2: mode off or absent → allow", async () => {
     const home = await tmpHome();
     expect((await run({ home, config: {} as Config })).decision).toBe("allow");
-    expect((await run({ home, config: { autopilot: "off" } as Config })).decision).toBe("allow");
+    expect((await run({ home, config: consent(input.cwd!, "off") })).decision).toBe("allow");
   });
 
   it("missing session_id or transcript_path → allow", async () => {
     const home = await tmpHome();
-    const r = await respond({}, { home, config: { autopilot: "nudge" } as Config, env: {} });
+    const r = await respond({}, { home, config: consent(input.cwd!), env: {} });
     expect(r.decision).toBe("allow");
   });
 
   it("missing cwd → allow (clamp can't be checked, so no action)", async () => {
     const home = await tmpHome();
     const r = await respond({ session_id: "s", transcript_path: "t" },
-      { home, config: { autopilot: "nudge" } as Config, backend: fakeBackend(CONTINUE), readLines: async () => transcript(3), env: {} });
+      { home, config: consent(input.cwd!), backend: fakeBackend(CONTINUE), readLines: async () => transcript(3), env: {} });
     expect(r.decision).toBe("allow");
   });
 
   it("gate 3: budget exhausted → allow without calling the judge", async () => {
     const home = await tmpHome();
-    await saveState("sess1", { ...freshState(), count: 10 }, home);
+    await saveState("sess1", { ...freshState(), attempts: 10 }, home);
     let called = false;
     const backend: LLMBackend = { name: "f", available: async () => true, complete: async () => { called = true; return CONTINUE; } };
     const r = await run({ home, backend });
@@ -95,12 +100,13 @@ describe("respond gates (all fail-open)", () => {
 });
 
 describe("respond judge outcomes", () => {
-  it("continue → block with the judge's response, state updated & logged", async () => {
+  it("continue → block with a fixed trusted nudge, state updated & logged", async () => {
     const home = await tmpHome();
     const r = await run({ home });
-    expect(r).toEqual({ decision: "block", reason: "continue until actually done" });
+    expect(r).toEqual({ decision: "block", reason: "Continue." });
     const s = await loadState("sess1", home);
     expect(s.count).toBe(1);
+    expect(s.attempts).toBe(1);
     expect(s.lastFingerprint).toBe("tools:3");
     expect(s.log[0]).toMatchObject({ action: "continue", why: "open todos", ts: "2026-07-01T00:00:00Z" });
   });
@@ -111,6 +117,7 @@ describe("respond judge outcomes", () => {
     expect(r.decision).toBe("allow");
     const s = await loadState("sess1", home);
     expect(s.count).toBe(0);
+    expect(s.attempts).toBe(1);
     expect(s.log[0].action).toBe("stand_down");
   });
 
@@ -120,6 +127,7 @@ describe("respond judge outcomes", () => {
   ])("%s → allow (fail-open)", async (_n, backend) => {
     const home = await tmpHome();
     expect((await run({ home, backend })).decision).toBe("allow");
+    expect((await loadState("sess1", home)).attempts).toBe(1);
   });
 
   it("no backend available → allow", async () => {
@@ -161,7 +169,7 @@ describe("respond project clamp", () => {
     let called = false;
     const backend: LLMBackend = { name: "f", available: async () => true, complete: async () => { called = true; return CONTINUE; } };
     const r = await respond({ session_id: "s", transcript_path: "t", cwd },
-      { home, config: { autopilot: "full" } as Config, backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
+      { home, config: consent(cwd), backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
     expect(r.decision).toBe("allow");
     expect(called).toBe(false);
   });
@@ -172,7 +180,7 @@ describe("respond project clamp", () => {
     let called = false;
     const backend: LLMBackend = { name: "f", available: async () => true, complete: async () => { called = true; return CONTINUE; } };
     const r = await respond({ session_id: "s", transcript_path: "t", cwd },
-      { home, config: { autopilot: "full" } as Config, backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
+      { home, config: consent(cwd), backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
     expect(r.decision).toBe("allow");
     expect(called).toBe(false);
   });
@@ -183,38 +191,39 @@ describe("respond project clamp", () => {
     let called = false;
     const backend: LLMBackend = { name: "f", available: async () => true, complete: async () => { called = true; return CONTINUE; } };
     const r = await respond({ session_id: "s", transcript_path: "t", cwd },
-      { home, config: { autopilot: "nudge", autopilotBudget: 10 } as Config, backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
+      { home, config: consent(cwd, "nudge", { autopilotBudget: 10 }), backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
     expect(r.decision).toBe("allow");
     expect(called).toBe(false);
   });
 
-  it("project prose reaches the judge prompt", async () => {
+  it("repository prose never reaches the judge prompt or emitted nudge", async () => {
     const home = await tmpHome();
     const cwd = await repoWith("---\nautopilot:\n  max-mode: full\n---\n## Rules\n- SENTINEL-PROSE\n");
     let seenPrompt = "";
     const backend: LLMBackend = { name: "f", available: async () => true, complete: async (req) => { seenPrompt = req.prompt; return CONTINUE; } };
     const r = await respond({ session_id: "s", transcript_path: "t", cwd },
-      { home, config: { autopilot: "full" } as Config, backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
+      { home, config: consent(cwd), backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
     expect(r.decision).toBe("block");
-    expect(seenPrompt).toContain("SENTINEL-PROSE");
+    expect(seenPrompt).not.toContain("SENTINEL-PROSE");
+    expect(r).toEqual({ decision: "block", reason: "Continue." });
   });
 
-  it("clamp that lowers but doesn't disable: config full + project nudge → judge sees nudge-mode system prompt", async () => {
+  it("legacy full consent fails closed without calling the judge", async () => {
     const home = await tmpHome();
     const cwd = await repoWith("---\nautopilot:\n  max-mode: nudge\n---\n");
-    let seenSystem = "";
-    const backend: LLMBackend = { name: "f", available: async () => true, complete: async (req) => { seenSystem = req.system; return CONTINUE; } };
+    let called = false;
+    const backend: LLMBackend = { name: "f", available: async () => true, complete: async () => { called = true; return CONTINUE; } };
     const r = await respond({ session_id: "s", transcript_path: "t", cwd },
-      { home, config: { autopilot: "full" } as Config, backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
-    expect(r.decision).toBe("block");           // still continues (nudge authority)
-    expect(seenSystem).not.toContain("typical next step"); // but without full-mode next-step authority
+      { home, config: consent(cwd, "full"), backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
+    expect(r.decision).toBe("allow");
+    expect(called).toBe(false);
   });
 
   it("no project file → behaves exactly as before (nudge continues)", async () => {
     const home = await tmpHome();
     const cwd = await mkdtemp(join(tmpdir(), "grad-empty-"));
     const r = await respond({ session_id: "s", transcript_path: "t", cwd },
-      { home, config: { autopilot: "nudge" } as Config, backend: fakeBackend(CONTINUE), readLines: async () => transcript(3), env: {}, now: () => "T" });
+      { home, config: consent(cwd), backend: fakeBackend(CONTINUE), readLines: async () => transcript(3), env: {}, now: () => "T" });
     expect(r.decision).toBe("block");
   });
 });

@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { open } from "node:fs/promises";
+import { constants } from "node:fs";
 
 // The autopilot judge's view of a session: a compact, capped rendering of the
 // transcript's last turns, plus a tool-activity fingerprint for the progress
@@ -7,6 +8,7 @@ import { readFile } from "node:fs/promises";
 
 export const TAIL_MAX_TURNS = 30;
 export const TAIL_MAX_CHARS = 8000;
+export const TAIL_READ_MAX_BYTES = 1_000_000;
 
 interface RawBlock { type?: string; text?: string; name?: string }
 interface RawLine {
@@ -80,5 +82,19 @@ export function fingerprint(lines: string[]): string {
 }
 
 export async function readTranscriptLines(path: string): Promise<string[]> {
-  return (await readFile(path, "utf8")).split(/\r?\n/);
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile()) throw new Error("refusing non-regular transcript");
+    const size = metadata.size;
+    const start = Math.max(0, size - TAIL_READ_MAX_BYTES);
+    const length = size - start;
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, start);
+    let text = buffer.toString("utf8");
+    if (start > 0) text = text.slice(Math.max(0, text.indexOf("\n") + 1));
+    return text.split(/\r?\n/);
+  } finally {
+    await handle.close();
+  }
 }

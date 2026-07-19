@@ -17,12 +17,15 @@ export class AnthropicBackend implements LLMBackend {
 
   async complete(req: LLMRequest): Promise<string> {
     const client = new Anthropic({ apiKey: this.apiKey });
-    const resp = await client.messages.create({
-      model: this.model,
-      max_tokens: 4096,
-      system: req.system,
-      messages: [{ role: "user", content: req.prompt }],
-    });
+    const resp = await client.messages.create(
+      {
+        model: this.model,
+        max_tokens: 4096,
+        system: req.system,
+        messages: [{ role: "user", content: req.prompt }],
+      },
+      { signal: req.signal },
+    );
     return resp.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")
       .map(b => b.text)

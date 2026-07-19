@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vibe Security Check"
+  short_description: "Audit common vibe-coded app security footguns"
+  default_prompt: "Use $vibe-security-check to audit this app for common security footguns."

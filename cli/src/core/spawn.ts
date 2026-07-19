@@ -1,18 +1,14 @@
 import { spawn as realSpawn } from "node:child_process";
-import { openSync, mkdirSync } from "node:fs";
+import { closeSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { gradientDir } from "./manifest.js";
+import { safeOpenWriteSync } from "./safeFs.js";
 
 type SpawnFn = typeof realSpawn;
 
 export interface SpawnDeps {
   spawn?: SpawnFn;
   openLog?: (path: string) => number;
-}
-
-function defaultOpenLog(path: string): number {
-  mkdirSync(join(path, ".."), { recursive: true });
-  return openSync(path, "a");
 }
 
 /**
@@ -23,10 +19,17 @@ function defaultOpenLog(path: string): number {
 export function spawnDetached(args: string[], projectDir: string, deps: SpawnDeps = {}): void {
   const spawn = deps.spawn ?? realSpawn;
   const logPath = join(gradientDir(projectDir), "last-scan.log");
-  const fd = (deps.openLog ?? defaultOpenLog)(logPath);
-  const child = spawn(process.execPath, [process.argv[1], ...args], {
-    detached: true,
-    stdio: ["ignore", fd, fd],
-  });
-  child.unref();
+  const fd = deps.openLog ? deps.openLog(logPath) : safeOpenWriteSync(projectDir, logPath);
+  try {
+    const entrypoint = realpathSync(process.argv[1]);
+    const child = spawn(process.execPath, [entrypoint, ...args], {
+      detached: true,
+      stdio: ["ignore", fd, fd],
+    });
+    child.unref();
+  } finally {
+    // spawn duplicates the descriptor into the child. Keep no parent-side log
+    // descriptor open; injected test descriptors remain owned by the caller.
+    if (!deps.openLog) closeSync(fd);
+  }
 }

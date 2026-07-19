@@ -1,6 +1,5 @@
-import { tmpdir } from "node:os";
 import type { Config } from "../core/types.js";
-import { loadConfig, DEFAULT_AUTOPILOT_BUDGET, DEFAULT_AUTOPILOT_MODEL } from "../config.js";
+import { boundedAutopilotBudget, loadConfig, DEFAULT_AUTOPILOT_MODEL, projectKey } from "../config.js";
 import { loadState, saveState, cleanupStale } from "../core/state.js";
 import { renderTail, fingerprint, readTranscriptLines } from "../core/tail.js";
 import { loadPlaybook, loadProjectPlaybook, clampMode } from "../core/playbook.js";
@@ -19,7 +18,8 @@ export interface StopHookInput {
   stop_hook_active?: boolean; // intentionally unused as a gate (spec §1): budget + progress are the loop protection
 }
 
-const PROJECT_PROSE_CAP = 4096; // spec §4: project prose redacted then truncated
+const PLAYBOOK_CAP = 4096;
+export const SAFE_NUDGE = "Continue.";
 
 export interface RespondResult {
   decision: "allow" | "block";
@@ -46,8 +46,8 @@ async function autopilotBackend(config: Config): Promise<LLMBackend | null> {
   return selectBackend({
     config,
     candidates: [
-      // Neutral cwd + guard env: the headless child must never re-enter this hook.
-      new ClaudeCliBackend({ model, spawnCwd: tmpdir(), extraEnv: { GRADIENT_AUTOPILOT_CHILD: "1" } }),
+      // Private cwd + guard env: the headless child must never re-enter this hook.
+      new ClaudeCliBackend({ model, extraEnv: { GRADIENT_AUTOPILOT_CHILD: "1" } }),
       new AnthropicBackend({ model: ANTHROPIC_MODEL_ALIASES[model] ?? model }),
     ],
   });
@@ -67,8 +67,10 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
 
     // Gate 2: mode.
     const config = deps.config ?? (await loadConfig(deps.home));
-    const mode = config.autopilot;
-    if (mode !== "nudge" && mode !== "full") return allow;
+    const mode = input.cwd ? config.autopilotProjects?.[projectKey(input.cwd)] : undefined;
+    // "full" from legacy/tampered config fails closed. Only per-project nudge
+    // consent is supported in the hardened release.
+    if (mode !== "nudge") return allow;
     // cwd joins the required hook fields: without it the project clamp can't
     // be checked, and "can't check the clamp" must mean "no action" — never
     // "act unclamped".
@@ -77,8 +79,7 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
     // Gate 2b: project clamp (spec §4). A committed gradient.md may only
     // restrict authority. Malformed frontmatter clamps this repo to off.
     let effectiveMode: "nudge" | "full" = mode;
-    let effectiveBudget = config.autopilotBudget ?? DEFAULT_AUTOPILOT_BUDGET;
-    let projectProse = "";
+    let effectiveBudget = boundedAutopilotBudget(config.autopilotBudget);
     const project = await loadProjectPlaybook(input.cwd);
     if (project) {
       if (project.clamps.malformed) return allow; // fail closed: off
@@ -90,14 +91,13 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
       if (project.clamps.budget !== undefined) {
         effectiveBudget = Math.min(effectiveBudget, project.clamps.budget);
       }
-      projectProse = project.prose;
     }
 
     void cleanupStale(deps.home).catch(() => {}); // opportunistic, never awaited on the hot path
 
     // Gate 3: budget (effective).
     const state = await loadState(input.session_id, deps.home);
-    if (state.count >= effectiveBudget) return allow;
+    if (state.attempts >= effectiveBudget) return allow;
 
     // Gate 4: progress. Fingerprint is tool-activity only (see tail.ts).
     const lines = await (deps.readLines ?? readTranscriptLines)(input.transcript_path);
@@ -116,21 +116,24 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
     if (!backend) return allow;
 
     const tail = redact(renderTail(lines));
-    const playbook = await loadPlaybook(deps.home);
-    const projectPrompt = redact(projectProse).slice(0, PROJECT_PROSE_CAP);
+    const playbook = redact(await loadPlaybook(deps.home)).slice(0, PLAYBOOK_CAP);
+    // Persist the attempt and fingerprint before the paid call. Errors and
+    // stand-downs still consume budget and identical failed tails are not retried.
+    state.attempts += 1;
+    state.lastFingerprint = fp;
+    await saveState(input.session_id, state, deps.home);
     const decision = await judge(
       backend,
-      buildJudgePrompt(effectiveMode, playbook, projectPrompt, tail),
+      buildJudgePrompt(effectiveMode, playbook, "", tail),
       { timeoutMs: deps.timeoutMs },
     );
 
     const ts = (deps.now ?? (() => new Date().toISOString()))();
-    state.lastFingerprint = fp; // recorded on every decision: identical transcripts are never re-judged
     if (decision.action === "continue" && decision.response) {
       state.count += 1;
-      state.log.push({ ts, action: "continue", why: decision.why, excerpt: decision.response.slice(0, 120) });
+      state.log.push({ ts, action: "continue", why: decision.why, excerpt: SAFE_NUDGE });
       await saveState(input.session_id, state, deps.home);
-      return { decision: "block", reason: decision.response };
+      return { decision: "block", reason: SAFE_NUDGE };
     }
     state.log.push({ ts, action: "stand_down", why: decision.why, excerpt: "" });
     await saveState(input.session_id, state, deps.home);

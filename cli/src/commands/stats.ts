@@ -1,7 +1,17 @@
-import type { Confidence } from "../core/types.js";
+import type { ArtifactType, Confidence, Turn } from "../core/types.js";
 import { loadManifest } from "../core/manifest.js";
 import { loadSuggestions } from "./apply.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, resolveTargets } from "../config.js";
+import { collect } from "../core/collect.js";
+import { collectCodex } from "../core/collect-codex.js";
+import { parseFile } from "../core/parse.js";
+import { parseCodexFile } from "../core/parse-codex.js";
+import { countArtifactUses } from "../core/usage.js";
+import { adoptionPath } from "./recall.js";
+import { safeReadFile } from "../core/safeFs.js";
+import { homedir } from "node:os";
+
+const ADOPTION_LOG_MAX_BYTES = 5_000_000;
 
 export interface StatPattern {
   name: string;
@@ -17,10 +27,110 @@ export interface StatsReport {
   coveragePct: number;
   sessionScanEnabled: boolean;
   patterns: StatPattern[];
+  adoption: AdoptionRow[];
+  capped: boolean;
 }
 
-export async function stats(projectDir: string, opts: { home?: string } = {}): Promise<StatsReport> {
-  const suggestions = await loadSuggestions(projectDir);
+export interface AdoptionRow {
+  name: string;
+  type: ArtifactType;
+  createdAt: string;
+  uses: number;
+  lastUsed?: string;
+  retypesCaught: number;
+  suggestRemoval: boolean;
+}
+
+export const UNUSED_REMOVAL_DAYS = 30;
+const DAY_MS = 86_400_000;
+
+export interface StatsOptions {
+  home?: string;
+  now?: number;
+  collectFn?: typeof collect;
+  collectCodexFn?: typeof collectCodex;
+  parseFn?: typeof parseFile;
+  parseCodexFn?: typeof parseCodexFile;
+  onSkip?: (message: string) => void;
+  /** Test/embedding overrides can only lower the hard resource ceilings. */
+  maxFiles?: number;
+  maxTurns?: number;
+}
+
+export const STATS_MAX_FILES = 2_000;
+export const STATS_MAX_TURNS = 100_000;
+
+export async function adoptionFromTurns(
+  projectDir: string,
+  turns: Turn[],
+  opts: { home?: string; now?: number; manifest?: Awaited<ReturnType<typeof loadManifest>> } = {},
+): Promise<AdoptionRow[]> {
+  const manifest = opts.manifest ?? (await loadManifest(projectDir));
+  const logical = new Map<string, (typeof manifest)[number]>();
+  for (const entry of manifest) {
+    const prior = logical.get(entry.name);
+    if (!prior || entry.createdAt < prior.createdAt) logical.set(entry.name, entry);
+  }
+  const since = new Map([...logical.values()].map(entry => [entry.name, entry.createdAt]));
+  const uses = countArtifactUses(turns, since);
+  const retypes = await readRetypes(projectDir, since, opts.home);
+  const now = opts.now ?? Date.now();
+  return [...logical.values()].map(entry => {
+    const usage = uses.get(entry.name) ?? { uses: 0, lastUsed: undefined };
+    const retypesCaught = retypes.get(entry.name) ?? 0;
+    const age = now - Date.parse(entry.createdAt);
+    return {
+      name: entry.name,
+      type: entry.type,
+      createdAt: entry.createdAt,
+      uses: usage.uses,
+      lastUsed: usage.lastUsed,
+      retypesCaught,
+      suggestRemoval: (
+        usage.uses === 0 &&
+        retypesCaught === 0 &&
+        Number.isFinite(age) &&
+        age >= UNUSED_REMOVAL_DAYS * DAY_MS
+      ),
+    };
+  });
+}
+
+async function readRetypes(
+  projectDir: string,
+  since: Map<string, string>,
+  home?: string,
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  try {
+    const userHome = home ?? homedir();
+    const raw = await safeReadFile(
+      userHome,
+      adoptionPath(projectDir, userHome),
+      { maxBytes: ADOPTION_LOG_MAX_BYTES },
+    );
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const event = JSON.parse(line) as { ts?: unknown; artifact?: unknown; hinted?: unknown };
+        if (event.hinted !== true || typeof event.artifact !== "string" || !since.has(event.artifact)) continue;
+        if (typeof event.ts !== "string") continue;
+        const eventTime = Date.parse(event.ts);
+        const created = Date.parse(since.get(event.artifact)!);
+        if (!Number.isFinite(eventTime) || (Number.isFinite(created) && eventTime < created)) continue;
+        counts.set(event.artifact, (counts.get(event.artifact) ?? 0) + 1);
+      } catch {
+        // A malformed append-only line must not hide the remaining events.
+      }
+    }
+  } catch {
+    // No adoption log yet.
+  }
+  return counts;
+}
+
+export async function stats(projectDir: string, opts: StatsOptions = {}): Promise<StatsReport> {
+  const suggestions = await loadSuggestions(projectDir, opts);
   const manifest = await loadManifest(projectDir);
   const coveredIds = new Set(manifest.map(m => m.suggestionId));
   const config = await loadConfig(opts.home);
@@ -38,5 +148,48 @@ export async function stats(projectDir: string, opts: { home?: string } = {}): P
   const total = patterns.length;
   const covered = patterns.filter(p => p.covered).length;
   const coveragePct = total === 0 ? 0 : Math.round((covered / total) * 100);
-  return { total, covered, coveragePct, sessionScanEnabled: config.scanOnSessionStart === true, patterns };
+
+  const turns: Turn[] = [];
+  let capped = false;
+  if (manifest.length > 0) {
+    const targets = resolveTargets(config);
+    const collectFn = opts.collectFn ?? collect;
+    const collectCodexFn = opts.collectCodexFn ?? collectCodex;
+    const parseFn = opts.parseFn ?? parseFile;
+    const parseCodexFn = opts.parseCodexFn ?? parseCodexFile;
+    const collectOptions = { scope: "project" as const, projectPath: projectDir, home: opts.home };
+    const claudeFiles = targets.includes("claude-code") ? await collectFn(collectOptions) : [];
+    const codexFiles = targets.includes("codex") ? await collectCodexFn(collectOptions) : [];
+    const files: Array<{ path: string; assistant: "claude-code" | "codex" }> = [];
+    for (let index = 0; index < claudeFiles.length || index < codexFiles.length; index++) {
+      if (index < claudeFiles.length) files.push({ path: claudeFiles[index], assistant: "claude-code" });
+      if (index < codexFiles.length) files.push({ path: codexFiles[index], assistant: "codex" });
+    }
+    const maxFiles = Math.max(1, Math.min(opts.maxFiles ?? STATS_MAX_FILES, STATS_MAX_FILES));
+    const maxTurns = Math.max(1, Math.min(opts.maxTurns ?? STATS_MAX_TURNS, STATS_MAX_TURNS));
+    if (files.length > maxFiles) capped = true;
+    for (const file of files.slice(0, maxFiles)) {
+      if (turns.length >= maxTurns) { capped = true; break; }
+      const parsed = file.assistant === "codex" ? await parseCodexFn(file.path) : await parseFn(file.path);
+      const remaining = maxTurns - turns.length;
+      if (parsed.length > remaining) capped = true;
+      for (const turn of parsed.slice(0, remaining)) turns.push(turn);
+    }
+  }
+
+  const adoption = await adoptionFromTurns(projectDir, turns, {
+    home: opts.home,
+    now: opts.now,
+    manifest,
+  });
+
+  return {
+    total,
+    covered,
+    coveragePct,
+    sessionScanEnabled: config.scanOnSessionStart === true,
+    patterns,
+    adoption,
+    capped,
+  };
 }

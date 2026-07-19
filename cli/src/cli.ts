@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
+import { basename, relative } from "node:path";
 import { scan } from "./commands/scan.js";
-import { review, readlinePrompter, reviewJson } from "./commands/review.js";
+import { review, readlineClarifier, readlinePrompter, reviewJson } from "./commands/review.js";
 import { applyByIds } from "./commands/apply.js";
 import { list } from "./commands/list.js";
 import { remove } from "./commands/remove.js";
@@ -12,31 +13,52 @@ import { stats } from "./commands/stats.js";
 import { explain } from "./commands/explain.js";
 import { respond, type StopHookInput } from "./commands/respond.js";
 import { setAutopilotMode, autopilotStatus } from "./commands/autopilot.js";
+import { migrate } from "./commands/migrate.js";
+import { recallHook, recallStatus, setRecall, type RecallHookInput } from "./commands/recall.js";
 import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
 import { spawnDetached } from "./core/spawn.js";
 import { resolveScanScope } from "./core/scope.js";
 import { isNudge } from "./core/playbook.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, resolveCheapModel, resolveTargets } from "./config.js";
 import { VERSION } from "./version.js";
+import { insights, writeInsightsHtml } from "./commands/insights.js";
+import { continuityStatus, setContinuity } from "./commands/continuity.js";
+import { recap } from "./commands/recap.js";
+import { bundleCommand } from "./commands/bundle.js";
+import { notify } from "./commands/notify.js";
+import type { Assistant } from "./core/types.js";
+import { stripUnsafeControls } from "./core/security.js";
+import { readlineConfirm, type Confirm } from "./core/confirm.js";
 
-const HELP = `gradient — turn repeated Claude Code workflows into artifacts
+const HELP = `gradient — turn repeated Claude Code and Codex workflows into artifacts
 
 Usage:
-  gradient init                 configure + install the /gradient skill
+  gradient init [--target claude-code|codex|both]
+                                configure + install the skill, then offer a first scan
   gradient init --session-scan  also run a scan at the start of each session
-  gradient scan                 this project, all history
-  gradient scan --user          all projects, last 7 days (configurable)
-  gradient scan --all           all projects, no time limit
-    [--since 7d] [--limit N] [--max-prompts N]
+  gradient scan                 find prompts, advisory pastes/sequences, safe preferences
+  gradient scan --user          cross-project patterns, last 7 days (no preference rules)
+  gradient scan --all           cross-project patterns, no time limit (no preference rules)
+    [--since 7d] [--limit N] [--max-prompts N] [--no-review]
   gradient review [--json]      approve cached suggestions (--json: print them, no prompts)
   gradient apply <id|name>...   generate specific suggestions
   gradient explain <id|name>    show the evidence behind a suggestion
+  gradient notify               (hook target) desktop ping when Claude needs input
   gradient list                 show generated artifacts
   gradient remove <name>        delete a generated artifact
-  gradient stats                show your most-repeated patterns + coverage
-  gradient autopilot <off|nudge|full>
+  gradient migrate [--dry-run]  convert generated commands to skills
+  gradient recall <on|off|status>
+                                hint when a prompt matches an artifact
+  gradient stats                show pattern coverage + artifact adoption
+  gradient insights [--user] [--html]
+                                behavior report + what to automate next
+  gradient continuity <on|off|status>
+                                checkpoint before compaction, recap on resume
+  gradient bundle <name>
+                                package approved artifacts as a plugin
+  gradient autopilot <off|nudge>
                                 auto-respond when Claude stops (opt-in)
-  gradient autopilot status     mode, budget, and recent auto-responses
+  gradient autopilot status     mode, budget, and recent decisions
 `;
 
 export function parseCliArgs(argv: string[]): {
@@ -56,8 +78,14 @@ export function parseCliArgs(argv: string[]): {
       "max-prompts": { type: "string" },
       "no-skill": { type: "boolean" },
       "session-scan": { type: "boolean" },
+      "no-review": { type: "boolean" },
+      "no-scan": { type: "boolean" },
       detach: { type: "boolean" },
       json: { type: "boolean" },
+      "dry-run": { type: "boolean" },
+      html: { type: "boolean" },
+      "with-hooks": { type: "boolean" },
+      target: { type: "string" },
     },
   });
   return { command, positionals, flags: values as Record<string, string | boolean> };
@@ -69,29 +97,175 @@ function sinceDays(flag: string | boolean | undefined): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
+/** Quote one argument for POSIX shells. JSON/double-quote escaping is not shell
+ * escaping: command substitutions remain active inside double quotes. */
+export function posixShellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function terminalSafePath(value: string): string | undefined {
+  return /[\u0000-\u001f\u007f-\u009f]/.test(value) ? undefined : value;
+}
+
+function terminalSafeLine(value: unknown): string {
+  return stripUnsafeControls(String(value)).replace(/[\r\n\t]+/g, " ");
+}
+
+function initTargets(flag: string | boolean | undefined): Assistant[] | undefined {
+  if (flag === undefined) return undefined;
+  if (flag === "claude-code") return ["claude-code"];
+  if (flag === "codex") return ["codex"];
+  if (flag === "both") return ["claude-code", "codex"];
+  throw new Error(`unknown init target: ${String(flag)} (use claude-code|codex|both)`);
+}
+
+type LogFn = (s: string) => void;
+
+async function runReview(
+  projectDir: string,
+  home: string | undefined,
+  log: LogFn,
+  confirm: Confirm,
+): Promise<void> {
+  const config = await loadConfig(home);
+  const applied = await review(projectDir, readlinePrompter({
+    targets: resolveTargets(config),
+    cheapModel: resolveCheapModel(config),
+  }), { home, onSkip: log, clarifier: readlineClarifier() });
+  log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
+  for (const a of applied) {
+    for (const write of a.writes) {
+      log(`${c.ok("wrote")} ${c.muted(terminalSafeLine(write.path))}${write.target === "codex" ? c.dim(" [codex]") : ""}`);
+    }
+    if (a.printed) log(`  ${c.dim("run:")} ${a.printed}`);
+    for (const failure of a.failures) log(c.coral(`  ${failure.target}: ${terminalSafeLine(failure.error)}`));
+    for (const target of a.skippedTargets) log(c.muted(`  skipped ${target}: artifact type is not portable`));
+  }
+  if (applied.length === 0) return;
+  // Artifacts exist now — recall is what makes them discoverable while typing.
+  const status = await recallStatus(projectDir, home).catch(() => null);
+  if (!status || status.installed) return;
+  if (await confirm("\nEnable recall hints (a nudge when a typed prompt matches an installed artifact)?", false)) {
+    const result = await setRecall(true, projectDir, home);
+    log(`${c.ok("recall hook installed")} ${c.muted(terminalSafeLine(result.settingsPath))}`);
+  }
+}
+
+async function runScanFlow(
+  opts: {
+    user: boolean;
+    all: boolean;
+    since?: number;
+    limit?: number;
+    maxPrompts?: number;
+    noReview: boolean;
+  },
+  projectDir: string,
+  home: string | undefined,
+  log: LogFn,
+  confirm: Confirm,
+): Promise<void> {
+  const config = await loadConfig(home);
+  const resolved = resolveScanScope(
+    { user: opts.user, all: opts.all, since: opts.since },
+    config,
+  );
+  log(c.dim(resolved.label));
+  const out = await scan(
+    {
+      scope: resolved.scope,
+      projectPath: projectDir,
+      sinceDays: resolved.sinceDays,
+      limit: opts.limit,
+      maxPrompts: opts.maxPrompts,
+      home,
+    },
+    { log, config },
+  );
+  for (const s of out) {
+    log(
+      `  ${confidenceChip(s.confidence)} ${c.bold(terminalSafeLine(s.name))}  ${c.muted(terminalSafeLine(s.title))}  ${c.dim(`(seen ${s.evidence.count}×)`)}`,
+    );
+    if (isNudge(s)) {
+      log(`      ${c.dim("tip: this is what autopilot automates →")} ${c.violet("gradient autopilot nudge")}`);
+    }
+  }
+  if (out.length === 0) {
+    log(`\n${c.dim("no suggestions found — try a wider scan:")} ${c.violet("gradient scan --user")}`);
+    return;
+  }
+  if (!opts.noReview && await confirm(`\nReview these ${out.length} suggestion(s) now?`, true)) {
+    await runReview(projectDir, home, log, confirm);
+    return;
+  }
+  log(`\n${c.dim("Next:")} ${c.violet("gradient review")}`);
+}
+
 export async function main(
   argv: string[],
-  io: { log?: (s: string) => void; readStdin?: () => Promise<Record<string, unknown>> } = {},
+  io: {
+    log?: (s: string) => void;
+    readStdin?: () => Promise<Record<string, unknown>>;
+    home?: string;
+    confirm?: Confirm;
+  } = {},
 ): Promise<number> {
   const log = io.log ?? ((s: string) => process.stdout.write(s + "\n"));
   const readStdin = io.readStdin ?? readStdinJson;
+  const confirm = io.confirm ?? readlineConfirm();
 
   if (argv.length === 0) {
     log(`${banner(VERSION)}\n\n${HELP}`);
     return 0;
   }
 
-  const { command, positionals, flags } = parseCliArgs(argv);
+  // Handled before parseArgs, which would reject them as unknown options, and
+  // before the command switch, which would call them unknown commands. Asking a
+  // CLI its version or usage is a success, not a usage error — so exit 0. The
+  // version prints bare (no banner, no colour) so `gradient --version` is scriptable.
+  if (argv[0] === "--version" || argv[0] === "-v") {
+    log(VERSION);
+    return 0;
+  }
+  if (argv[0] === "--help" || argv[0] === "-h") {
+    log(`${banner(VERSION)}\n\n${HELP}`);
+    return 0;
+  }
+
+  // parseArgs throws on an unrecognized flag. Catch it here: an unknown option
+  // is a usage error like an unknown command, not a crash.
+  let parsed: ReturnType<typeof parseCliArgs>;
+  try {
+    parsed = parseCliArgs(argv);
+  } catch (e) {
+    log(c.coral(terminalSafeLine((e as Error).message.split(".")[0])));
+    log(`\n${HELP}`);
+    return 2;
+  }
+  const { command, positionals, flags } = parsed;
   const projectDir = process.cwd();
 
   try {
     switch (command) {
       case "init": {
-        const r = await init({ installSkill: !flags["no-skill"], sessionScan: !!flags["session-scan"], projectDir });
+        const r = await init({
+          installSkill: !flags["no-skill"],
+          sessionScan: !!flags["session-scan"],
+          projectDir,
+          targets: initTargets(flags.target),
+        });
         log(banner(VERSION));
         log(
-          `${c.muted("backend:")} ${r.backend}\n${c.muted("config:")} ${r.configPath}\n${c.muted("skill installed:")} ${r.skillInstalled}\n${c.muted("session-start scan:")} ${r.sessionScanInstalled}`,
+          `${c.muted("backend:")} ${terminalSafeLine(r.backend)}\n${c.muted("config:")} ${terminalSafeLine(r.configPath)}\n${c.muted("skill installed:")} ${r.skillPaths.length ? r.skillPaths.map(terminalSafeLine).join(", ") : "false"}\n${c.muted("session-start scan:")} ${r.sessionScanInstalled}`,
         );
+        // Setup is only useful once a first scan has run — flow straight into
+        // the funnel instead of leaving the next command to be remembered.
+        if (!flags["no-scan"] && await confirm("\nScan your history for suggestions now?", true)) {
+          await runScanFlow(
+            { user: false, all: false, noReview: false },
+            projectDir, io.home, log, confirm,
+          );
+        }
         return 0;
       }
       case "scan": {
@@ -101,94 +275,271 @@ export async function main(
           return 0;
         }
         log(banner(VERSION));
-        const config = await loadConfig();
-        const resolved = resolveScanScope(
-          { user: !!flags.user, all: !!flags.all, since: sinceDays(flags.since) },
-          config,
-        );
-        log(c.dim(resolved.label));
-        const out = await scan(
+        await runScanFlow(
           {
-            scope: resolved.scope,
-            projectPath: projectDir,
-            sinceDays: resolved.sinceDays,
+            user: !!flags.user,
+            all: !!flags.all,
+            since: sinceDays(flags.since),
             limit: flags.limit ? Number(flags.limit) : undefined,
             maxPrompts: flags["max-prompts"] ? Number(flags["max-prompts"]) : undefined,
+            noReview: !!flags["no-review"],
           },
-          { log, config },
+          projectDir, io.home, log, confirm,
         );
-        for (const s of out) {
-          log(
-            `  ${confidenceChip(s.confidence)} ${c.bold(s.name)}  ${c.muted(s.title)}  ${c.dim(`(seen ${s.evidence.count}×)`)}`,
-          );
-          if (isNudge(s)) {
-            log(`      ${c.dim("tip: this is what autopilot automates →")} ${c.violet("gradient autopilot nudge")}`);
-          }
-        }
-        log(`\n${c.dim("Next:")} ${c.violet("gradient review")}`);
         return 0;
       }
       case "review": {
         if (flags.json) {
-          log(await reviewJson(projectDir));
+          log(await reviewJson(projectDir, io.home));
           return 0;
         }
-        const applied = await review(projectDir, readlinePrompter());
-        log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
-        for (const a of applied) {
-          if (a.printed) log(`  ${c.dim("run:")} ${a.printed}`);
-        }
+        await runReview(projectDir, io.home, log, confirm);
         return 0;
       }
       case "apply": {
-        const applied = await applyByIds(positionals, projectDir);
+        const applied = await applyByIds(positionals, projectDir, { home: io.home, onSkip: log });
         for (const a of applied) {
-          log(a.written ? `${c.ok("wrote")} ${c.muted(a.written)}` : `${c.dim("run:")} ${a.printed}`);
+          for (const write of a.writes) {
+            log(`${c.ok("wrote")} ${c.muted(terminalSafeLine(write.path))}${write.target === "codex" ? c.dim(" [codex]") : ""}`);
+          }
+          if (a.printed) log(`${c.dim("run:")} ${a.printed}`);
+          for (const failure of a.failures) log(c.coral(`${failure.target}: ${terminalSafeLine(failure.error)}`));
+          for (const target of a.skippedTargets) log(c.muted(`skipped ${target}: artifact type is not portable`));
         }
         return 0;
       }
       case "explain": {
-        const s = await explain(projectDir, positionals[0] ?? "");
+        const s = await explain(projectDir, positionals[0] ?? "", { home: io.home, onSkip: log });
         if (!s) {
           log(c.coral(`no suggestion matching: ${positionals[0] ?? "(none given)"}`));
           return 1;
         }
-        log(`${confidenceChip(s.confidence)} ${c.bold(s.name)}  ${c.muted(s.title)}`);
-        log(c.dim(s.rationale));
-        log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions`));
-        for (const ex of s.examples ?? []) log(`  ${c.muted("·")} ${ex}`);
+        log(`${confidenceChip(s.confidence)} ${c.bold(terminalSafeLine(s.name))}  ${c.muted(terminalSafeLine(s.title))}`);
+        log(c.dim(terminalSafeLine(s.rationale)));
+        const sources = s.evidence.assistants?.length === 2
+          ? " · sources: Claude Code + Codex"
+          : "";
+        log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions${sources}`));
+        for (const ex of s.examples ?? []) log(`  ${c.muted("·")} ${c.muted(terminalSafeLine(ex))}`);
+        if (s.clarify) {
+          log(c.dim(`clarify: ${terminalSafeLine(s.clarify.question)}`));
+          for (const option of s.clarify.options) {
+            const mark = s.clarify.chosen === option.label ? c.ok("✓") : c.muted("·");
+            log(`  ${mark} ${terminalSafeLine(option.label)}`);
+          }
+        }
         return 0;
       }
       case "list": {
-        for (const e of await list(projectDir)) {
-          log(`  ${c.bold(e.name)}\t${kindLabel(e.type)}\t${c.muted(e.path || "(printed)")}\t${c.dim(e.createdAt)}`);
+        const entries = await list(projectDir);
+        const showTargets = entries.some(entry => entry.target === "codex");
+        for (const e of entries) {
+          const target = showTargets ? `\t${c.dim(e.target ?? "claude-code")}` : "";
+          const location = e.path || (e.hook ? `${e.hook.event} hook in .claude/settings.local.json` : "(printed)");
+          log(`  ${c.bold(terminalSafeLine(e.name))}\t${kindLabel(e.type)}${target}\t${c.muted(terminalSafeLine(location))}\t${c.dim(terminalSafeLine(e.createdAt))}`);
         }
         return 0;
       }
       case "remove": {
         const ok = await remove(projectDir, positionals[0]);
-        log(ok ? `${c.ok("removed")} ${positionals[0]}` : c.coral(`no such artifact: ${positionals[0]}`));
+        log(ok ? `${c.ok("removed")} ${terminalSafeLine(positionals[0])}` : c.coral(`no such artifact: ${terminalSafeLine(positionals[0])}`));
         return ok ? 0 : 1;
+      }
+      case "migrate": {
+        const dryRun = !!flags["dry-run"];
+        const result = await migrate(projectDir, { dryRun });
+        for (const name of result.migrated) {
+          log(`${c.ok(dryRun ? "would migrate" : "migrated")} ${name}`);
+        }
+        for (const name of result.skipped) log(c.muted(`skipped ${name}`));
+        log(c.dim(`${result.migrated.length} command(s) ${dryRun ? "ready to migrate" : "migrated"}; ${result.skipped.length} skipped`));
+        return 0;
+      }
+      case "recall": {
+        const action = positionals[0];
+        if (action === "on" || action === "off") {
+          const result = await setRecall(action === "on", projectDir);
+          log(
+            result.installed
+              ? `${c.ok("recall hook installed")} ${c.muted(result.settingsPath)}`
+              : `${c.muted("recall hook removed:")} ${result.settingsPath}`,
+          );
+          return 0;
+        }
+        if (action === "status") {
+          const status = await recallStatus(projectDir);
+          const built = status.builtAt ? ` (built ${status.builtAt})` : "";
+          log(
+            `${c.muted("recall:")} ${status.installed ? c.ok("on") : "off"}  ` +
+            c.dim(`index: ${status.entries} artifacts${built}`),
+          );
+          return 0;
+        }
+        if (action !== undefined) {
+          log(c.coral(`unknown recall action: ${action} (use on|off|status)`));
+          return 2;
+        }
+
+        // UserPromptSubmit hook mode. Exit 0 always and keep stdout empty
+        // unless returning the structured additionalContext payload.
+        try {
+          const input = await readStdin();
+          const result = await recallHook(input as RecallHookInput);
+          if (result.context) {
+            log(JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: "UserPromptSubmit",
+                additionalContext: result.context,
+              },
+            }));
+          }
+        } catch {
+          // Fail open: Claude processes the original prompt unchanged.
+        }
+        return 0;
       }
       case "stats": {
         log(banner(VERSION));
-        const r = await stats(projectDir);
+        const r = await stats(projectDir, { onSkip: log });
         log(c.dim(`coverage: ${r.covered}/${r.total} patterns automated (${r.coveragePct}%)`));
+        if (r.capped) log(c.dim("stats input cap reached; adoption covers the bounded recent corpus"));
         log(c.dim(`session-start scan: ${r.sessionScanEnabled ? "on" : "off"}`));
         for (const p of r.patterns) {
           log(`  ${confidenceChip(p.confidence)} ${c.bold(p.name)}  ${c.dim(`(seen ${p.count}× · ${p.sessions} sessions)`)}  ${p.covered ? c.ok("✓ automated") : c.muted("—")}`);
         }
+        if (r.adoption.length > 0) {
+          log(c.dim("\nadoption:"));
+          for (const artifact of r.adoption) {
+            const lastUsed = artifact.lastUsed ? artifact.lastUsed.slice(0, 10) : "never";
+            const removal = artifact.suggestRemoval
+              ? c.coral(`  → unused 30d+, consider: gradient remove ${artifact.name}`)
+              : "";
+            log(
+              `  ${c.bold(artifact.name)}  ` +
+              c.dim(`${artifact.uses} use(s) · last ${lastUsed} · ${artifact.retypesCaught} retype(s) caught`) +
+              removal,
+            );
+          }
+        }
+        return 0;
+      }
+      case "insights": {
+        log(banner(VERSION));
+        const report = await insights({ projectDir, user: !!flags.user });
+        const metrics = report.metrics;
+        log(c.dim(report.label));
+        if (report.capped) log(c.dim("insights input cap reached; metrics cover the bounded recent corpus"));
+        log(`  ${c.bold("prompts")} ${metrics.prompts}   ${c.bold("nudges")} ${metrics.nudges}   ${c.bold("interrupts")} ${metrics.interrupts}`);
+        log(`  ${c.bold("context deaths")} ${metrics.continuations}   ${c.bold("compacts")} ${metrics.compacts}   ${c.bold("error pastes")} ${metrics.errorPastes}`);
+        log(`  ${c.bold("model switches")} ${metrics.modelSwitches}   ${c.bold("effort switches")} ${metrics.effortSwitches}`);
+        if ((report.costs ?? []).length > 0) {
+          log(`\n${c.bold("cost of unautomated habits")}`);
+          for (const cost of report.costs ?? []) log(`  ${c.violet("→")} ${cost.line}`);
+        }
+        log("");
+        for (const recommendation of report.recommendations) log(`  ${c.violet("→")} ${recommendation.line}`);
+        if (flags.html) log(`${c.ok("wrote")} ${c.muted(await writeInsightsHtml(projectDir, report))}`);
+        return 0;
+      }
+      case "recap": {
+        const text = await recap(projectDir);
+        if (text) log(text);
+        return 0;
+      }
+      case "continuity": {
+        const action = positionals[0] ?? "status";
+        if (action === "on" || action === "off") {
+          const result = await setContinuity(action === "on", projectDir);
+          log(
+            result.on
+              ? `${c.ok("continuity hooks installed")} ${c.muted(result.settingsPath)}`
+              : `${c.muted("continuity hooks removed:")} ${result.settingsPath}`,
+          );
+          return 0;
+        }
+        if (action !== "status") {
+          log(c.coral(`unknown continuity action: ${action} (use on|off|status)`));
+          return 2;
+        }
+        const status = await continuityStatus(projectDir);
+        log(
+          `${c.muted("checkpoint (PreCompact):")} ${status.checkpoint ? c.ok("on") : "off"}   ` +
+          `${c.muted("recap (SessionStart):")} ${status.recap ? c.ok("on") : "off"}`,
+        );
+        return 0;
+      }
+      case "bundle": {
+        const name = positionals[0];
+        if (!name) {
+          log(c.coral("bundle needs a name: gradient bundle <name>"));
+          return 2;
+        }
+        if (flags["with-hooks"]) {
+          log(c.coral("bundle hooks are disabled pending recipient-side consent; omit --with-hooks"));
+          return 2;
+        }
+        const result = await bundleCommand(projectDir, name, { withHooks: !!flags["with-hooks"] });
+        const displayDir = terminalSafePath(result.dir);
+        log(
+          displayDir
+            ? `${c.ok("bundle written")} ${c.muted(displayDir)}`
+            : c.ok("bundle written (path contains control characters; executable command omitted)"),
+        );
+        for (const file of result.files) log(`  ${c.dim(relative(result.dir, file))}`);
+        for (const skipped of result.skipped) {
+          log(c.muted(`  skipped ${skipped} (not portable in a plugin — hooks/loops — or needs re-review, or is unreadable/sensitive)`));
+        }
+        if (displayDir) log(`\n${c.dim("try it:")} claude --plugin-dir ${posixShellQuote(displayDir)}`);
+
+        const pluginName = basename(result.dir);
+        log(c.dim("marketplace catalog (current Claude Code schema; place the plugin at the shown relative source):"));
+        log(JSON.stringify({
+          name: `${pluginName}-marketplace`,
+          owner: { name: "YOUR_TEAM" },
+          description: "Team workflows packaged by gradient",
+          plugins: [{
+            name: pluginName,
+            source: `./${pluginName}`,
+            description: "Workflows mined from real usage by gradient",
+          }],
+        }, null, 2));
+        log(c.dim("Codex marketplace entry (place this bundle at ./plugins/<name> relative to marketplace.json):"));
+        log(JSON.stringify({
+          name: `${pluginName}-marketplace`,
+          interface: { displayName: `${pluginName} workflows` },
+          plugins: [{
+            name: pluginName,
+            source: { source: "local", path: `./plugins/${pluginName}` },
+            policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
+            category: "Productivity",
+          }],
+        }, null, 2));
         return 0;
       }
       case "checkpoint": {
-        const input = await readStdin();
-        const path = await checkpoint(input as { transcript_path?: string }, projectDir);
-        log(`checkpoint written: ${path}`);
+        // Hook target: keep stdout empty even on success or failure. Claude
+        // should receive recap context only from the explicit recap hook.
+        try {
+          const input = await readStdin();
+          await checkpoint(input as { transcript_path?: string }, projectDir);
+        } catch {
+          // Fail open: compaction proceeds without a checkpoint.
+        }
+        return 0;
+      }
+      case "notify": {
+        // Notification-hook target: static text only, silent and fail-open.
+        try {
+          await readStdin();
+          await notify();
+        } catch {
+          // The host assistant must never observe notification failures.
+        }
         return 0;
       }
       case "autopilot": {
         const arg = positionals[0] ?? "status";
-        if (arg === "off" || arg === "nudge" || arg === "full") {
+        if (arg === "off" || arg === "nudge") {
           const r = await setAutopilotMode(arg, projectDir); // narrowed to AutopilotMode by the condition
           log(banner(VERSION));
           log(`${c.muted("autopilot:")} ${c.bold(r.mode)}`);
@@ -200,14 +551,14 @@ export async function main(
           return 0;
         }
         if (arg !== "status") {
-          log(c.coral(`unknown autopilot mode: ${arg} (use off|nudge|full|status)`));
+          log(c.coral(`unknown autopilot mode: ${arg} (use off|nudge|status)`));
           return 2;
         }
         const s = await autopilotStatus(projectDir);
         log(banner(VERSION));
         log(`${c.muted("mode:")} ${c.bold(s.mode)}${s.effectiveMode !== s.mode ? c.dim(` → ${s.effectiveMode} here (clamped by project gradient.md)`) : ""}`);
-        log(`${c.muted("budget:")} ${s.budget} auto-responses/session${s.effectiveBudget !== s.budget ? c.dim(` → ${s.effectiveBudget} here (clamped by project gradient.md)`) : ""}`);
-        log(`${c.muted("gradient.md:")} ${s.playbookPath}${s.playbookExists ? "" : c.dim(" (not yet generated — run gradient scan)")}`);
+        log(`${c.muted("budget:")} ${s.budget} judge attempts/session${s.effectiveBudget !== s.budget ? c.dim(` → ${s.effectiveBudget} here (clamped by project gradient.md)`) : ""}`);
+        log(`${c.muted("gradient.md:")} ${s.playbookPath}${s.playbookExists ? "" : c.dim(" (not yet generated — approve a suggestion first)")}`);
         log(
           `${c.muted("project gradient.md:")} ${s.projectPlaybookExists
             ? s.projectPlaybookPath + (s.projectMalformed ? c.coral(" (malformed — autopilot off here)") : "")
@@ -232,11 +583,11 @@ export async function main(
         return 0;
       }
       default:
-        log(`${c.coral(`unknown command: ${command}`)}\n\n${banner(VERSION)}\n\n${HELP}`);
+        log(`${c.coral(`unknown command: ${terminalSafeLine(command)}`)}\n\n${banner(VERSION)}\n\n${HELP}`);
         return 2;
     }
   } catch (e) {
-    log(`gradient: ${(e as Error).message}`);
+    log(c.coral(`gradient: ${terminalSafeLine((e as Error).message)}`));
     return 1;
   }
 }
@@ -244,7 +595,10 @@ export async function main(
 async function readStdinJson(): Promise<Record<string, unknown>> {
   if (process.stdin.isTTY) return {};
   let data = "";
-  for await (const chunk of process.stdin) data += chunk;
+  for await (const chunk of process.stdin) {
+    data += chunk;
+    if (data.length > 1_000_000) return {};
+  }
   try {
     return JSON.parse(data) as Record<string, unknown>;
   } catch {
