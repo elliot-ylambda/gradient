@@ -1,7 +1,7 @@
 {
   "name": "gradient",
   "description": "Mine your own Claude Code history for repeated workflows and turn them into skills, loops, and hooks. Read-only scan, approve in review, reversible apply — nothing runs without you turning it on.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": {
     "name": "ylambda"
   },

@@ -16861,7 +16861,7 @@ function spawnDetached(args, projectDir, deps = {}) {
 // src/version.ts
 import { createRequire } from "node:module";
 var require2 = createRequire(import.meta.url);
-var VERSION2 = true ? "0.4.0" : require2("../package.json").version;
+var VERSION2 = true ? "0.5.0" : require2("../package.json").version;
 
 // src/commands/insights.ts
 import { join as join23 } from "node:path";
