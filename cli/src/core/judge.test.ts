@@ -7,11 +7,11 @@ const fake = (fn: () => Promise<string>): LLMBackend => ({
 });
 
 describe("buildJudgePrompt", () => {
-  it("embeds only the trusted personal playbook and tail; nudge has no next-step authority", () => {
-    const req = buildJudgePrompt("nudge", "PB-CONTENT", "PROJ-CONTENT", "TAIL-CONTENT");
+  it("embeds the personal playbook and tail; nudge has no next-step authority", () => {
+    const req = buildJudgePrompt("nudge", "PB-CONTENT", "", "TAIL-CONTENT");
     expect(req.prompt).toContain("PB-CONTENT");
-    expect(req.prompt).not.toContain("PROJ-CONTENT");
     expect(req.prompt).toContain("TAIL-CONTENT");
+    expect(req.prompt).not.toContain("PROJECT PLAYBOOK");
     expect(req.system).toContain("stand down");
     expect(req.system).not.toContain("typical next step");
   });
@@ -23,9 +23,11 @@ describe("buildJudgePrompt", () => {
     expect(req.system).toContain("both playbooks");
   });
 
-  it("does not create a repository playbook section", () => {
-    const req = buildJudgePrompt("nudge", "pb", "", "tail");
-    expect(req.prompt).not.toContain("PROJECT PLAYBOOK");
+  it("renders a provenance-labeled project block only for pinned prose", () => {
+    const req = buildJudgePrompt("nudge", "PB-CONTENT", "PROJ-CONTENT", "TAIL-CONTENT");
+    expect(req.prompt).toContain("PROJECT PLAYBOOK (this repo):\nPROJ-CONTENT");
+    expect(req.prompt.indexOf("PROJECT PLAYBOOK")).toBeLessThan(req.prompt.indexOf("YOUR PLAYBOOK"));
+    expect(buildJudgePrompt("nudge", "pb", "   ", "tail").prompt).not.toContain("PROJECT PLAYBOOK");
   });
 });
 

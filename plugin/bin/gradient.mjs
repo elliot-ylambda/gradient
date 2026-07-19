@@ -1092,6 +1092,8 @@ function expectedRelativePath(type, name, target) {
       return `.claude/commands/${name}.md`;
     case "rule":
       return `.claude/rules/gradient-${name}.md`;
+    case "playbook-entry":
+      return "gradient.md";
     case "loop":
     case "hook":
       return null;
@@ -1201,7 +1203,7 @@ var init_manifest = __esm({
     init_safeFs();
     MANIFEST_MAX_BYTES = 1e6;
     MANIFEST_MAX_ENTRIES = 1e3;
-    ARTIFACT_TYPES = /* @__PURE__ */ new Set(["command", "loop", "hook", "skill", "rule"]);
+    ARTIFACT_TYPES = /* @__PURE__ */ new Set(["command", "loop", "hook", "skill", "rule", "playbook-entry"]);
     ASSISTANTS2 = /* @__PURE__ */ new Set(["claude-code", "codex"]);
   }
 });
@@ -1554,7 +1556,7 @@ function evidenceFor(matched, payloadType) {
       count,
       chars: meanLength(matched.flatMap((c2) => c2.examples)),
       spanDays: spanDays(matched.flatMap((c2) => c2.occurrences)),
-      kind: payloadType
+      kind: payloadType === "project-playbook" ? "command" : payloadType
     }),
     ...highestCount.temporal ? { temporal: highestCount.temporal } : {}
   };
@@ -1741,6 +1743,9 @@ function mergeDistinctiveText(payload) {
   if (payload.type === "rule") {
     const text = payload.text.endsWith(RULE_AUTHORIZATION_TAIL) ? payload.text.slice(0, payload.text.length - RULE_AUTHORIZATION_TAIL.length) : payload.text;
     return `${payload.ruleName} ${text}`;
+  }
+  if (payload.type === "project-playbook") {
+    return `${payload.section} ${payload.text}`;
   }
   return payload.description;
 }
@@ -2102,6 +2107,20 @@ function validateSuggestion(x) {
       throw new Error("rule payload needs safe bounded text");
     }
   }
+  if (payload.type === "project-playbook") {
+    if (payload.section !== "rules" && payload.section !== "workflows") {
+      throw new Error("project-playbook payload section must be rules|workflows");
+    }
+    if (!validOneLine(payload.text, 500)) {
+      throw new Error("project-playbook payload needs safe bounded one-line text");
+    }
+    if (redact(payload.text) !== payload.text) {
+      throw new Error("project-playbook text must already be redacted");
+    }
+    if (payload.text.includes("<!--") || payload.text.includes("-->")) {
+      throw new Error("project-playbook text must not contain comment markers");
+    }
+  }
   if (s.clarify !== void 0) {
     if (payload.type !== "command") throw new Error("suggestion.clarify is supported only for commands");
     const clarify = s.clarify;
@@ -2181,7 +2200,7 @@ var init_validate = __esm({
     init_detect();
     init_security();
     KNOWN_SUBCOMMANDS = /* @__PURE__ */ new Set(["checkpoint", "scan", "session-start", "recap", "notify"]);
-    TYPES = /* @__PURE__ */ new Set(["command", "loop", "hook", "rule"]);
+    TYPES = /* @__PURE__ */ new Set(["command", "loop", "hook", "rule", "project-playbook"]);
     CONFIDENCES = /* @__PURE__ */ new Set(["high", "inferred", "flagged"]);
     HOOK_EVENTS = /* @__PURE__ */ new Set(["PreCompact", "SessionStart", "Notification", "PostToolUse"]);
     NOTIFICATION_MATCHER = "permission_prompt|idle_prompt";
@@ -2335,6 +2354,86 @@ var init_codex_rule = __esm({
   }
 });
 
+// src/core/playbook-splice.ts
+function entryTag(suggestionId2) {
+  return `<!-- gradient:${suggestionId2} -->`;
+}
+function spliceLine(existing, section, line, suggestionId2) {
+  const base = existing ?? PROJECT_PLAYBOOK_TEMPLATE;
+  if (base.includes(entryTag(suggestionId2))) return base;
+  const heading = SECTION_HEADINGS[section];
+  const lines = base.split("\n");
+  const headingIndex = lines.findIndex((candidate) => candidate.trim() === heading);
+  if (headingIndex === -1) {
+    const separator = base === "" || base.endsWith("\n") ? "" : "\n";
+    return `${base}${separator}
+${heading}
+
+${line}
+`;
+  }
+  let end = lines.length;
+  for (let i = headingIndex + 1; i < lines.length; i++) {
+    if (/^#{1,6}\s/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  let last = headingIndex;
+  for (let i = headingIndex + 1; i < end; i++) {
+    if (lines[i].trim() !== "") last = i;
+  }
+  if (last === headingIndex) lines.splice(headingIndex + 1, 0, "", line);
+  else lines.splice(last + 1, 0, line);
+  return lines.join("\n");
+}
+function removeTaggedLine(content, suggestionId2) {
+  const tag = entryTag(suggestionId2);
+  const lines = content.split("\n");
+  const index = lines.findIndex((candidate) => candidate.includes(tag));
+  if (index === -1) return null;
+  lines.splice(index, 1);
+  return lines.join("\n");
+}
+function proseDiff(pinned, current) {
+  const pinnedLines = pinned.split("\n");
+  const currentSet = new Set(current.split("\n"));
+  const pinnedSet = new Set(pinnedLines);
+  const removed = pinnedLines.filter((l) => !currentSet.has(l) && l.trim() !== "");
+  const added = current.split("\n").filter((l) => !pinnedSet.has(l) && l.trim() !== "");
+  return [...removed.map((l) => `- ${l}`), ...added.map((l) => `+ ${l}`)].join("\n");
+}
+var SECTION_HEADINGS, PROJECT_PLAYBOOK_TEMPLATE;
+var init_playbook_splice = __esm({
+  "src/core/playbook-splice.ts"() {
+    "use strict";
+    SECTION_HEADINGS = {
+      rules: "## Rules",
+      workflows: "## Workflows"
+    };
+    PROJECT_PLAYBOOK_TEMPLATE = `# gradient.md \u2014 repo automation contract
+
+## Rules
+
+## Workflows
+`;
+  }
+});
+
+// src/core/emit/project-playbook.ts
+function emitProjectPlaybook(s) {
+  if (s.payload.type !== "project-playbook") throw new Error("emitProjectPlaybook needs a project-playbook payload");
+  const text = redact(s.payload.text).replace(/[\r\n\t]+/g, " ").trim().slice(0, 500);
+  return { section: s.payload.section, line: `- ${text} ${entryTag(s.id)}` };
+}
+var init_project_playbook = __esm({
+  "src/core/emit/project-playbook.ts"() {
+    "use strict";
+    init_security();
+    init_playbook_splice();
+  }
+});
+
 // src/core/emit/index.ts
 function emit(s, opts = {}) {
   const assistant = opts.assistant ?? "claude-code";
@@ -2358,6 +2457,8 @@ function emit(s, opts = {}) {
       const result = emitRule(s);
       return "path" in result ? { kind: "rule", ...result } : { kind: "rule-print", text: result.printed };
     }
+    case "project-playbook":
+      return { kind: "playbook-line", ...emitProjectPlaybook(s) };
   }
 }
 var init_emit = __esm({
@@ -2370,6 +2471,7 @@ var init_emit = __esm({
     init_rule();
     init_codex_skill();
     init_codex_rule();
+    init_project_playbook();
   }
 });
 
@@ -2482,177 +2584,18 @@ var init_approvals = __esm({
     init_manifest();
     APPROVAL_LEDGER_MAX_BYTES = 1e6;
     APPROVAL_LEDGER_MAX_ENTRIES = 1e3;
-    ARTIFACT_TYPES2 = /* @__PURE__ */ new Set(["command", "loop", "hook", "skill", "rule"]);
+    ARTIFACT_TYPES2 = /* @__PURE__ */ new Set(["command", "loop", "hook", "skill", "rule", "playbook-entry"]);
     ASSISTANTS3 = /* @__PURE__ */ new Set(["claude-code", "codex"]);
     ARTIFACT_SAFETY_VERSION = 1;
   }
 });
 
-// src/core/apply.ts
-import { isAbsolute as isAbsolute5, join as join9, resolve as resolve5 } from "node:path";
-async function trackedTarget(projectDir, suggestion, target, path5) {
-  const resolvedTarget = resolve5(path5);
-  return (await loadManifest(projectDir)).find((entry) => {
-    if (entry.name !== suggestion.name || manifestTarget(entry) !== target || !entry.path) return false;
-    const entryPath = isAbsolute5(entry.path) ? entry.path : join9(projectDir, entry.path);
-    return resolve5(entryPath) === resolvedTarget;
-  });
-}
-function normalizeTargets(value) {
-  const raw = value ?? ["claude-code"];
-  const out = [];
-  for (const target of raw) {
-    if (target !== "claude-code" && target !== "codex") throw new Error(`unsupported assistant target: ${String(target)}`);
-    if (!out.includes(target)) out.push(target);
-  }
-  if (out.length === 0 || out.length > 2) throw new Error("apply requires one or two assistant targets");
-  return out;
-}
-async function applySuggestion(suggestion, projectDir, opts = {}) {
-  validateSuggestion(suggestion);
-  if (suggestion.confidence === "flagged") {
-    throw new Error("refusing to apply an unresolved flagged suggestion; resolve it through gradient review first");
-  }
-  const targets = normalizeTargets(opts.targets);
-  const writes = [];
-  const skippedTargets = [];
-  const failures = [];
-  let printed;
-  for (const target of targets) {
-    if (target === "codex" && suggestion.payload.type !== "command" && suggestion.payload.type !== "rule") {
-      skippedTargets.push(target);
-      continue;
-    }
-    try {
-      const result = emit(suggestion, {
-        target: opts.emitTarget,
-        assistant: target,
-        cheapModel: opts.cheapModel
-      });
-      let type;
-      let written = "";
-      let approvalContent;
-      let previousContent;
-      let created = false;
-      let installedHook;
-      if (result.kind === "command" || result.kind === "skill" || result.kind === "rule") {
-        const abs = join9(projectDir, result.path);
-        const assistantRoot = target === "codex" ? ".agents" : ".claude";
-        assertInside(join9(projectDir, assistantRoot), abs);
-        const tracked = await trackedTarget(projectDir, suggestion, target, abs);
-        if (tracked) {
-          previousContent = await safeReadFile(projectDir, abs, { maxBytes: 1e6 });
-          if (!artifactHasMarker(previousContent, tracked)) {
-            throw new Error(`refusing to overwrite artifact without matching gradient provenance: ${abs}`);
-          }
-          await safeWriteFile(projectDir, abs, result.content, { mode: 384 });
-        } else {
-          try {
-            await safeWriteFile(projectDir, abs, result.content, { exclusive: true, mode: 384 });
-            created = true;
-          } catch (error) {
-            if (error.code === "EEXIST") {
-              throw new Error(`refusing to overwrite untracked artifact: ${abs}`);
-            }
-            throw error;
-          }
-        }
-        written = abs;
-        approvalContent = result.content;
-        type = result.kind;
-      } else if (result.kind === "loop") {
-        type = "loop";
-      } else if (result.kind === "rule-print") {
-        type = "rule";
-      } else {
-        if (suggestion.payload.type !== "hook") throw new Error("hook artifact requires a hook payload");
-        const install = result.install ?? {
-          event: suggestion.payload.event,
-          ...suggestion.payload.matcher !== void 0 ? { matcher: suggestion.payload.matcher } : {},
-          command: `gradient ${suggestion.payload.subcommand}`
-        };
-        const settingsFile = await installHook(projectDir, install.event, install.command, {
-          ...install.matcher !== void 0 ? { matcher: install.matcher } : {}
-        });
-        installedHook = { ...install, settingsFile };
-        type = "hook";
-      }
-      const entry = {
-        name: suggestion.name,
-        type,
-        path: written,
-        createdAt: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
-        suggestionId: suggestion.id,
-        ...target === "codex" ? { target } : {},
-        ...installedHook ? {
-          hook: {
-            event: installedHook.event,
-            ...installedHook.matcher !== void 0 ? { matcher: installedHook.matcher } : {},
-            command: installedHook.command
-          }
-        } : {}
-      };
-      try {
-        const approvedContent = entry.hook ? hookApprovalContent(entry.hook) : approvalContent;
-        if (approvedContent) {
-          await recordArtifactApproval(projectDir, entry, approvedContent, opts.home);
-        }
-        await addEntry(projectDir, entry);
-      } catch (error) {
-        if (written) {
-          if (created) await safeUnlink(projectDir, written).catch(() => void 0);
-          else if (previousContent !== void 0) {
-            await safeWriteFile(projectDir, written, previousContent, { mode: 384 }).catch(() => void 0);
-          }
-        }
-        if (installedHook) {
-          await removeHook(
-            projectDir,
-            installedHook.event,
-            installedHook.command,
-            installedHook.matcher
-          ).catch(() => void 0);
-        }
-        throw error;
-      }
-      if (written) writes.push({ target, path: written });
-      else if (installedHook) writes.push({ target, path: installedHook.settingsFile });
-      const targetPrinted = result.kind === "loop" ? result.command : result.kind === "rule-print" ? result.text : void 0;
-      if (targetPrinted) printed = [printed, targetPrinted].filter(Boolean).join("\n");
-    } catch (error) {
-      failures.push({ target, error: error.message });
-    }
-  }
-  if (failures.length > 0 && writes.length === 0 && !printed) {
-    throw new Error(failures.map((failure) => `${failure.target}: ${failure.error}`).join("; "));
-  }
-  return {
-    suggestion,
-    writes,
-    skippedTargets,
-    failures,
-    written: writes[0]?.path,
-    printed
-  };
-}
-var init_apply = __esm({
-  "src/core/apply.ts"() {
-    "use strict";
-    init_emit();
-    init_security();
-    init_manifest();
-    init_safeFs();
-    init_settings();
-    init_validate();
-    init_approvals();
-  }
-});
-
 // src/core/playbook.ts
-import { join as join10 } from "node:path";
+import { join as join9 } from "node:path";
 import { homedir as homedir5 } from "node:os";
+import { createHash as createHash4 } from "node:crypto";
 function playbookPath(home) {
-  return join10(home ?? homedir5(), ".config", "gradient", "gradient.md");
+  return join9(home ?? homedir5(), ".config", "gradient", "gradient.md");
 }
 function isNudge(s) {
   return s.payload.type === "loop" && !s.payload.cadence;
@@ -2714,7 +2657,7 @@ function clampMode(a, b) {
   return MODE_RANK[a] <= MODE_RANK[b] ? a : b;
 }
 function projectPlaybookPath(cwd) {
-  return join10(cwd, "gradient.md");
+  return join9(cwd, "gradient.md");
 }
 function stripComment(v) {
   const m = v.match(/(?:^|\s)#/);
@@ -2767,10 +2710,51 @@ async function loadProjectPlaybook(cwd) {
     return { prose: "", clamps: { malformed: true } };
   }
 }
-var MINED_START, MINED_END, PLAYBOOK_MAX_CHAINS, PLAYBOOK_FILE_MAX_BYTES, DEFAULT_PLAYBOOK, MODE_RANK, isMode;
+function playbookPinPath(projectDir, home) {
+  return join9(projectCacheDir(projectDir, home), "playbook-pin.json");
+}
+function proseHash(prose) {
+  return createHash4("sha256").update(prose, "utf8").digest("hex");
+}
+async function loadPlaybookPin(projectDir, home) {
+  const userHome = home ?? homedir5();
+  try {
+    const parsed = JSON.parse(await safeReadFile(
+      userHome,
+      playbookPinPath(projectDir, userHome),
+      { maxBytes: PIN_FILE_MAX_BYTES }
+    ));
+    if (!parsed || typeof parsed !== "object" || typeof parsed.hash !== "string" || !/^[a-f0-9]{64}$/.test(parsed.hash) || typeof parsed.prose !== "string" || proseHash(parsed.prose) !== parsed.hash || typeof parsed.pinnedAt !== "string") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+async function savePlaybookPin(projectDir, prose, home, now) {
+  const userHome = home ?? homedir5();
+  const pin = {
+    hash: proseHash(prose),
+    prose,
+    pinnedAt: (now ?? (() => (/* @__PURE__ */ new Date()).toISOString()))()
+  };
+  await safeWriteFile(userHome, playbookPinPath(projectDir, userHome), `${JSON.stringify(pin, null, 2)}
+`, { mode: 384 });
+}
+function pinState(project2, pin) {
+  if (project2 === null) return "none";
+  if (pin === null) return "unpinned";
+  return proseHash(project2.prose) === pin.hash ? "pinned" : "changed";
+}
+function pinnedProse(project2, pin) {
+  return pinState(project2, pin) === "pinned" && project2 !== null ? project2.prose : "";
+}
+var MINED_START, MINED_END, PLAYBOOK_MAX_CHAINS, PLAYBOOK_FILE_MAX_BYTES, DEFAULT_PLAYBOOK, MODE_RANK, isMode, PIN_FILE_MAX_BYTES;
 var init_playbook = __esm({
   "src/core/playbook.ts"() {
     "use strict";
+    init_config();
     init_safeFs();
     init_security();
     MINED_START = "<!-- gradient:mined:start -->";
@@ -2794,6 +2778,190 @@ ${MINED_END}
 `;
     MODE_RANK = { off: 0, nudge: 1, full: 2 };
     isMode = (v) => v === "off" || v === "nudge" || v === "full";
+    PIN_FILE_MAX_BYTES = 3e5;
+  }
+});
+
+// src/core/apply.ts
+import { isAbsolute as isAbsolute5, join as join10, resolve as resolve5 } from "node:path";
+async function trackedTarget(projectDir, suggestion, target, path5) {
+  const resolvedTarget = resolve5(path5);
+  return (await loadManifest(projectDir)).find((entry) => {
+    if (entry.name !== suggestion.name || manifestTarget(entry) !== target || !entry.path) return false;
+    const entryPath = isAbsolute5(entry.path) ? entry.path : join10(projectDir, entry.path);
+    return resolve5(entryPath) === resolvedTarget;
+  });
+}
+function normalizeTargets(value) {
+  const raw = value ?? ["claude-code"];
+  const out = [];
+  for (const target of raw) {
+    if (target !== "claude-code" && target !== "codex") throw new Error(`unsupported assistant target: ${String(target)}`);
+    if (!out.includes(target)) out.push(target);
+  }
+  if (out.length === 0 || out.length > 2) throw new Error("apply requires one or two assistant targets");
+  return out;
+}
+async function applySuggestion(suggestion, projectDir, opts = {}) {
+  validateSuggestion(suggestion);
+  if (suggestion.confidence === "flagged") {
+    throw new Error("refusing to apply an unresolved flagged suggestion; resolve it through gradient review first");
+  }
+  const targets = normalizeTargets(opts.targets);
+  const writes = [];
+  const skippedTargets = [];
+  const failures = [];
+  let printed;
+  for (const target of targets) {
+    if (target === "codex" && suggestion.payload.type !== "command" && suggestion.payload.type !== "rule") {
+      skippedTargets.push(target);
+      continue;
+    }
+    try {
+      const result = emit(suggestion, {
+        target: opts.emitTarget,
+        assistant: target,
+        cheapModel: opts.cheapModel
+      });
+      let type;
+      let written = "";
+      let approvalContent;
+      let previousContent;
+      let created = false;
+      let installedHook;
+      if (result.kind === "command" || result.kind === "skill" || result.kind === "rule") {
+        const abs = join10(projectDir, result.path);
+        const assistantRoot = target === "codex" ? ".agents" : ".claude";
+        assertInside(join10(projectDir, assistantRoot), abs);
+        const tracked = await trackedTarget(projectDir, suggestion, target, abs);
+        if (tracked) {
+          previousContent = await safeReadFile(projectDir, abs, { maxBytes: 1e6 });
+          if (!artifactHasMarker(previousContent, tracked)) {
+            throw new Error(`refusing to overwrite artifact without matching gradient provenance: ${abs}`);
+          }
+          await safeWriteFile(projectDir, abs, result.content, { mode: 384 });
+        } else {
+          try {
+            await safeWriteFile(projectDir, abs, result.content, { exclusive: true, mode: 384 });
+            created = true;
+          } catch (error) {
+            if (error.code === "EEXIST") {
+              throw new Error(`refusing to overwrite untracked artifact: ${abs}`);
+            }
+            throw error;
+          }
+        }
+        written = abs;
+        approvalContent = result.content;
+        type = result.kind;
+      } else if (result.kind === "playbook-line") {
+        const abs = join10(projectDir, "gradient.md");
+        let existingContent = null;
+        try {
+          existingContent = await safeReadFile(projectDir, abs, { maxBytes: 256e3 });
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+        const next = spliceLine(existingContent, result.section, result.line, suggestion.id);
+        if (next !== existingContent) {
+          await safeWriteFile(projectDir, abs, next, { mode: 420 });
+        }
+        created = existingContent === null;
+        previousContent = existingContent ?? void 0;
+        written = abs;
+        approvalContent = result.line;
+        type = "playbook-entry";
+      } else if (result.kind === "loop") {
+        type = "loop";
+      } else if (result.kind === "rule-print") {
+        type = "rule";
+      } else {
+        if (suggestion.payload.type !== "hook") throw new Error("hook artifact requires a hook payload");
+        const install = result.install ?? {
+          event: suggestion.payload.event,
+          ...suggestion.payload.matcher !== void 0 ? { matcher: suggestion.payload.matcher } : {},
+          command: `gradient ${suggestion.payload.subcommand}`
+        };
+        const settingsFile = await installHook(projectDir, install.event, install.command, {
+          ...install.matcher !== void 0 ? { matcher: install.matcher } : {}
+        });
+        installedHook = { ...install, settingsFile };
+        type = "hook";
+      }
+      const entry = {
+        name: suggestion.name,
+        type,
+        path: written,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
+        suggestionId: suggestion.id,
+        ...target === "codex" ? { target } : {},
+        ...installedHook ? {
+          hook: {
+            event: installedHook.event,
+            ...installedHook.matcher !== void 0 ? { matcher: installedHook.matcher } : {},
+            command: installedHook.command
+          }
+        } : {}
+      };
+      try {
+        const approvedContent = entry.hook ? hookApprovalContent(entry.hook) : approvalContent;
+        if (approvedContent) {
+          await recordArtifactApproval(projectDir, entry, approvedContent, opts.home);
+        }
+        await addEntry(projectDir, entry);
+      } catch (error) {
+        if (written) {
+          if (created) await safeUnlink(projectDir, written).catch(() => void 0);
+          else if (previousContent !== void 0) {
+            await safeWriteFile(projectDir, written, previousContent, { mode: 384 }).catch(() => void 0);
+          }
+        }
+        if (installedHook) {
+          await removeHook(
+            projectDir,
+            installedHook.event,
+            installedHook.command,
+            installedHook.matcher
+          ).catch(() => void 0);
+        }
+        throw error;
+      }
+      if (type === "playbook-entry" && written) {
+        const current = await safeReadFile(projectDir, written, { maxBytes: 256e3 });
+        await savePlaybookPin(projectDir, parseProjectPlaybook(current).prose, opts.home);
+      }
+      if (written) writes.push({ target, path: written });
+      else if (installedHook) writes.push({ target, path: installedHook.settingsFile });
+      const targetPrinted = result.kind === "loop" ? result.command : result.kind === "rule-print" ? result.text : void 0;
+      if (targetPrinted) printed = [printed, targetPrinted].filter(Boolean).join("\n");
+    } catch (error) {
+      failures.push({ target, error: error.message });
+    }
+  }
+  if (failures.length > 0 && writes.length === 0 && !printed) {
+    throw new Error(failures.map((failure) => `${failure.target}: ${failure.error}`).join("; "));
+  }
+  return {
+    suggestion,
+    writes,
+    skippedTargets,
+    failures,
+    written: writes[0]?.path,
+    printed
+  };
+}
+var init_apply = __esm({
+  "src/core/apply.ts"() {
+    "use strict";
+    init_emit();
+    init_security();
+    init_manifest();
+    init_safeFs();
+    init_settings();
+    init_validate();
+    init_approvals();
+    init_playbook_splice();
+    init_playbook();
   }
 });
 
@@ -17236,7 +17404,7 @@ var init_answers = __esm({
 });
 
 // src/core/attention.ts
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 import { constants as constants7 } from "node:fs";
 import { open as open8 } from "node:fs/promises";
 function textOf(content) {
@@ -17335,7 +17503,7 @@ async function mineAttention(files, readFn = readTranscript) {
 }
 function attentionSuggestion(stats2) {
   return {
-    id: createHash4("sha256").update("attention:notify").digest("hex").slice(0, 12),
+    id: createHash5("sha256").update("attention:notify").digest("hex").slice(0, 12),
     name: "notify-when-waiting",
     title: "Desktop ping when Claude Code is waiting on you",
     rationale: `You left Claude waiting \u22655 minutes ${stats2.gaps} time(s) across ${stats2.sessions} sessions (median ${stats2.medianMinutes} min). A Notification hook can ping your desktop instead.`,
@@ -17362,6 +17530,101 @@ var init_attention = __esm({
     ATTENTION_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
     ATTENTION_MAX_GAPS_PER_FILE = 2e4;
     ATTENTION_MAX_TOTAL_GAPS = 1e5;
+  }
+});
+
+// src/core/project-suggest.ts
+import { createHash as createHash6 } from "node:crypto";
+function isConstraintShaped(text) {
+  return CONSTRAINT_RE.test(text.trim());
+}
+function suggestionId(seed) {
+  return createHash6("sha256").update(`project-playbook:${seed}`).digest("hex").slice(0, 12);
+}
+function oneLine2(text) {
+  return redact(text).replaceAll("<!--", "[comment removed]").replaceAll("-->", "[comment removed]").replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, 480);
+}
+function safeSourceSignatures(values) {
+  return [...new Set(values.map(oneLine2).filter(Boolean))].sort().slice(0, 100);
+}
+function chainWorkflowSuggestion(chain, assistantBySession) {
+  if (chain.count < PROJECT_MIN_COUNT || chain.sessions < PROJECT_MIN_SESSIONS) return null;
+  const [first, second, third] = chain.steps.map((step) => oneLine2(step).slice(0, 120));
+  if (!first || !second) return null;
+  const text = oneLine2(
+    `After "${first}", the typical next step is "${second}"${third ? ` then "${third}"` : ""}.`
+  );
+  const pooled = [...new Set(chain.sessionIds.map((id) => assistantBySession.get(id) ?? "claude-code"))].sort((a, b) => a === b ? 0 : a === "claude-code" ? -1 : 1);
+  const sourceSignatures = safeSourceSignatures(chain.steps);
+  return {
+    id: suggestionId(`workflow:${sourceSignatures.join("\u2192")}`),
+    name: sanitizeName(`pb-after-${first}`),
+    title: `Repo workflow: ${first} \u2192 ${second}`.slice(0, 200),
+    rationale: `This sequence recurs in this repo (${chain.count}\xD7 across ${chain.sessions} sessions); committing it lets every approving teammate's judge know the typical next step.`,
+    evidence: {
+      count: chain.count,
+      sessions: chain.sessions,
+      assistants: pooled,
+      estMinutesSavedPerMonth: estMinutesSavedPerMonth({
+        count: chain.count,
+        chars: meanLength(sourceSignatures),
+        spanDays: spanDays(chain.occurrences),
+        kind: "command"
+      })
+    },
+    confidence: "inferred",
+    sourceSignatures,
+    payload: { type: "project-playbook", section: "workflows", text }
+  };
+}
+function nudgeRuleSuggestion(s) {
+  if (!isNudge(s) || s.payload.type !== "loop") return null;
+  if (s.evidence.count < PROJECT_MIN_COUNT || s.evidence.sessions < PROJECT_MIN_SESSIONS) return null;
+  const text = oneLine2(s.payload.instruction);
+  if (!isConstraintShaped(text)) return null;
+  const sourceSignatures = safeSourceSignatures(s.sourceSignatures?.length ? s.sourceSignatures : [text]);
+  return {
+    id: suggestionId(`rule:${text}`),
+    name: sanitizeName(`pb-rule-${text.slice(0, 24)}`),
+    title: `Repo rule: ${text}`.slice(0, 200),
+    rationale: `You repeat this constraint in this repo (${s.evidence.count}\xD7 across ${s.evidence.sessions} sessions); committing it lets every approving teammate's judge stand down accordingly.`,
+    evidence: {
+      ...s.evidence,
+      estMinutesSavedPerMonth: s.evidence.estMinutesSavedPerMonth ?? estMinutesSavedPerMonth({
+        count: s.evidence.count,
+        chars: text.length,
+        spanDays: s.evidence.temporal?.spanDays ?? 0,
+        kind: "rule"
+      })
+    },
+    confidence: "inferred",
+    sourceSignatures,
+    payload: { type: "project-playbook", section: "rules", text }
+  };
+}
+function mineProjectPlaybook(suggestions, chains, assistantBySession) {
+  const out = /* @__PURE__ */ new Map();
+  for (const chain of chains) {
+    const s = chainWorkflowSuggestion(chain, assistantBySession);
+    if (s) out.set(s.id, s);
+  }
+  for (const s of suggestions) {
+    const rule = nudgeRuleSuggestion(s);
+    if (rule) out.set(rule.id, rule);
+  }
+  return [...out.values()];
+}
+var PROJECT_MIN_COUNT, PROJECT_MIN_SESSIONS, CONSTRAINT_RE;
+var init_project_suggest = __esm({
+  "src/core/project-suggest.ts"() {
+    "use strict";
+    init_security();
+    init_playbook();
+    init_leverage();
+    init_temporal();
+    PROJECT_MIN_COUNT = 3;
+    PROJECT_MIN_SESSIONS = 2;
+    CONSTRAINT_RE = /^(never|don't|do not|always|avoid|only|must|stop)\b/i;
   }
 });
 
@@ -17997,6 +18260,20 @@ async function scan(opts, deps = {}) {
   } catch (error) {
     log(`attention check failed: ${error.message}`);
   }
+  try {
+    if (opts.scope === "project") {
+      const projectSuggestions = mineProjectPlaybook(valid, sequence.chains, assistantBySession);
+      for (const suggestion of projectSuggestions) {
+        validateSuggestion(suggestion);
+        valid.push(suggestion);
+      }
+      if (projectSuggestions.length > 0) {
+        log(`${projectSuggestions.length} suggestion(s) for the committed gradient.md`);
+      }
+    }
+  } catch (error) {
+    log(`gradient.md suggestion mining failed: ${error.message}`);
+  }
   await saveSuggestions(projectDir, valid, opts.home);
   log(`found ${valid.length} suggestions \u2192 cached`);
   await refreshRecallIndex(projectDir, opts.home);
@@ -18028,6 +18305,7 @@ var init_scan = __esm({
     init_paste();
     init_answers();
     init_attention();
+    init_project_suggest();
     init_toolmine();
     init_instructions();
     init_audit();
@@ -18037,6 +18315,17 @@ var init_scan = __esm({
 });
 
 // src/commands/review.ts
+var review_exports = {};
+__export(review_exports, {
+  readlineClarifier: () => readlineClarifier,
+  readlinePlaybookPrompter: () => readlinePlaybookPrompter,
+  readlinePrompter: () => readlinePrompter,
+  resolveClarify: () => resolveClarify,
+  review: () => review,
+  reviewJson: () => reviewJson,
+  suggestionExplanation: () => suggestionExplanation,
+  suggestionPreview: () => suggestionPreview
+});
 import { createInterface as createInterface2 } from "node:readline/promises";
 function resolveClarify(suggestion, label) {
   const clarify = suggestion.clarify;
@@ -18067,7 +18356,8 @@ function renderedText(suggestion, target, emitTarget, cheapModel) {
   }
   const rendered = emit(suggestion, { target: emitTarget, assistant: target, cheapModel });
   const body = rendered.kind === "command" || rendered.kind === "skill" || rendered.kind === "rule" ? `${rendered.path}
-${rendered.content}` : rendered.kind === "loop" ? rendered.command : rendered.kind === "rule-print" ? rendered.text : rendered.install ? `.claude/settings.local.json (merged on approve)
+${rendered.content}` : rendered.kind === "loop" ? rendered.command : rendered.kind === "rule-print" ? rendered.text : rendered.kind === "playbook-line" ? `gradient.md (committed) \u2192 ## ${rendered.section === "rules" ? "Rules" : "Workflows"}
+${rendered.line}` : rendered.install ? `.claude/settings.local.json (merged on approve)
 installs a ${rendered.install.event} hook (matcher: ${rendered.install.matcher ?? "all tools"})
 that runs automatically: ${rendered.install.command}` : `.claude/settings.local.json (merged on approve)
 ${rendered.settingsPatch ?? ""}`;
@@ -18078,6 +18368,17 @@ function suggestionPreview(suggestion, emitTarget, opts = {}) {
   return (opts.targets ?? ["claude-code"]).map((target) => renderedText(suggestion, target, emitTarget, opts.cheapModel)).join("\n\n");
 }
 async function review(projectDir, prompt, opts = {}) {
+  const project2 = await loadProjectPlaybook(projectDir);
+  if (project2 && opts.playbookPrompter) {
+    const pin = await loadPlaybookPin(projectDir, opts.home);
+    const state = pinState(project2, pin);
+    if (state === "unpinned" || state === "changed") {
+      const diff = state === "unpinned" ? project2.prose.split("\n").filter((l) => l.trim() !== "").map((l) => `+ ${l}`).join("\n") : proseDiff(pin.prose, project2.prose);
+      if (await opts.playbookPrompter(stripUnsafeControls(diff), state) === "approve") {
+        await savePlaybookPin(projectDir, project2.prose, opts.home);
+      }
+    }
+  }
   const cached = await loadSuggestions(projectDir, opts);
   const dismissed = await loadDismissed(projectDir);
   const suggestions = cached.filter((suggestion) => !isDismissed(suggestion, dismissed));
@@ -18158,6 +18459,17 @@ function readlineClarifier() {
     return clarify.options[index]?.label ?? null;
   };
 }
+function readlinePlaybookPrompter() {
+  return async (diff, state) => {
+    const rl = createInterface2({ input: process.stdin, output: process.stdout });
+    process.stdout.write(state === "unpinned" ? "\nThis repo's gradient.md is not yet approved as judge context for you:\n" : "\nThis repo's gradient.md changed since you approved it:\n");
+    process.stdout.write(`${diff}
+`);
+    const answer = (await rl.question("  approve it for your autopilot judge? [a]pprove [s]kip \u203A ")).trim().toLowerCase();
+    rl.close();
+    return answer === "a" ? "approve" : "skip";
+  };
+}
 function readlinePrompter(_opts = {}) {
   return async (suggestion, index, total, preview) => {
     const rl = createInterface2({ input: process.stdin, output: process.stdout });
@@ -18194,14 +18506,22 @@ ${stripUnsafeControls(preview)}
   };
 }
 async function reviewJson(projectDir, home) {
+  let projectPlaybook = "none";
+  try {
+    projectPlaybook = pinState(await loadProjectPlaybook(projectDir), await loadPlaybookPin(projectDir, home));
+  } catch {
+  }
   try {
     const [suggestions, dismissed] = await Promise.all([
       loadSuggestions(projectDir, { home }),
       loadDismissed(projectDir)
     ]);
-    return JSON.stringify(suggestions.filter((suggestion) => !isDismissed(suggestion, dismissed)), null, 2);
+    return JSON.stringify({
+      projectPlaybook,
+      suggestions: suggestions.filter((suggestion) => !isDismissed(suggestion, dismissed))
+    }, null, 2);
   } catch {
-    return "[]";
+    return JSON.stringify({ projectPlaybook, suggestions: [] }, null, 2);
   }
 }
 var init_review = __esm({
@@ -18215,6 +18535,7 @@ var init_review = __esm({
     init_emit();
     init_detect();
     init_security();
+    init_playbook_splice();
     init_dismiss();
   }
 });
@@ -18241,9 +18562,11 @@ function isLegacyGradientHook(hook) {
 async function remove(projectDir, name, opts = {}) {
   const entries = (await loadManifest(projectDir)).filter((entry) => entry.name === name);
   if (entries.length === 0) return false;
+  const playbookEntries = entries.filter((entry) => entry.type === "playbook-entry");
+  const fileEntries = entries.filter((entry) => entry.type !== "playbook-entry");
   const existing = [];
   let approvals;
-  for (const entry of entries) {
+  for (const entry of fileEntries) {
     if (entry.hook && !isLegacyGradientHook(entry.hook)) {
       approvals ??= await loadArtifactApprovals(projectDir, opts.home);
       if (!approvalMatches(approvals, entry, hookApprovalContent(entry.hook))) {
@@ -18265,6 +18588,18 @@ async function remove(projectDir, name, opts = {}) {
       if (error.code !== "ENOENT") throw error;
     }
   }
+  for (const entry of playbookEntries) {
+    const path5 = expectedArtifactPath(projectDir, entry);
+    await assertNoSymlinkPath(projectDir, path5, { includeTarget: false });
+    try {
+      const content = await safeReadFile(projectDir, path5, { maxBytes: 256e3 });
+      if (!content.includes(entryTag(entry.suggestionId))) {
+        throw new Error(`refusing to remove playbook entry without its provenance tag: ${path5}`);
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
   for (const artifact of existing) {
     await safeUnlink(projectDir, artifact.path);
     if (artifact.skill) {
@@ -18275,7 +18610,20 @@ async function remove(projectDir, name, opts = {}) {
       }
     }
   }
-  for (const entry of entries) {
+  for (const entry of playbookEntries) {
+    const path5 = expectedArtifactPath(projectDir, entry);
+    try {
+      const content = await safeReadFile(projectDir, path5, { maxBytes: 256e3 });
+      const next = removeTaggedLine(content, entry.suggestionId);
+      if (next !== null) {
+        await safeWriteFile(projectDir, path5, next, { mode: 420 });
+        await savePlaybookPin(projectDir, parseProjectPlaybook(next).prose, opts.home);
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  for (const entry of fileEntries) {
     if (entry.type === "hook" && entry.hook) {
       await removeHook(projectDir, entry.hook.event, entry.hook.command, entry.hook.matcher);
     }
@@ -18295,6 +18643,8 @@ var init_remove = __esm({
     init_safeFs();
     init_settings();
     init_approvals();
+    init_playbook_splice();
+    init_playbook();
     LEGACY_GRADIENT_HOOKS = [
       { event: "Stop", command: "gradient respond" },
       { event: "PreCompact", command: "gradient checkpoint" },
@@ -18517,6 +18867,9 @@ async function adoptionFromEvents(projectDir, events, opts = {}) {
   });
 }
 function artifactLeverageKind(type, suggestion) {
+  if (suggestion?.payload.type === "project-playbook") {
+    return suggestion.payload.section === "rules" ? "rule" : "command";
+  }
   if (suggestion) return suggestion.payload.type;
   if (type === "loop" || type === "hook" || type === "rule") return type;
   return "command";
@@ -18660,7 +19013,7 @@ var init_explain = __esm({
 });
 
 // src/core/state.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 import { lstat as lstat7, opendir as opendir5 } from "node:fs/promises";
 import { join as join24 } from "node:path";
 import { homedir as homedir14 } from "node:os";
@@ -18672,7 +19025,7 @@ function freshState() {
 }
 function fileFor(sessionId, home) {
   const normalized = sessionId.replace(/[^A-Za-z0-9_-]/g, "_") || "unknown";
-  const safe = normalized.length <= 100 ? normalized : `${normalized.slice(0, 40)}-${createHash5("sha256").update(sessionId).digest("hex").slice(0, 24)}`;
+  const safe = normalized.length <= 100 ? normalized : `${normalized.slice(0, 40)}-${createHash7("sha256").update(sessionId).digest("hex").slice(0, 24)}`;
   return join24(stateDir(home), `${safe}.json`);
 }
 function validState(value) {
@@ -18770,11 +19123,15 @@ var init_state = __esm({
 });
 
 // src/core/judge.ts
-function buildJudgePrompt(mode, playbook, _projectPlaybook, tail) {
+function buildJudgePrompt(mode, playbook, projectPlaybook, tail) {
   const system = "You are the user's auto-responder for a Claude Code session that just stopped. Decide whether the work is actually done or Claude stopped early. If work is unfinished and Claude is not waiting on the user, reply with the nudge this user would send, in their own phrasing (see YOUR PLAYBOOK). If Claude asked the user a genuine question, or the work is done, stand down." + (mode === "full" ? " You may also answer routine questions and, when a task is complete, start this user's typical next step per the playbooks. Stand down on anything irreversible or destructive (pushes, deploys, deletions, spending) unless both playbooks' Rules explicitly allow it." : "") + ' Respond ONLY with JSON: {"action":"continue"|"stand_down","response":"<what to send>","why":"<one line>"}. action "continue" requires a non-empty response; omit response when standing down.';
+  const projectBlock = projectPlaybook.trim() ? `PROJECT PLAYBOOK (this repo):
+${projectPlaybook}
+
+` : "";
   return {
     system,
-    prompt: `YOUR PLAYBOOK:
+    prompt: projectBlock + `YOUR PLAYBOOK:
 ${playbook}
 
 TRANSCRIPT TAIL:
@@ -18886,12 +19243,14 @@ async function respond(input, deps = {}) {
     if (!backend) return allow;
     const tail = redact(renderTail(lines));
     const playbook = redact(await loadPlaybook(deps.home)).slice(0, PLAYBOOK_CAP);
+    const pin = await loadPlaybookPin(input.cwd, deps.home);
+    const projectProse = redact(pinnedProse(project2, pin)).slice(0, PLAYBOOK_CAP);
     state.attempts += 1;
     state.lastFingerprint = fp;
     await saveState(input.session_id, state, deps.home);
     const decision = await judge(
       backend,
-      buildJudgePrompt(effectiveMode, playbook, "", tail),
+      buildJudgePrompt(effectiveMode, playbook, projectProse, tail),
       { timeoutMs: deps.timeoutMs }
     );
     const ts = (deps.now ?? (() => (/* @__PURE__ */ new Date()).toISOString()))();
@@ -18994,6 +19353,7 @@ async function autopilotStatus(projectDir, opts = {}) {
     playbookExists,
     projectPlaybookPath: projectPlaybookPath(projectDir),
     projectPlaybookExists: project2 !== null,
+    projectPlaybookPin: pinState(project2, await loadPlaybookPin(projectDir, opts.home)),
     projectMalformed,
     hookInstalled: await hookInstalled(projectDir, "Stop", RESPOND_HOOK_COMMAND),
     recent: latest2?.state.log.slice(-STATUS_RECENT) ?? []
@@ -19168,6 +19528,8 @@ function kindLabel(type) {
       return c.blue(type);
     case "rule":
       return c.blue(type);
+    case "playbook-entry":
+      return c.blue("gradient.md");
   }
 }
 function banner(version) {
@@ -19825,6 +20187,7 @@ async function prepareArtifacts(projectDir, home) {
   }
   for (const entry of entries) {
     if (entry.type === "skill") continue;
+    if (entry.type === "playbook-entry") continue;
     if (!entry.path) {
       skipped.add(entry.name);
       continue;
@@ -19961,7 +20324,7 @@ async function suggestionsMtimeMs(projectDir, home) {
   const userHome = home ?? homedir17();
   return safeFileMtimeMs(userHome, suggestionsPath(projectDir, userHome));
 }
-function oneLine2(value) {
+function oneLine3(value) {
   return stripUnsafeControls(value).replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim();
 }
 function visibleMirrorSuggestions(suggestions, manifest, dismissed) {
@@ -20004,7 +20367,7 @@ async function mirror(projectDir, deps = {}) {
   for (const suggestion of visible) {
     const leverage = suggestion.evidence.estMinutesSavedPerMonth;
     write(
-      `  ${oneLine2(suggestion.name)} \u2014 ${oneLine2(suggestion.title)}` + (leverage !== void 0 ? ` (\u2248${leverage}m/mo)` : "")
+      `  ${oneLine3(suggestion.name)} \u2014 ${oneLine3(suggestion.title)}` + (leverage !== void 0 ? ` (\u2248${leverage}m/mo)` : "")
     );
   }
   write("review or dismiss them with `gradient review`");
@@ -20083,10 +20446,11 @@ function initTargets(flag) {
 }
 async function runReview(projectDir, home, log, confirm) {
   const config = await loadConfig(home);
+  const playbookPrompter = Object.prototype.hasOwnProperty.call(review_exports, "readlinePlaybookPrompter") ? readlinePlaybookPrompter() : void 0;
   const applied = await review(projectDir, readlinePrompter({
     targets: resolveTargets(config),
     cheapModel: resolveCheapModel(config)
-  }), { home, onSkip: log, onExplain: log, clarifier: readlineClarifier() });
+  }), { home, onSkip: log, onExplain: log, clarifier: readlineClarifier(), playbookPrompter });
   log(`
 ${c.ok(`applied ${applied.length} suggestion(s).`)}`);
   for (const a of applied) {
@@ -20513,6 +20877,7 @@ ${c.dim("try it:")} claude --plugin-dir ${posixShellQuote(displayDir)}`);
         log(
           `${c.muted("project gradient.md:")} ${s.projectPlaybookExists ? s.projectPlaybookPath + (s.projectMalformed ? c.coral(" (malformed \u2014 autopilot off here)") : "") : c.dim("none in this repo")}`
         );
+        log(`${c.muted("project gradient.md pin:")} ${s.projectPlaybookExists ? s.projectPlaybookPin : "none"}`);
         log(`${c.muted("stop hook here:")} ${s.hookInstalled ? c.ok("installed") : "not installed"}`);
         for (const e of s.recent) {
           log(`  ${c.dim(e.ts)} ${e.action === "continue" ? c.ok("continued") : c.muted("stood down")}  ${c.dim(e.why)}`);
@@ -20559,6 +20924,7 @@ var init_cli = __esm({
   "src/cli.ts"() {
     "use strict";
     init_scan();
+    init_review();
     init_review();
     init_apply2();
     init_list();

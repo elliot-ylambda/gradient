@@ -1,13 +1,14 @@
 import { createInterface } from "node:readline/promises";
 import type { Assistant, Suggestion } from "../core/types.js";
 import { applySuggestion, type ApplyResult } from "../core/apply.js";
-import { isNudge } from "../core/playbook.js";
+import { isNudge, loadProjectPlaybook, loadPlaybookPin, savePlaybookPin, pinState, type PinState } from "../core/playbook.js";
 import { loadSuggestions, saveSuggestions, syncApprovedPlaybook } from "./apply.js";
 import { loadConfig, resolveCheapModel, resolveTargets } from "../config.js";
 import { refreshRecallIndex } from "./recall.js";
 import { emit, type EmitTarget } from "../core/emit/index.js";
 import { clarifiedWorkflowBody } from "../core/detect.js";
 import { stripUnsafeControls } from "../core/security.js";
+import { proseDiff } from "../core/playbook-splice.js";
 import { addDismissal, isDismissed, loadDismissed } from "../core/dismiss.js";
 
 export type ReviewDecision = "approve" | "skip" | "explain" | "quit";
@@ -18,6 +19,10 @@ export type Prompter = (
   total: number,
   preview: string,
 ) => Promise<ReviewDecision>;
+
+/** Consent prompt for the committed gradient.md's prose. Approve pins the
+ * exact bytes; the judge sees nothing until then. */
+export type PlaybookPrompter = (diff: string, state: "unpinned" | "changed") => Promise<"approve" | "skip">;
 
 /** Returns an option label, or null to leave the suggestion unresolved. */
 export type Clarifier = (suggestion: Suggestion) => Promise<string | null>;
@@ -64,11 +69,13 @@ function renderedText(
       ? rendered.command
       : rendered.kind === "rule-print"
         ? rendered.text
-        : rendered.install
-          ? `.claude/settings.local.json (merged on approve)\n` +
-            `installs a ${rendered.install.event} hook (matcher: ${rendered.install.matcher ?? "all tools"})\n` +
-            `that runs automatically: ${rendered.install.command}`
-          : `.claude/settings.local.json (merged on approve)\n${rendered.settingsPatch ?? ""}`;
+        : rendered.kind === "playbook-line"
+          ? `gradient.md (committed) → ## ${rendered.section === "rules" ? "Rules" : "Workflows"}\n${rendered.line}`
+          : rendered.install
+            ? `.claude/settings.local.json (merged on approve)\n` +
+              `installs a ${rendered.install.event} hook (matcher: ${rendered.install.matcher ?? "all tools"})\n` +
+              `that runs automatically: ${rendered.install.command}`
+            : `.claude/settings.local.json (merged on approve)\n${rendered.settingsPatch ?? ""}`;
   return `[${target}]\n${body}`;
 }
 
@@ -90,8 +97,22 @@ export async function review(
     onSkip?: (message: string) => void;
     onExplain?: (message: string) => void;
     clarifier?: Clarifier;
+    playbookPrompter?: PlaybookPrompter;
   } = {},
 ): Promise<ApplyResult[]> {
+  const project = await loadProjectPlaybook(projectDir);
+  if (project && opts.playbookPrompter) {
+    const pin = await loadPlaybookPin(projectDir, opts.home);
+    const state = pinState(project, pin);
+    if (state === "unpinned" || state === "changed") {
+      const diff = state === "unpinned"
+        ? project.prose.split("\n").filter(l => l.trim() !== "").map(l => `+ ${l}`).join("\n")
+        : proseDiff(pin!.prose, project.prose);
+      if (await opts.playbookPrompter(stripUnsafeControls(diff), state) === "approve") {
+        await savePlaybookPin(projectDir, project.prose, opts.home);
+      }
+    }
+  }
   const cached = await loadSuggestions(projectDir, opts);
   const dismissed = await loadDismissed(projectDir);
   const suggestions = cached.filter(suggestion => !isDismissed(suggestion, dismissed));
@@ -178,6 +199,19 @@ export function readlineClarifier(): Clarifier {
   };
 }
 
+export function readlinePlaybookPrompter(): PlaybookPrompter {
+  return async (diff, state) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    process.stdout.write(state === "unpinned"
+      ? "\nThis repo's gradient.md is not yet approved as judge context for you:\n"
+      : "\nThis repo's gradient.md changed since you approved it:\n");
+    process.stdout.write(`${diff}\n`);
+    const answer = (await rl.question("  approve it for your autopilot judge? [a]pprove [s]kip › ")).trim().toLowerCase();
+    rl.close();
+    return answer === "a" ? "approve" : "skip";
+  };
+}
+
 export function readlinePrompter(
   _opts: { targets?: Assistant[]; cheapModel?: string } = {},
 ): Prompter {
@@ -216,13 +250,20 @@ export function readlinePrompter(
 
 /** Non-interactive listing for tooling (the plugin's review skill). */
 export async function reviewJson(projectDir: string, home?: string): Promise<string> {
+  let projectPlaybook: PinState = "none";
+  try {
+    projectPlaybook = pinState(await loadProjectPlaybook(projectDir), await loadPlaybookPin(projectDir, home));
+  } catch { /* fail closed: reported as none */ }
   try {
     const [suggestions, dismissed] = await Promise.all([
       loadSuggestions(projectDir, { home }),
       loadDismissed(projectDir),
     ]);
-    return JSON.stringify(suggestions.filter(suggestion => !isDismissed(suggestion, dismissed)), null, 2);
+    return JSON.stringify({
+      projectPlaybook,
+      suggestions: suggestions.filter(suggestion => !isDismissed(suggestion, dismissed)),
+    }, null, 2);
   } catch {
-    return "[]";
+    return JSON.stringify({ projectPlaybook, suggestions: [] }, null, 2);
   }
 }

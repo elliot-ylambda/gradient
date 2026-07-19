@@ -6,7 +6,8 @@ import {
   generatePlaybook, writePlaybook, loadPlaybook, playbookPath,
   isNudge, DEFAULT_PLAYBOOK, MINED_START, MINED_END,
   parseProjectPlaybook, clampMode, projectPlaybookPath, loadProjectPlaybook,
-  renderMinedSection,
+  renderMinedSection, loadPlaybookPin, savePlaybookPin, pinState, pinnedProse,
+  proseHash,
 } from "./playbook.js";
 import type { Suggestion } from "./types.js";
 
@@ -294,5 +295,46 @@ describe("renderMinedSection with chains", () => {
     expect(out).not.toContain(secret);
     expect(out).not.toContain("\u001b");
     expect(out.match(new RegExp(MINED_END, "g"))).toHaveLength(1);
+  });
+});
+
+describe("playbook pin", () => {
+  const tmp = () => mkdtemp(join(tmpdir(), "grad-pin-"));
+
+  it("round-trips a pin and reports pinned", async () => {
+    const home = await tmp(); const proj = await tmp();
+    await savePlaybookPin(proj, "## Rules\n- be careful\n", home, () => "2026-07-18T00:00:00Z");
+    const pin = await loadPlaybookPin(proj, home);
+    expect(pin?.hash).toBe(proseHash("## Rules\n- be careful\n"));
+    const project = parseProjectPlaybook("## Rules\n- be careful\n");
+    expect(pinState(project, pin)).toBe("pinned");
+    expect(pinnedProse(project, pin)).toBe("## Rules\n- be careful\n");
+  });
+
+  it("hash mismatch reports changed and yields no prose", async () => {
+    const home = await tmp(); const proj = await tmp();
+    await savePlaybookPin(proj, "old prose", home);
+    const pin = await loadPlaybookPin(proj, home);
+    const project = parseProjectPlaybook("edited prose");
+    expect(pinState(project, pin)).toBe("changed");
+    expect(pinnedProse(project, pin)).toBe("");
+  });
+
+  it("no pin file → unpinned; no project file → none", async () => {
+    const home = await tmp(); const proj = await tmp();
+    expect(pinState(parseProjectPlaybook("x"), await loadPlaybookPin(proj, home))).toBe("unpinned");
+    expect(pinState(null, null)).toBe("none");
+    expect(pinnedProse(null, null)).toBe("");
+  });
+
+  it("corrupt or internally inconsistent pin file → null (unpinned, fail closed)", async () => {
+    const home = await tmp(); const proj = await tmp();
+    await savePlaybookPin(proj, "prose", home);
+    const pinFile = (await import("./playbook.js")).playbookPinPath(proj, home);
+    await mkdir(dirname(pinFile), { recursive: true });
+    await writeFile(pinFile, JSON.stringify({ hash: "a".repeat(64), prose: "prose", pinnedAt: "t" }));
+    expect(await loadPlaybookPin(proj, home)).toBeNull();
+    await writeFile(pinFile, "not json");
+    expect(await loadPlaybookPin(proj, home)).toBeNull();
   });
 });

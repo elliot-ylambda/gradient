@@ -13,8 +13,9 @@ artifacts you approve.
 Run the CLI and show the user the results:
 
 - `gradient scan` — analyze history, send bounded/redacted candidates to the configured model, and cache suggestions.
-- `gradient review --json` — list cached suggestions; present them and let the
-  user choose (the interactive `gradient review` is for the terminal, not here).
+- `gradient review --json` — read `{ projectPlaybook, suggestions }`; surface
+  the committed `gradient.md` pin state, then present cached suggestions and let
+  the user choose (the interactive `gradient review` is for the terminal, not here).
 - `gradient apply <id>` — generate a specific suggestion non-interactively.
 - `gradient list` / `gradient remove <name>` — manage what was generated.
 

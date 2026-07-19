@@ -163,7 +163,7 @@ function evidenceFor(matched: Candidate[], payloadType: SuggestionPayload["type"
       count,
       chars: meanLength(matched.flatMap(c => c.examples)),
       spanDays: spanDays(matched.flatMap(c => c.occurrences)),
-      kind: payloadType,
+      kind: payloadType === "project-playbook" ? "command" : payloadType,
     }),
     ...(highestCount.temporal ? { temporal: highestCount.temporal } : {}),
   };
@@ -459,6 +459,9 @@ function mergeDistinctiveText(payload: SuggestionPayload): string {
       ? payload.text.slice(0, payload.text.length - RULE_AUTHORIZATION_TAIL.length)
       : payload.text;
     return `${payload.ruleName} ${text}`;
+  }
+  if (payload.type === "project-playbook") {
+    return `${payload.section} ${payload.text}`;
   }
   return payload.description;
 }

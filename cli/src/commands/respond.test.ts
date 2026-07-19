@@ -196,7 +196,7 @@ describe("respond project clamp", () => {
     expect(called).toBe(false);
   });
 
-  it("repository prose never reaches the judge prompt or emitted nudge", async () => {
+  it("unpinned repository prose never reaches the judge prompt or emitted nudge", async () => {
     const home = await tmpHome();
     const cwd = await repoWith("---\nautopilot:\n  max-mode: full\n---\n## Rules\n- SENTINEL-PROSE\n");
     let seenPrompt = "";
@@ -205,6 +205,23 @@ describe("respond project clamp", () => {
       { home, config: consent(cwd), backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
     expect(r.decision).toBe("block");
     expect(seenPrompt).not.toContain("SENTINEL-PROSE");
+    expect(r).toEqual({ decision: "block", reason: "Continue." });
+  });
+
+  it("pinned repository prose reaches the judge with its provenance label", async () => {
+    const home = await tmpHome();
+    const cwd = await repoWith("---\nautopilot:\n  max-mode: nudge\n---\n## Rules\n- SENTINEL-PROSE\n");
+    const { parseProjectPlaybook, savePlaybookPin } = await import("../core/playbook.js");
+    // Pin the exact prose the file will parse to (body after the frontmatter block).
+    const prose = parseProjectPlaybook("---\nautopilot:\n  max-mode: nudge\n---\n## Rules\n- SENTINEL-PROSE\n").prose;
+    await savePlaybookPin(cwd, prose, home);
+    let seenPrompt = "";
+    const backend: LLMBackend = { name: "f", available: async () => true, complete: async (req) => { seenPrompt = req.prompt; return CONTINUE; } };
+    const r = await respond({ session_id: "s", transcript_path: "t", cwd },
+      { home, config: consent(cwd), backend, readLines: async () => transcript(3), env: {}, now: () => "T" });
+    expect(r.decision).toBe("block");
+    expect(seenPrompt).toContain("PROJECT PLAYBOOK (this repo):");
+    expect(seenPrompt).toContain("SENTINEL-PROSE");
     expect(r).toEqual({ decision: "block", reason: "Continue." });
   });
 

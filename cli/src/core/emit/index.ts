@@ -7,6 +7,7 @@ import { emitSkill } from "./skill.js";
 import { emitRule } from "./rule.js";
 import { emitCodexSkill } from "./codex-skill.js";
 import { emitCodexRule } from "./codex-rule.js";
+import { emitProjectPlaybook } from "./project-playbook.js";
 
 export type EmitTarget = "skill" | "command";
 export interface EmitOpts {
@@ -20,7 +21,8 @@ export type EmitResult =
   | { kind: "loop"; command: string }
   | { kind: "hook"; settingsPatch?: string; install?: HookInstall }
   | { kind: "rule"; path: string; content: string }
-  | { kind: "rule-print"; text: string };
+  | { kind: "rule-print"; text: string }
+  | { kind: "playbook-line"; section: "rules" | "workflows"; line: string };
 
 export { emitSkill };
 
@@ -48,5 +50,6 @@ export function emit(s: Suggestion, opts: EmitOpts = {}): EmitResult {
         ? { kind: "rule", ...result }
         : { kind: "rule-print", text: result.printed };
     }
+    case "project-playbook": return { kind: "playbook-line", ...emitProjectPlaybook(s) };
   }
 }

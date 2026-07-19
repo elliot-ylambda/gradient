@@ -13,7 +13,7 @@ export interface JudgeDecision {
 export function buildJudgePrompt(
   mode: "nudge" | "full",
   playbook: string,
-  _projectPlaybook: string,
+  projectPlaybook: string,
   tail: string,
 ): LLMRequest {
   const system =
@@ -29,9 +29,15 @@ export function buildJudgePrompt(
       : "") +
     ' Respond ONLY with JSON: {"action":"continue"|"stand_down","response":"<what to send>","why":"<one line>"}. ' +
     'action "continue" requires a non-empty response; omit response when standing down.';
+  // Pinned-prose consent only: respond passes "" unless the local user's pin
+  // matches the committed file's exact prose bytes.
+  const projectBlock = projectPlaybook.trim()
+    ? `PROJECT PLAYBOOK (this repo):\n${projectPlaybook}\n\n`
+    : "";
   return {
     system,
     prompt:
+      projectBlock +
       `YOUR PLAYBOOK:\n${playbook}\n\n` +
       `TRANSCRIPT TAIL:\n${tail}`,
   };

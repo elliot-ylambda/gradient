@@ -1,7 +1,8 @@
 import { parseArgs } from "node:util";
 import { basename, relative } from "node:path";
 import { scan } from "./commands/scan.js";
-import { review, readlineClarifier, readlinePrompter, reviewJson } from "./commands/review.js";
+import { review, readlineClarifier, readlinePlaybookPrompter, readlinePrompter, reviewJson } from "./commands/review.js";
+import * as reviewCommands from "./commands/review.js";
 import { applyByIds } from "./commands/apply.js";
 import { list } from "./commands/list.js";
 import { remove } from "./commands/remove.js";
@@ -132,10 +133,13 @@ async function runReview(
   confirm: Confirm,
 ): Promise<void> {
   const config = await loadConfig(home);
+  const playbookPrompter = Object.prototype.hasOwnProperty.call(reviewCommands, "readlinePlaybookPrompter")
+    ? readlinePlaybookPrompter()
+    : undefined;
   const applied = await review(projectDir, readlinePrompter({
     targets: resolveTargets(config),
     cheapModel: resolveCheapModel(config),
-  }), { home, onSkip: log, onExplain: log, clarifier: readlineClarifier() });
+  }), { home, onSkip: log, onExplain: log, clarifier: readlineClarifier(), playbookPrompter });
   log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
   for (const a of applied) {
     for (const write of a.writes) {
@@ -611,6 +615,7 @@ export async function main(
             ? s.projectPlaybookPath + (s.projectMalformed ? c.coral(" (malformed — autopilot off here)") : "")
             : c.dim("none in this repo")}`,
         );
+        log(`${c.muted("project gradient.md pin:")} ${s.projectPlaybookExists ? s.projectPlaybookPin : "none"}`);
         log(`${c.muted("stop hook here:")} ${s.hookInstalled ? c.ok("installed") : "not installed"}`);
         for (const e of s.recent) {
           log(`  ${c.dim(e.ts)} ${e.action === "continue" ? c.ok("continued") : c.muted("stood down")}  ${c.dim(e.why)}`);

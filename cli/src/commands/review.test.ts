@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { resolveClarify, review, suggestionPreview } from "./review.js";
+import { resolveClarify, review, reviewJson, suggestionPreview } from "./review.js";
 import { loadSuggestions, saveSuggestions } from "./apply.js";
 import { isNudge } from "../core/playbook.js";
 import type { Suggestion } from "../core/types.js";
@@ -15,6 +15,8 @@ const mk = (name: string): Suggestion => ({
   evidence: { count: 3, sessions: 2 }, confidence: "high",
   payload: { type: "command", commandName: name, body: "do it" },
 });
+
+const tmpHome = () => mkdtemp(join(tmpdir(), "grad-review-home-"));
 
 async function seed(dir: string, home: string, names: string[]) {
   const path = suggestionsPath(dir, home);
@@ -163,15 +165,15 @@ describe("reviewJson", () => {
     };
     await saveSuggestions(dir, [SUGGESTION], home);
     const out = JSON.parse(await reviewJson(dir, home));
-    expect(out).toHaveLength(1);
-    expect(out[0].id).toBe("abc123def4");
-    expect(out[0].payload.type).toBe("command");
+    expect(out.suggestions).toHaveLength(1);
+    expect(out.suggestions[0].id).toBe("abc123def4");
+    expect(out.suggestions[0].payload.type).toBe("command");
   });
   it("prints [] when no cache exists", async () => {
     const { reviewJson } = await import("./review.js");
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    expect(JSON.parse(await reviewJson(dir, home))).toEqual([]);
+    expect(JSON.parse(await reviewJson(dir, home))).toEqual({ projectPlaybook: "none", suggestions: [] });
   });
 
   it("omits persistently dismissed suggestions", async () => {
@@ -180,7 +182,7 @@ describe("reviewJson", () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     await saveSuggestions(dir, [mk("ship")], home);
     await review(dir, async () => "skip", { home });
-    expect(JSON.parse(await reviewJson(dir, home))).toEqual([]);
+    expect(JSON.parse(await reviewJson(dir, home))).toEqual({ projectPlaybook: "none", suggestions: [] });
   });
 });
 
@@ -304,5 +306,58 @@ describe("clarification resolution", () => {
     });
 
     expect(clarificationCalls).toBe(0);
+  });
+});
+
+describe("review project playbook pinning", () => {
+  it("presents an unpinned playbook and pins on approve", async () => {
+    const home = await tmpHome();
+    const proj = await mkdtemp(join(tmpdir(), "grad-review-pb-"));
+    await writeFile(join(proj, "gradient.md"), "## Rules\n- team rule\n");
+    let sawState = ""; let sawDiff = "";
+    await review(proj, async () => "quit", {
+      home,
+      playbookPrompter: async (diff, state) => { sawState = state; sawDiff = diff; return "approve"; },
+    });
+    expect(sawState).toBe("unpinned");
+    expect(sawDiff).toContain("+ - team rule");
+    const { loadPlaybookPin, loadProjectPlaybook, pinState } = await import("../core/playbook.js");
+    expect(pinState(await loadProjectPlaybook(proj), await loadPlaybookPin(proj, home))).toBe("pinned");
+  });
+
+  it("shows a diff for a changed playbook and leaves state untouched on skip", async () => {
+    const home = await tmpHome();
+    const proj = await mkdtemp(join(tmpdir(), "grad-review-pb2-"));
+    const { savePlaybookPin } = await import("../core/playbook.js");
+    await savePlaybookPin(proj, "## Rules\n- old rule\n", home);
+    await writeFile(join(proj, "gradient.md"), "## Rules\n- new rule\n");
+    let sawDiff = "";
+    await review(proj, async () => "quit", {
+      home,
+      playbookPrompter: async (diff) => { sawDiff = diff; return "skip"; },
+    });
+    expect(sawDiff).toContain("- - old rule");
+    expect(sawDiff).toContain("+ - new rule");
+    const { loadPlaybookPin, loadProjectPlaybook, pinState } = await import("../core/playbook.js");
+    expect(pinState(await loadProjectPlaybook(proj), await loadPlaybookPin(proj, home))).toBe("changed");
+  });
+
+  it("does not prompt when pinned or when no file exists", async () => {
+    const home = await tmpHome();
+    const proj = await mkdtemp(join(tmpdir(), "grad-review-pb3-"));
+    let called = false;
+    await review(proj, async () => "quit", { home, playbookPrompter: async () => { called = true; return "skip"; } });
+    expect(called).toBe(false);
+  });
+});
+
+describe("reviewJson project playbook state", () => {
+  it("reports the pin state alongside suggestions", async () => {
+    const home = await tmpHome();
+    const proj = await mkdtemp(join(tmpdir(), "grad-review-pb4-"));
+    await writeFile(join(proj, "gradient.md"), "## Rules\n- r\n");
+    const parsed = JSON.parse(await reviewJson(proj, home));
+    expect(parsed.projectPlaybook).toBe("unpinned");
+    expect(Array.isArray(parsed.suggestions)).toBe(true);
   });
 });

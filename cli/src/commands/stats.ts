@@ -115,6 +115,9 @@ export async function adoptionFromEvents(
 }
 
 function artifactLeverageKind(type: ArtifactType, suggestion: Suggestion | undefined): LeverageKind {
+  if (suggestion?.payload.type === "project-playbook") {
+    return suggestion.payload.section === "rules" ? "rule" : "command";
+  }
   if (suggestion) return suggestion.payload.type;
   if (type === "loop" || type === "hook" || type === "rule") return type;
   return "command";

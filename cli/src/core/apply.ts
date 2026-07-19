@@ -7,6 +7,8 @@ import { safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
 import { installHook, removeHook } from "./settings.js";
 import { validateSuggestion } from "./validate.js";
 import { hookApprovalContent, recordArtifactApproval } from "./approvals.js";
+import { spliceLine } from "./playbook-splice.js";
+import { parseProjectPlaybook, savePlaybookPin } from "./playbook.js";
 
 export interface ApplyResult {
   suggestion: Suggestion;
@@ -112,6 +114,25 @@ export async function applySuggestion(
         written = abs;
         approvalContent = result.content;
         type = result.kind;
+      } else if (result.kind === "playbook-line") {
+        // Deliberate carve-out: the ONLY write allowed outside .claude/.agents
+        // is the repo's own committed gradient.md, by constructed path.
+        const abs = join(projectDir, "gradient.md");
+        let existingContent: string | null = null;
+        try {
+          existingContent = await safeReadFile(projectDir, abs, { maxBytes: 256_000 });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        const next = spliceLine(existingContent, result.section, result.line, suggestion.id);
+        if (next !== existingContent) {
+          await safeWriteFile(projectDir, abs, next, { mode: 0o644 });
+        }
+        created = existingContent === null;
+        previousContent = existingContent ?? undefined;
+        written = abs;
+        approvalContent = result.line;
+        type = "playbook-entry";
       } else if (result.kind === "loop") {
         type = "loop";
       } else if (result.kind === "rule-print") {
@@ -173,6 +194,11 @@ export async function applySuggestion(
           ).catch(() => undefined);
         }
         throw error;
+      }
+
+      if (type === "playbook-entry" && written) {
+        const current = await safeReadFile(projectDir, written, { maxBytes: 256_000 });
+        await savePlaybookPin(projectDir, parseProjectPlaybook(current).prose, opts.home);
       }
 
       if (written) writes.push({ target, path: written });

@@ -80,6 +80,8 @@ export function kindLabel(type: ArtifactType): string {
       return c.blue(type);
     case "rule":
       return c.blue(type);
+    case "playbook-entry":
+      return c.blue("gradient.md");
   }
 }
 

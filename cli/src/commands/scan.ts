@@ -34,6 +34,7 @@ import { saveSuggestions } from "./apply.js";
 import { detectPasteCandidates, extractPasteKey } from "../core/paste.js";
 import { ANSWER_MAX_PAIRS, extractAnswerPairs, mineAnswerCandidates } from "../core/answers.js";
 import { attentionSuggestion, mineAttention } from "../core/attention.js";
+import { mineProjectPlaybook } from "../core/project-suggest.js";
 import { failureLoops, rituals } from "../core/toolmine.js";
 import { loadInstructions } from "../core/instructions.js";
 import { audit, clearInstructionAudit, CORRECTION_RE, saveInstructionAudit } from "../core/audit.js";
@@ -377,6 +378,21 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     }
   } catch (error) {
     log(`attention check failed: ${(error as Error).message}`);
+  }
+
+  try {
+    if (opts.scope === "project") {
+      const projectSuggestions = mineProjectPlaybook(valid, sequence.chains, assistantBySession);
+      for (const suggestion of projectSuggestions) {
+        validateSuggestion(suggestion);
+        valid.push(suggestion);
+      }
+      if (projectSuggestions.length > 0) {
+        log(`${projectSuggestions.length} suggestion(s) for the committed gradient.md`);
+      }
+    }
+  } catch (error) {
+    log(`gradient.md suggestion mining failed: ${(error as Error).message}`);
   }
 
   await saveSuggestions(projectDir, valid, opts.home);

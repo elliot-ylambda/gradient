@@ -1,6 +1,6 @@
 export type Role = "user" | "assistant";
 export type Confidence = "high" | "inferred" | "flagged";
-export type ArtifactType = "command" | "loop" | "hook" | "skill" | "rule";
+export type ArtifactType = "command" | "loop" | "hook" | "skill" | "rule" | "playbook-entry";
 export type Assistant = "claude-code" | "codex";
 
 /** One complete reading of an ambiguous pattern. */
@@ -94,7 +94,8 @@ export type SuggestionPayload =
   | { type: "command"; commandName: string; body: string; triggers?: string[]; mechanical?: boolean }
   | { type: "loop"; instruction: string; cadence?: string }
   | { type: "hook"; event: string; description: string; matcher?: string; subcommand?: string; command?: string }
-  | { type: "rule"; target: "project" | "user"; ruleName: string; text: string };
+  | { type: "rule"; target: "project" | "user"; ruleName: string; text: string }
+  | { type: "project-playbook"; section: "rules" | "workflows"; text: string };
 
 /** Post-LLM (or post-degradation), ready to present/emit. */
 export interface Suggestion {
