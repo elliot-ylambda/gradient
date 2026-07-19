@@ -6,8 +6,131 @@ import { MAX_TOOL_EVENTS, scan } from "./scan.js";
 import { playbookPath } from "../core/playbook.js";
 import { suggestionsPath } from "./apply.js";
 import type { ToolEvent } from "../core/types.js";
+import { auditCachePath } from "../core/audit.js";
 
 describe("scan", () => {
+  it("audits project instructions and persists private effectiveness tallies", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-audit-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await writeFile(join(projectDir, "CLAUDE.md"), "- Always use pnpm, never npm.\n");
+    const logs: string[] = [];
+    await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        backend: null,
+        config: {},
+        collectFn: async () => ["f1"],
+        parseFn: async () => [
+          { ts: "2026-07-01T00:00:00Z", project: "p", role: "user", sessionId: "s1", text: "use pnpm never npm" },
+          { ts: "2026-07-01T00:01:00Z", project: "p", role: "user", sessionId: "s1", text: "always use pnpm never npm" },
+          { ts: "2026-07-02T00:00:00Z", project: "p", role: "user", sessionId: "s2", text: "use pnpm not npm please" },
+        ],
+        attentionFn: async () => null,
+        log: message => logs.push(message),
+      },
+    );
+    const snapshot = JSON.parse(await readFile(auditCachePath(projectDir, home), "utf8"));
+    expect(snapshot.tallies[0]).toMatchObject({ restatements: 3, violations: 0 });
+    expect(logs.some(message => message.startsWith("instruction audit:"))).toBe(true);
+    await expect(readFile(join(projectDir, ".gradient", "audit.json"), "utf8")).rejects.toThrow();
+  });
+
+  it("does not create an audit cache or log when the project has no instruction sources", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-audit-empty-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const logs: string[] = [];
+    await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        backend: null,
+        config: {},
+        collectFn: async () => ["f1"],
+        parseFn: async () => [],
+        attentionFn: async () => null,
+        log: message => logs.push(message),
+      },
+    );
+    await expect(readFile(auditCachePath(projectDir, home), "utf8")).rejects.toThrow();
+    expect(logs.some(message => message.startsWith("instruction audit:"))).toBe(false);
+  });
+
+  it("does not apply project CLAUDE instructions to cross-project scans", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-audit-all-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await writeFile(join(projectDir, "CLAUDE.md"), "- Always use pnpm, never npm.\n");
+    const logs: string[] = [];
+    await scan(
+      { scope: "all", projectPath: projectDir, home },
+      {
+        backend: null,
+        config: {},
+        collectFn: async () => ["f1"],
+        parseFn: async () => [
+          { ts: "t", project: "other", role: "user", sessionId: "s1", text: "use pnpm never npm" },
+          { ts: "t", project: "other", role: "user", sessionId: "s2", text: "use pnpm never npm" },
+          { ts: "t", project: "other", role: "user", sessionId: "s3", text: "use pnpm never npm" },
+        ],
+        attentionFn: async () => null,
+        log: message => logs.push(message),
+      },
+    );
+    expect(logs.some(message => message.startsWith("instruction audit:"))).toBe(false);
+  });
+
+  it("counts corrections only when the real transcript shows preceding assistant activity", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-audit-context-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const transcript = join(projectDir, "corrections.jsonl");
+    await writeFile(join(projectDir, "CLAUDE.md"), "- Never edit generated files.\n");
+    const lines: string[] = [];
+    for (let index = 1; index <= 3; index++) {
+      const sessionId = `s${index}`;
+      lines.push(
+        JSON.stringify({
+          type: "assistant",
+          sessionId,
+          timestamp: `2026-07-0${index}T00:00:00Z`,
+          message: {
+            role: "assistant",
+            content: [{ type: "tool_use", id: `edit-${index}`, name: "Edit", input: { file_path: "/p/generated.ts" } }],
+          },
+        }),
+        JSON.stringify({
+          type: "user",
+          sessionId,
+          cwd: "/p/project",
+          timestamp: `2026-07-0${index}T00:01:00Z`,
+          message: { role: "user", content: "no, never edit generated files" },
+        }),
+      );
+    }
+    await writeFile(transcript, `${lines.join("\n")}\n`);
+    let seen: Array<{ kind?: string; hint?: string }> = [];
+    await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        config: {},
+        collectFn: async () => [transcript],
+        backend: {
+          name: "recording",
+          available: async () => true,
+          complete: async ({ prompt }: { prompt: string }) => {
+            seen = JSON.parse(prompt);
+            return JSON.stringify({ suggestions: [] });
+          },
+        },
+        attentionFn: async () => null,
+        gitLogFn: async () => "",
+      },
+    );
+    expect(seen).toEqual([expect.objectContaining({
+      kind: "instruction",
+      hint: expect.stringContaining("correction violating instruction"),
+    })]);
+    const snapshot = JSON.parse(await readFile(auditCachePath(projectDir, home), "utf8"));
+    expect(snapshot.tallies[0]).toMatchObject({ restatements: 0, violations: 3 });
+  });
+
   it("mines Claude tool events into candidates and reports extraction drops", async () => {
     const projectDir = await mkdtemp(join(tmpdir(), "grad-tools-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));

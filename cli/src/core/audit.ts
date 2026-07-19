@@ -1,5 +1,10 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { projectCacheDir } from "../config.js";
 import { cluster, normalize, similarity } from "./cluster.js";
 import type { InstructionLine } from "./instructions.js";
+import { safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
+import { stripUnsafeControls } from "./security.js";
 import type { Assistant, Candidate, Turn } from "./types.js";
 
 export const AUDIT = {
@@ -19,6 +24,80 @@ export interface InstructionTally {
   restatements: number;
   violations: number;
   lastSeen: string;
+}
+
+export interface InstructionAuditSnapshot {
+  generatedAt: string;
+  tallies: InstructionTally[];
+}
+
+const AUDIT_CACHE_MAX_BYTES = 1_000_000;
+const AUDIT_TALLY_CAP = 2_000;
+
+export function auditCachePath(projectDir: string, home?: string): string {
+  return join(projectCacheDir(projectDir, home), "instruction-audit.json");
+}
+
+function validTally(value: unknown): value is InstructionTally {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const tally = value as Record<string, unknown>;
+  return typeof tally.file === "string" && tally.file.length <= 4_096 && !/[\r\n\t]/.test(tally.file) && stripUnsafeControls(tally.file) === tally.file &&
+    (tally.source === "project" || tally.source === "project-local" || tally.source === "rule" || tally.source === "user") &&
+    typeof tally.text === "string" && tally.text.length <= 200 && !/[\r\n\t]/.test(tally.text) && stripUnsafeControls(tally.text) === tally.text &&
+    Number.isSafeInteger(tally.restatements) && (tally.restatements as number) >= 0 && (tally.restatements as number) <= 1_000_000_000 &&
+    Number.isSafeInteger(tally.violations) && (tally.violations as number) >= 0 && (tally.violations as number) <= 1_000_000_000 &&
+    typeof tally.lastSeen === "string" && tally.lastSeen.length <= 100 && !/[\r\n\t]/.test(tally.lastSeen) && stripUnsafeControls(tally.lastSeen) === tally.lastSeen;
+}
+
+function validatedSnapshot(value: unknown): InstructionAuditSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("instruction audit must be an object");
+  const snapshot = value as Record<string, unknown>;
+  if (typeof snapshot.generatedAt !== "string" || snapshot.generatedAt.length > 100 ||
+    !Number.isFinite(Date.parse(snapshot.generatedAt))) {
+    throw new Error("instruction audit has an invalid timestamp");
+  }
+  if (!Array.isArray(snapshot.tallies) || snapshot.tallies.length > AUDIT_TALLY_CAP ||
+    snapshot.tallies.some(tally => !validTally(tally))) {
+    throw new Error("instruction audit has invalid tallies");
+  }
+  return snapshot as unknown as InstructionAuditSnapshot;
+}
+
+export async function saveInstructionAudit(
+  projectDir: string,
+  tallies: InstructionTally[],
+  home?: string,
+): Promise<string> {
+  const userHome = home ?? homedir();
+  const snapshot = validatedSnapshot({ generatedAt: new Date().toISOString(), tallies });
+  const path = auditCachePath(projectDir, userHome);
+  await safeWriteFile(userHome, path, `${JSON.stringify(snapshot, null, 2)}\n`, { mode: 0o600 });
+  return path;
+}
+
+export async function loadInstructionAudit(
+  projectDir: string,
+  home?: string,
+): Promise<InstructionAuditSnapshot | null> {
+  const userHome = home ?? homedir();
+  try {
+    return validatedSnapshot(JSON.parse(await safeReadFile(
+      userHome,
+      auditCachePath(projectDir, userHome),
+      { maxBytes: AUDIT_CACHE_MAX_BYTES },
+    )));
+  } catch {
+    return null;
+  }
+}
+
+export async function clearInstructionAudit(projectDir: string, home?: string): Promise<void> {
+  const userHome = home ?? homedir();
+  try {
+    await safeUnlink(userHome, auditCachePath(projectDir, userHome));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }
 
 export interface AuditOptions {

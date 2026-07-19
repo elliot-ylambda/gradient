@@ -2,7 +2,13 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseLines, parseFile, parseDialogueLines, parseToolEventLines } from "./parse.js";
+import {
+  parseAssistantFollowedUserLines,
+  parseDialogueLines,
+  parseFile,
+  parseLines,
+  parseToolEventLines,
+} from "./parse.js";
 
 const userString = JSON.stringify({
   type: "user", isSidechain: false, sessionId: "s1", cwd: "/p/x",
@@ -226,5 +232,53 @@ describe("parseToolEventLines", () => {
     ]);
     expect(events[0].errorHead).not.toContain("sk-ant-");
     expect(events[0].errorHead).toContain("[REDACTED]");
+  });
+});
+
+describe("parseAssistantFollowedUserLines", () => {
+  it("keeps human prompts only after same-session assistant activity", () => {
+    const lines = [
+      JSON.stringify({
+        type: "user", sessionId: "s1", cwd: "/p/x", timestamp: "t0",
+        message: { role: "user", content: "first prompt" },
+      }),
+      JSON.stringify({
+        type: "assistant", sessionId: "s1", timestamp: "t1",
+        message: { role: "assistant", content: [{ type: "tool_use", id: "tool-1", name: "Edit" }] },
+      }),
+      JSON.stringify({
+        type: "user", sessionId: "s1", timestamp: "t2",
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-1", content: "ok" }] },
+      }),
+      JSON.stringify({
+        type: "user", sessionId: "s2", cwd: "/p/x", timestamp: "t3",
+        message: { role: "user", content: "different session" },
+      }),
+      JSON.stringify({
+        type: "user", sessionId: "s1", cwd: "/p/x", timestamp: "t4",
+        message: { role: "user", content: "don't edit generated files" },
+      }),
+      JSON.stringify({
+        type: "user", sessionId: "s1", cwd: "/p/x", timestamp: "t5",
+        message: { role: "user", content: "second consecutive prompt" },
+      }),
+    ];
+    expect(parseAssistantFollowedUserLines(lines).map(turn => turn.text)).toEqual([
+      "don't edit generated files",
+    ]);
+  });
+
+  it("ignores sidechain assistant activity", () => {
+    const lines = [
+      JSON.stringify({
+        type: "assistant", isSidechain: true, sessionId: "s1",
+        message: { role: "assistant", content: "agent activity" },
+      }),
+      JSON.stringify({
+        type: "user", sessionId: "s1", cwd: "/p/x", timestamp: "t1",
+        message: { role: "user", content: "no, use pnpm" },
+      }),
+    ];
+    expect(parseAssistantFollowedUserLines(lines)).toEqual([]);
   });
 });

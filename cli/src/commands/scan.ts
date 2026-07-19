@@ -1,9 +1,11 @@
+import { homedir } from "node:os";
 import type { Candidate, Config, Suggestion, ToolEvent, Turn } from "../core/types.js";
 import { collect } from "../core/collect.js";
 import { collectCodex } from "../core/collect-codex.js";
 import {
   parseDialogueFile,
   parseFile,
+  parseAssistantFollowedUserFile,
   parseToolEventsFile,
   type DialogueTurn,
 } from "../core/parse.js";
@@ -29,6 +31,8 @@ import { detectPasteCandidates, extractPasteKey } from "../core/paste.js";
 import { ANSWER_MAX_PAIRS, extractAnswerPairs, mineAnswerCandidates } from "../core/answers.js";
 import { attentionSuggestion, mineAttention } from "../core/attention.js";
 import { failureLoops, rituals } from "../core/toolmine.js";
+import { loadInstructions } from "../core/instructions.js";
+import { audit, clearInstructionAudit, CORRECTION_RE, saveInstructionAudit } from "../core/audit.js";
 
 const MAX_MINED_PROMPT_CHARS = 4_000;
 export const MAX_TOOL_EVENTS = 20_000;
@@ -50,6 +54,7 @@ export interface ScanDeps {
   collectCodexFn?: (options: ScanOptions) => Promise<string[]>;
   parseFn?: (path: string) => Promise<Turn[]>;
   parseToolEventsFn?: (path: string) => Promise<{ events: ToolEvent[]; dropped: number }>;
+  parseCorrectionContextFn?: (path: string) => Promise<Turn[]>;
   parseCodexFn?: (path: string) => Promise<Turn[]>;
   parseDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
   parseCodexDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
@@ -99,10 +104,19 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const ignore = compileIgnorePatterns(config.ignorePatterns);
   const answerPairs = [] as ReturnType<typeof extractAnswerPairs>;
   const pairCap = Math.min(ANSWER_MAX_PAIRS, max);
+  const instructions = opts.scope === "project"
+    ? await loadInstructions(projectDir, opts.home ?? homedir())
+    : [];
+  if (opts.scope === "project" && instructions.length === 0) {
+    await clearInstructionAudit(projectDir, opts.home);
+  }
   let turns: Turn[] = [];
   let toolEvents: ToolEvent[] = [];
   let toolEventsDropped = 0;
+  let confirmedCorrections: Turn[] = [];
   const parseToolEventsFn = deps.parseToolEventsFn ?? (deps.parseFn ? undefined : parseToolEventsFile);
+  const parseCorrectionContextFn = deps.parseCorrectionContextFn ??
+    (deps.parseFn ? undefined : parseAssistantFollowedUserFile);
   const userTurnCounts = new Map<string, number>();
   for (const file of claudeFiles) {
     const parsed = await parseFn(file);
@@ -116,6 +130,12 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
         toolEvents.sort((left, right) => left.ts < right.ts ? 1 : left.ts > right.ts ? -1 : 0);
         toolEventsDropped += toolEvents.length - MAX_TOOL_EVENTS;
         toolEvents = toolEvents.slice(0, MAX_TOOL_EVENTS);
+      }
+    }
+    if (instructions.length > 0 && parseCorrectionContextFn) {
+      confirmedCorrections.push(...scoped(await parseCorrectionContextFn(file)));
+      if (confirmedCorrections.length > MAX_PROMPTS_HARD_CAP) {
+        confirmedCorrections = capByRecency(confirmedCorrections, MAX_PROMPTS_HARD_CAP).kept;
       }
     }
   }
@@ -160,11 +180,33 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const { kept, dropped } = capByRecency(prompts, max);
   if (dropped > 0) log(`capped to most recent ${max} prompts; ${dropped} older dropped (raise with --max-prompts)`);
 
+  let auditCandidates: Candidate[] = [];
+  if (instructions.length > 0) {
+    const claudePrompts = kept.filter(turn => (turn.assistant ?? "claude-code") === "claude-code");
+    const result = audit(claudePrompts, instructions, { confirmedCorrections });
+    const restatementFindings = result.candidates.filter(candidate =>
+      candidate.hint?.startsWith("restated instruction")).length;
+    const correctionFindings = result.candidates.length - restatementFindings;
+    log(
+      `instruction audit: ${instructions.length} instructions · ` +
+      `${restatementFindings} restatement findings · ${correctionFindings} correction findings`,
+    );
+    await saveInstructionAudit(projectDir, result.tallies, opts.home);
+    auditCandidates = result.candidates;
+    const auditCandidateCap = Math.ceil(window / 3);
+    if (auditCandidates.length > auditCandidateCap) {
+      log(`audit candidates capped to ${auditCandidateCap}; ${auditCandidates.length - auditCandidateCap} dropped`);
+      auditCandidates = auditCandidates.slice(0, auditCandidateCap);
+    }
+  }
+
   const detectedPastes = detectPasteCandidates(kept);
   const pasteFloods = detectedPastes.filter(hasTemplateFloodSupport);
   const pastes = detectedPastes.filter(candidate => !hasTemplateFloodSupport(candidate));
   const clusterInput = kept
-    .filter(turn => !extractPasteKey(turn.text ?? ""))
+    .filter(turn =>
+      !extractPasteKey(turn.text ?? "") &&
+      !(instructions.length > 0 && CORRECTION_RE.test(turn.text ?? "")))
     .map(turn => ({ ...turn, text: turn.text?.slice(0, MAX_MINED_PROMPT_CHARS) }));
   const clustered = cluster(clusterInput);
   const floods = clustered.filter(isTemplateFlood);
@@ -235,7 +277,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
       toolCandidates = toolCandidates.slice(0, toolCandidateCap);
     }
   }
-  const allCandidates = [...nonSequenceCandidates, ...sequenceCandidates, ...toolCandidates];
+  const allCandidates = [...nonSequenceCandidates, ...sequenceCandidates, ...toolCandidates, ...auditCandidates];
   log(`mining → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);
 
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });

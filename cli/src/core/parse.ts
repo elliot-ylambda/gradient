@@ -137,6 +137,39 @@ export async function parseFile(path: string): Promise<Turn[]> {
   return parseLines((await readTranscriptTail(path)).split(/\r?\n/));
 }
 
+/** Return genuine user prompts that followed assistant activity in the same
+ * session. Tool-result wrapper records do not clear the activity marker. */
+export function parseAssistantFollowedUserLines(lines: string[]): Turn[] {
+  const out: Turn[] = [];
+  const assistantActive = new Map<string, boolean>();
+  for (const line of lines.slice(-MAX_PARSED_TURNS_PER_FILE * 4)) {
+    if (!line.trim()) continue;
+    let raw: Raw;
+    try {
+      raw = JSON.parse(line) as Raw;
+    } catch {
+      continue;
+    }
+    if (raw.isSidechain) continue;
+    const sessionId = (raw.sessionId ?? "?").slice(0, 200);
+    if (raw.type === "assistant") {
+      assistantActive.set(sessionId, true);
+      continue;
+    }
+    if (raw.type !== "user") continue;
+    const turn = parseOne(raw);
+    if (!turn) continue;
+    if (assistantActive.get(sessionId)) out.push(turn);
+    assistantActive.set(sessionId, false);
+    if (out.length > MAX_PARSED_TURNS_PER_FILE) out.shift();
+  }
+  return out;
+}
+
+export async function parseAssistantFollowedUserFile(path: string): Promise<Turn[]> {
+  return parseAssistantFollowedUserLines((await readTranscriptTail(path)).split(/\r?\n/));
+}
+
 const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 const PER_SESSION_EVENT_CAP = 400;
 const ERROR_HEAD_MAX = 120;
