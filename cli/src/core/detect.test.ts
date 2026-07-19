@@ -280,8 +280,8 @@ describe("detect", () => {
   });
 
   it("merges exact IDs, summing counts and unioning sessions", async () => {
-    const a: Candidate = { kind: "unknown", signature: "lgtm", examples: ["lgtm"], count: 5, sessions: 2, sessionIds: ["s1", "s2"], confidence: "high" };
-    const b: Candidate = { kind: "unknown", signature: "looks good", examples: ["looks good"], count: 3, sessions: 2, sessionIds: ["s2", "s3"], confidence: "inferred" };
+    const a: Candidate = { kind: "unknown", signature: "lgtm", examples: ["lgtm"], count: 5, sessions: 2, sessionIds: ["s1", "s2"], occurrences: [], memberSignatures: ["lgtm"], confidence: "high" };
+    const b: Candidate = { kind: "unknown", signature: "looks good", examples: ["looks good"], count: 3, sessions: 2, sessionIds: ["s2", "s3"], occurrences: [], memberSignatures: ["looks good"], confidence: "inferred" };
     const llm = { name: "fake", available: async () => true, complete: async () => JSON.stringify({ suggestions: [{
       sourceIds: [candidateRef(a, 0), candidateRef(b, 1)],
       name: "approve", confidence: "high", payload: { type: "command", commandName: "approve" },
@@ -389,7 +389,7 @@ describe("detect", () => {
 it("briefs the model on sequence candidates and forwards their kind", () => {
   const seq = { kind: "sequence" as const, signature: "review the spec → write the plan",
     examples: ["review the spec ⏎ write the plan"], count: 5, sessions: 3,
-    sessionIds: ["a", "b", "c"], confidence: "high" as const };
+    sessionIds: ["a", "b", "c"], occurrences: [], memberSignatures: [], confidence: "high" as const };
   const { system, prompt } = buildDetectPrompt([seq]);
   expect(system).toContain("sequence");
   expect(system).toContain("numbered");
@@ -398,7 +398,7 @@ it("briefs the model on sequence candidates and forwards their kind", () => {
 
 it("omits kind for unknown candidates (prompt stays unchanged for them)", () => {
   const c = { kind: "unknown" as const, signature: "lgtm", examples: ["lgtm"],
-    count: 5, sessions: 3, sessionIds: ["a"], confidence: "high" as const };
+    count: 5, sessions: 3, sessionIds: ["a"], occurrences: [], memberSignatures: ["lgtm"], confidence: "high" as const };
   expect(JSON.parse(buildDetectPrompt([c]).prompt)[0].kind).toBeUndefined();
 });
 

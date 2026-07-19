@@ -202,7 +202,9 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     assistants: [...new Set(chain.sessionIds.map(sessionId => assistantBySession.get(sessionId) ?? "claude-code"))],
   }));
   const allCandidates = [...nonSequenceCandidates, ...sequenceCandidates];
-  annotateTemporal(clusterInput, allCandidates);
+  // Runs are computed over the full kept stream, not clusterInput: a paste turn
+  // sitting between two cluster members must break the run like any non-member.
+  annotateTemporal(kept, allCandidates);
   log(`mining → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);
 
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });

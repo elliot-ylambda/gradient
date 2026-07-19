@@ -55,7 +55,9 @@ export function annotateTemporal(prompts: Turn[], candidates: Candidate[]): void
       maxRunLength: maxRun[i],
       runSessions: runSessions[i].size,
       medianGapMinutes: Math.round(median(gaps)),
-      distinctDays: new Set(c.occurrences.map(o => o.ts.slice(0, 10))).size,
+      distinctDays: new Set(
+        c.occurrences.filter(o => Number.isFinite(Date.parse(o.ts))).map(o => o.ts.slice(0, 10)),
+      ).size,
       spanDays: spanDays(c.occurrences),
     };
   });

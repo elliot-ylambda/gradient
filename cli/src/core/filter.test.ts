@@ -148,7 +148,7 @@ describe("classifyPrompts / filterPrompts", () => {
 
 const cand = (over: Partial<Candidate>): Candidate => ({
   kind: "unknown", signature: "x".repeat(300), examples: [], count: 30,
-  sessions: 30, sessionIds: [], confidence: "high", ...over,
+  sessions: 30, sessionIds: [], occurrences: [], memberSignatures: [], confidence: "high", ...over,
 });
 
 describe("isTemplateFlood", () => {
