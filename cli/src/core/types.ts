@@ -47,7 +47,7 @@ export interface ToolEvent {
 
 /** Pre-LLM grouping produced by cluster.ts (no model involved). */
 export interface Candidate {
-  kind: ArtifactType | "unknown" | "paste" | "answer" | "sequence" | "toolfail" | "ritual";
+  kind: ArtifactType | "unknown" | "paste" | "answer" | "sequence" | "toolfail" | "ritual" | "instruction";
   signature: string;     // normalized key the cluster grouped on
   examples: string[];    // representative raw prompts
   count: number;
@@ -55,6 +55,8 @@ export interface Candidate {
   sessionIds: string[];  // distinct session ids (for exact union when clusters merge)
   confidence: Confidence;
   assistants?: Assistant[];
+  /** Redacted routing context for specialized detect candidates. */
+  hint?: string;
 }
 
 /** Semantic content of a suggestion; emit/* formats it into an artifact. */
