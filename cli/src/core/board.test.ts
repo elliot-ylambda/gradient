@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { boardStateDir, locateRepo, resolveBoardRoot } from "./board.js";
+import { boardStateDir, extractEditedFiles, locateRepo, resolveBoardRoot } from "./board.js";
 import { projectCacheDir } from "../config.js";
 
 const execFileP = promisify(execFile);
@@ -44,5 +44,32 @@ describe("boardStateDir", () => {
   it("nests under the board root's project cache dir", () => {
     expect(boardStateDir("/repo/a", "/home/u"))
       .toBe(join(projectCacheDir("/repo/a", "/home/u"), "board"));
+  });
+});
+
+function toolLine(name: string, file_path: string): string {
+  return JSON.stringify({
+    type: "assistant",
+    message: { role: "assistant", content: [{ type: "tool_use", name, input: { file_path } }] },
+  });
+}
+
+describe("extractEditedFiles", () => {
+  it("collects Edit/Write paths, dedupes, caps at 5, and relativizes to the board root", () => {
+    const lines = [
+      JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }),
+      toolLine("Read", "/repo/ignored.ts"),
+      toolLine("Edit", "/repo/a.ts"),
+      toolLine("Edit", "/repo/a.ts"),
+      ...["b", "c", "d", "e", "f"].map(n => toolLine("Write", `/repo/${n}.ts`)),
+      "not json",
+    ];
+    expect(extractEditedFiles(lines, "/repo"))
+      .toEqual(["b.ts", "c.ts", "d.ts", "e.ts", "f.ts"]);
+  });
+
+  it("keeps paths outside the board root absolute and redacts secrets", () => {
+    const lines = [toolLine("Edit", "/elsewhere/x.ts")];
+    expect(extractEditedFiles(lines, "/repo")).toEqual(["/elsewhere/x.ts"]);
   });
 });
