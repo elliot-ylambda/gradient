@@ -52,6 +52,13 @@ describe("candidateLeverage", () => {
     expect(short).toBe(long);
   });
 
+  it("maps correction candidates to the flat rule cost regardless of example length", () => {
+    const short = candidateLeverage(anchor({ kind: "correction", examples: ["a"] }));
+    const long = candidateLeverage(anchor({ kind: "correction", examples: ["a".repeat(500)] }));
+    expect(short).toBe(long);
+    expect(short).toBe(candidateLeverage(anchor({ kind: "answer", examples: ["a"] })));
+  });
+
   it("maps every non-answer kind to the command (typing-cost) formula", () => {
     const unknown = candidateLeverage(anchor({ kind: "unknown" }));
     const paste = candidateLeverage(anchor({ kind: "paste" }));

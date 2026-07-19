@@ -87,6 +87,43 @@ describe("scan", () => {
     expect(loopSuggestion).toBeDefined();
   });
 
+  // Regression: a "don't add comments" correction cluster (4x, 3 sessions) is
+  // reclassified as kind "correction" by markCorrections inside scan() — the
+  // LLM sees kind "correction" on the wire and, naming it a rule, gets back a
+  // correction-shaped rule suggestion (never a plain command).
+  it("mines a 'don't add comments' correction cluster into a rule suggestion via scan()", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const at = (sessionId: string, times: string[]) =>
+      times.map(ts => ({ ts, project: "p", role: "user" as const, text: "don't add comments", sessionId }));
+    const turns = [
+      ...at("s1", ["2026-06-01T10:00:00Z"]),
+      ...at("s2", ["2026-06-02T10:00:00Z"]),
+      ...at("s3", ["2026-06-03T10:00:00Z", "2026-06-03T11:00:00Z"]),
+    ];
+    const backend = {
+      name: "f",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => {
+        const [first] = JSON.parse(prompt);
+        expect(first.kind).toBe("correction");
+        return JSON.stringify({ suggestions: [{
+          sourceIds: [first.id], name: "no-comments", confidence: "inferred",
+          payload: { type: "rule", ruleName: "no-comments" },
+        }] });
+      },
+    };
+    const suggestions = await scan(
+      { scope: "all", projectPath: process.cwd(), home },
+      { backend, collectFn: async () => ["f"], parseFn: async () => ({ turns, events: [] }) },
+    );
+    const rule = suggestions.find(s => s.payload.type === "rule");
+    expect(rule).toBeDefined();
+    if (rule?.payload.type === "rule") {
+      expect(rule.payload.text).toContain("Repeated correction observed");
+      expect(rule.payload.target).toBe("project");
+    }
+  });
+
   // Regression: 12 /compact events across 4 sessions produce the PreCompact hook
   // suggestion in degraded (backend null) mode — hookFromEvents must be appended
   // post-detect even when there's no LLM at all.

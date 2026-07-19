@@ -54,7 +54,7 @@ export interface Turn {
 
 /** Pre-LLM grouping produced by cluster.ts (no model involved). */
 export interface Candidate {
-  kind: ArtifactType | "unknown" | "paste" | "answer" | "sequence";
+  kind: ArtifactType | "unknown" | "paste" | "answer" | "sequence" | "correction";
   signature: string;     // normalized key the cluster grouped on
   examples: string[];    // representative raw prompts
   count: number;

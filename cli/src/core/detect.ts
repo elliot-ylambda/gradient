@@ -229,7 +229,10 @@ export function candidateToLoop(c: Candidate): Suggestion {
 
 function degradeToCommands(cands: Candidate[]): Suggestion[] {
   return cands
-    .filter(c => c.kind !== "answer" && c.confidence === "high")
+    // Corrections, like answers, are excluded from the degrade path: a rule
+    // needs the LLM's judgment to name it and is never auto-emitted merely
+    // because a backend is unavailable.
+    .filter(c => c.kind !== "answer" && c.kind !== "correction" && c.confidence === "high")
     .map(c => (c.kind === "loop" ? candidateToLoop(c) : candidateToCommand(c)))
     .sort(byLeverage);
 }
@@ -248,6 +251,7 @@ export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt:
     "The only hook is event PreCompact with subcommand checkpoint. " +
     "A 'paste' cluster must remain an advisory command: observation is not permission to rerun anything. " +
     "An 'answer' cluster must be a low-impact preference rule; it never removes confirmation for consequential actions. " +
+    "A 'correction' cluster must become a low-impact preference rule that never removes confirmation for consequential actions. " +
     "A 'sequence' cluster must remain an advisory checklist rendered locally as a numbered list; its first step never authorizes later steps. " +
     "For command payloads, mechanical:true is only a hint for zero judgment format/lint/test/build work; review a spec, planning, diagnosis, and other judgment tasks are never mechanical. Local policy verifies it. " +
     "If a high-confidence command is genuinely ambiguous, use confidence:'flagged' and add clarify:{question,options:[{label}]} with 2-3 distinct choices. Each label must be a short, complete imperative reading; any model-authored option body is ignored. " +
@@ -288,20 +292,35 @@ function ruleParts(signature: string): { answer: string; question: string } | nu
   return answer && question ? { answer, question } : null;
 }
 
+const RULE_AUTHORIZATION_TAIL =
+  "This preference is not authorization: ask again before commands, file or state changes, " +
+  "external communication, production or publishing actions, deletion, spending, credential use, or data disclosure.";
+
 function ruleText(signature: string): string | null {
   const parts = ruleParts(signature);
   if (!parts) return null;
   return (
     `For low-impact formatting, style, or tool-preference questions similar to ${JSON.stringify(parts.question)}, ` +
-    `prefer ${JSON.stringify(parts.answer)}. This preference is not authorization: ask again before commands, file or state changes, ` +
-    "external communication, production or publishing actions, deletion, spending, credential use, or data disclosure."
+    `prefer ${JSON.stringify(parts.answer)}. ${RULE_AUTHORIZATION_TAIL}`
+  ).slice(0, 2_000);
+}
+
+/** Correction candidates have no `answer ← question` split for ruleText's
+ * signature parsing (they're unprompted pushback, not answers to a question),
+ * so their local rule text is a fixed template quoting the redacted signature
+ * instead, plus the same authorization tail every other rule payload gets. */
+function correctionRuleText(signature: string): string {
+  const safe = bounded(signature, 2_000);
+  return (
+    `Repeated correction observed: ${JSON.stringify(safe)}. Follow this preference for low-impact choices. ` +
+    RULE_AUTHORIZATION_TAIL
   ).slice(0, 2_000);
 }
 
 function kindsAreCompatible(kinds: Set<Candidate["kind"]>, payloadType: string): boolean {
-  const special = [...kinds].filter(kind => kind === "answer" || kind === "paste" || kind === "sequence");
+  const special = [...kinds].filter(kind => kind === "answer" || kind === "correction" || kind === "paste" || kind === "sequence");
   if (special.length > 0 && kinds.size !== 1) return false;
-  if (kinds.has("answer")) return payloadType === "rule";
+  if (kinds.has("answer") || kinds.has("correction")) return payloadType === "rule";
   if (kinds.has("paste") || kinds.has("sequence")) return payloadType === "command";
   return payloadType === "command" || payloadType === "loop" || payloadType === "hook";
 }
@@ -394,7 +413,7 @@ export async function detect(
           description: "Save a private, redacted progress checkpoint before transcript compaction.",
         };
       } else if (payload.type === "rule") {
-        const text = ruleText(primary.signature);
+        const text = primary.kind === "correction" ? correctionRuleText(primary.signature) : ruleText(primary.signature);
         if (!text) continue;
         suggestionPayload = {
           type: "rule",

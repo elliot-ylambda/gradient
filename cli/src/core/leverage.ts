@@ -35,15 +35,16 @@ function meanLength(strings: string[]): number {
 /**
  * Ranks a pre-classification Candidate by estimated leverage, for ordering the
  * detect window before the LLM (or the degrade path) assigns a payload type.
- * Only "answer" candidates are rule-shaped (flat correction cost); every other
- * kind (unknown/paste/sequence/etc.) uses the typing-cost formula, matching
- * degradeToCommands's own answer/non-answer split in detect.ts.
+ * Only "answer" and "correction" candidates are rule-shaped (flat correction
+ * cost); every other kind (unknown/paste/sequence/etc.) uses the typing-cost
+ * formula, matching degradeToCommands's own answer/correction/non-answer
+ * split in detect.ts.
  */
 export function candidateLeverage(c: Candidate): number {
   return estMinutesSavedPerMonth({
     count: c.count,
     chars: meanLength(c.examples),
     spanDays: spanDays(c.occurrences),
-    kind: c.kind === "answer" ? "rule" : "command",
+    kind: c.kind === "answer" || c.kind === "correction" ? "rule" : "command",
   });
 }

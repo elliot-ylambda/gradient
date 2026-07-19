@@ -13,6 +13,7 @@ import { DEFAULT_DETECT_WINDOW, DEFAULT_MAX_PROMPTS } from "../core/scope.js";
 import { cluster, normalize } from "../core/cluster.js";
 import { annotateTemporal } from "../core/temporal.js";
 import { hookFromEvents, markLoops } from "../core/classify.js";
+import { markCorrections } from "../core/corrections.js";
 import { mineSequences, SEQ_MAX_BIGRAMS } from "../core/sequence.js";
 import { boundedDetectLimit, detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
@@ -222,6 +223,12 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   // involved; must run before detect so a marked loop reaches both the
   // degrade path and the model's view of candidate kind.
   markLoops(allCandidates);
+  // Deterministic reclassification of unprompted user pushback ("no, use
+  // pnpm", "don't add comments") into kind "correction" — also no LLM
+  // involved. Runs after markLoops so a candidate already reclassified as a
+  // loop is left untouched (loops win ties by order); only kind-"unknown"
+  // candidates are eligible.
+  markCorrections(allCandidates);
   log(`mining → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);
 
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });
