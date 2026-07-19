@@ -141,8 +141,11 @@ describe("classifyPrompt", () => {
   it("compileIgnorePatterns skips invalid regexes", () => {
     expect(compileIgnorePatterns(["[unclosed", "^ok$"])).toHaveLength(1);
   });
-  it("rejects backtracking-prone user regexes and caps their count", () => {
-    expect(compileIgnorePatterns(["^(a+)+$", "(?:a|aa)+$", "^safe.*prefix$"])).toHaveLength(1);
+  it("rejects backtracking-capable regex syntax and caps pattern count", () => {
+    // These examples are themselves linear. They exercise the same forbidden
+    // grouping, alternation, and general-quantifier syntax without checking a
+    // deliberately catastrophic expression into the test suite.
+    expect(compileIgnorePatterns(["^a+$", "^(?:a|b)$", "^safe.*prefix$"])).toHaveLength(1);
     expect(compileIgnorePatterns(Array.from({ length: 30 }, (_, i) => `^safe-${i}$`))).toHaveLength(20);
   });
 });
