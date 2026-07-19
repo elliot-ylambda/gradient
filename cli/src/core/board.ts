@@ -4,6 +4,7 @@ import { lstat, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { projectCacheDir } from "../config.js";
+import { collectCodex, readCodexSessionMeta } from "./collect-codex.js";
 import { redact } from "./security.js";
 import { readTranscriptLines } from "./tail.js";
 
@@ -206,4 +207,42 @@ async function readClaudeSession(
     ageMs,
     editing: extractEditedFiles(lines, boardRoot),
   };
+}
+
+export async function discoverCodexSessions(
+  boardRoot: string,
+  opts: DiscoverOptions = {},
+): Promise<BoardSession[]> {
+  const home = opts.home ?? homedir();
+  const now = opts.now ?? Date.now();
+  let paths: string[] = [];
+  try {
+    paths = await collectCodex({ scope: "all", sinceDays: 1, now, home, onWarn: opts.onWarn });
+  } catch {
+    return [];
+  }
+  const sessions: BoardSession[] = [];
+  for (const path of paths.slice(0, DISCOVERY_FILE_CAP)) {
+    let ageMs: number;
+    try {
+      ageMs = now - (await lstat(path)).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (ageMs > IDLE_MS) continue;
+    const meta = await readCodexSessionMeta(path);
+    if (!meta || meta.subagent) continue;
+    const location = await locateRepo(meta.cwd);
+    if (!location || location.root !== boardRoot) continue;
+    sessions.push({
+      agent: "codex",
+      sessionId: meta.sessionId,
+      ...(meta.branch ? { branch: meta.branch } : {}),
+      worktree: relative(boardRoot, location.toplevel),
+      liveness: ageMs <= LIVE_MS ? "live" : "idle",
+      ageMs,
+      editing: [],
+    });
+  }
+  return sessions;
 }

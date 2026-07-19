@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import {
   boardStateDir,
   discoverClaudeSessions,
+  discoverCodexSessions,
   extractEditedFiles,
   locateRepo,
   resolveBoardRoot,
@@ -147,5 +148,49 @@ describe("discoverClaudeSessions", () => {
     await chmod(path, 0o600);
     expect(sessions).toEqual([]);
     expect(warnings.some(w => w.includes("skipped unreadable transcript"))).toBe(true);
+  });
+});
+
+async function codexRollout(
+  home: string,
+  name: string,
+  cwd: string,
+  opts: { branch?: string; ageMs?: number } = {},
+): Promise<string> {
+  const dir = join(home, ".codex", "sessions", "2026", "07", "18");
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, `${name}.jsonl`);
+  await writeFile(path, JSON.stringify({
+    type: "session_meta",
+    timestamp: "2026-07-18T00:00:00Z",
+    payload: { id: name, cwd, source: "cli", git: { branch: opts.branch ?? "main" } },
+  }) + "\n");
+  if (opts.ageMs) {
+    const then = new Date(Date.now() - opts.ageMs);
+    await utimes(path, then, then);
+  }
+  return path;
+}
+
+describe("discoverCodexSessions", () => {
+  it("finds live codex sessions in this repo's worktrees and skips other repos and stale files", async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-repo-")));
+    const other = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-other-")));
+    await initRepo(repo);
+    await initRepo(other);
+    const worktree = join(repo, ".worktrees", "cx");
+    await execFileP("git", ["worktree", "add", "-q", worktree, "-b", "cx"], { cwd: repo });
+
+    await codexRollout(home, "cx-live", worktree, { branch: "cx" });
+    await codexRollout(home, "cx-other", other);
+    await codexRollout(home, "cx-stale", repo, { ageMs: 2 * 3_600_000 });
+
+    const sessions = await discoverCodexSessions(repo, { home });
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({
+      agent: "codex", sessionId: "cx-live", branch: "cx",
+      worktree: join(".worktrees", "cx"), liveness: "live", editing: [],
+    });
   });
 });
