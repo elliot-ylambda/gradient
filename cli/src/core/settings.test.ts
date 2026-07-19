@@ -152,3 +152,45 @@ describe("removeHook / hookInstalled (fs round-trip)", () => {
     expect(await hookInstalled(dir, "Stop", "gradient respond")).toBe(false);
   });
 });
+
+describe("matcher-aware command hooks", () => {
+  it("keeps one hook per event, matcher, and command tuple", () => {
+    let settings = mergeHookIntoSettings(
+      {},
+      "PostToolUse",
+      "npm run lint",
+      { matcher: "Edit|Write|NotebookEdit" },
+    );
+    settings = mergeHookIntoSettings(
+      settings,
+      "PostToolUse",
+      "npm run lint",
+      { matcher: "Edit|Write|NotebookEdit" },
+    );
+    expect(settings.hooks.PostToolUse).toHaveLength(1);
+    expect(settings.hooks.PostToolUse[0]).toEqual({
+      matcher: "Edit|Write|NotebookEdit",
+      hooks: [{ type: "command", command: "npm run lint" }],
+    });
+  });
+
+  it("keeps the same command under distinct matchers in distinct groups", () => {
+    let settings = mergeHookIntoSettings({}, "PostToolUse", "npm run lint", { matcher: "Edit" });
+    settings = mergeHookIntoSettings(settings, "PostToolUse", "npm run lint", { matcher: "Write" });
+    expect(settings.hooks.PostToolUse.map((group: { matcher?: string }) => group.matcher)).toEqual([
+      "Edit",
+      "Write",
+    ]);
+  });
+
+  it("removes only the exact matcher when supplied and every matcher for legacy calls", () => {
+    let settings = mergeHookIntoSettings({}, "PostToolUse", "npm run lint", { matcher: "Edit" });
+    settings = mergeHookIntoSettings(settings, "PostToolUse", "npm run lint", { matcher: "Write" });
+    const afterOne = removeHookFromSettings(settings, "PostToolUse", "npm run lint", "Edit");
+    expect(afterOne.hooks.PostToolUse).toEqual([{
+      matcher: "Write",
+      hooks: [{ type: "command", command: "npm run lint" }],
+    }]);
+    expect(removeHookFromSettings(settings, "PostToolUse", "npm run lint").hooks).toBeUndefined();
+  });
+});

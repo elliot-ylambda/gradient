@@ -2,6 +2,7 @@ import type { Assistant, Suggestion } from "../types.js";
 import { emitCommand } from "./command.js";
 import { emitLoop } from "./loop.js";
 import { emitHook } from "./hook.js";
+import type { HookInstall } from "./hook.js";
 import { emitSkill } from "./skill.js";
 import { emitRule } from "./rule.js";
 import { emitCodexSkill } from "./codex-skill.js";
@@ -17,7 +18,7 @@ export type EmitResult =
   | { kind: "command"; path: string; content: string }
   | { kind: "skill"; path: string; content: string; assistant: Assistant }
   | { kind: "loop"; command: string }
-  | { kind: "hook"; settingsPatch: string }
+  | { kind: "hook"; settingsPatch?: string; install?: HookInstall }
   | { kind: "rule"; path: string; content: string }
   | { kind: "rule-print"; text: string };
 

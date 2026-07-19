@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { resolveClarify, review } from "./review.js";
+import { resolveClarify, review, suggestionPreview } from "./review.js";
 import { loadSuggestions, saveSuggestions } from "./apply.js";
 import { isNudge } from "../core/playbook.js";
 import type { Suggestion } from "../core/types.js";
@@ -95,6 +95,31 @@ describe("nudge hint", () => {
       payload: { type: "loop" as const, instruction: "continue until done" },
     };
     expect(isNudge(s)).toBe(true);
+  });
+});
+
+describe("command hook preview", () => {
+  it("shows the exact automatically-run command and matcher before approval", () => {
+    const suggestion: Suggestion = {
+      id: "hook-1",
+      name: "post-edit-lint",
+      title: "Lint after edits",
+      rationale: "Observed ritual",
+      evidence: { count: 18, sessions: 3 },
+      confidence: "inferred",
+      payload: {
+        type: "hook",
+        event: "PostToolUse",
+        matcher: "Edit|Write|NotebookEdit",
+        command: "npm run lint",
+        description: "lint after edits",
+      },
+    };
+    const preview = suggestionPreview(suggestion, "skill");
+    expect(preview).toContain("PostToolUse");
+    expect(preview).toContain("Edit|Write|NotebookEdit");
+    expect(preview).toContain("npm run lint");
+    expect(preview).toContain("runs automatically");
   });
 });
 

@@ -82,6 +82,7 @@ describe("hook payload: subcommand xor command", () => {
     expect(() => validateSuggestion(hook({ command: "a\nb" }))).toThrow(/single line/);
     expect(() => validateSuggestion(hook({ command: "x".repeat(201) }))).toThrow(/single line/);
     expect(() => validateSuggestion(hook({ command: "npm t", matcher: "[unclosed" }))).toThrow(/matcher/);
+    expect(() => validateSuggestion(hook({ command: "npm t", matcher: "x".repeat(501) }))).toThrow(/matcher/);
   });
 });
 

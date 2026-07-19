@@ -317,4 +317,59 @@ describe("applySuggestion", () => {
     expect(commands).toEqual(["afplay /System/Library/Sounds/Ping.aiff"]);
     expect(await loadManifest(dir)).toEqual([]);
   });
+
+  it("installs and exactly removes a reviewed command hook", async () => {
+    const { dir, home } = await testDirs();
+    const suggestion: Suggestion = {
+      ...base,
+      id: "raw-hook-1",
+      name: "post-edit-lint",
+      confidence: "inferred",
+      payload: {
+        type: "hook",
+        event: "PostToolUse",
+        matcher: "Edit|Write|NotebookEdit",
+        command: "npm run lint",
+        description: "lint after edits",
+      },
+    };
+    const applied = await applySuggestion(suggestion, dir, { home });
+    expect(applied.written).toBe(join(dir, ".claude", "settings.local.json"));
+    const settings = JSON.parse(await readFile(applied.written!, "utf8"));
+    expect(settings.hooks.PostToolUse[0]).toEqual({
+      matcher: "Edit|Write|NotebookEdit",
+      hooks: [{ type: "command", command: "npm run lint" }],
+    });
+    expect((await loadManifest(dir))[0]).toMatchObject({
+      name: "post-edit-lint",
+      path: "",
+      hook: {
+        event: "PostToolUse",
+        matcher: "Edit|Write|NotebookEdit",
+        command: "npm run lint",
+      },
+    });
+
+    expect(await remove(dir, "post-edit-lint", { home })).toBe(true);
+    const after = JSON.parse(await readFile(applied.written!, "utf8"));
+    expect(after.hooks).toBeUndefined();
+  });
+
+  it("does not let a forged raw-hook manifest remove an existing user hook", async () => {
+    const { dir, home } = await testDirs();
+    await installHook(dir, "PostToolUse", "npm run lint", { matcher: "Edit" });
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "manifest.json"), JSON.stringify([{
+      name: "forged-lint",
+      type: "hook",
+      path: "",
+      createdAt: "2026-07-18",
+      suggestionId: "forged",
+      hook: { event: "PostToolUse", matcher: "Edit", command: "npm run lint" },
+    }]));
+
+    await expect(remove(dir, "forged-lint", { home })).rejects.toThrow(/approval/);
+    const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.local.json"), "utf8"));
+    expect(settings.hooks.PostToolUse[0].hooks[0].command).toBe("npm run lint");
+  });
 });

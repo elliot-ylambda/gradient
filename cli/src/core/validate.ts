@@ -91,7 +91,9 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
       }
     }
     if (payload.matcher !== undefined) {
-      if (typeof payload.matcher !== "string") throw new Error("hook matcher must be a string");
+      if (!validText(payload.matcher, 500) || /[\r\n\t]/.test(payload.matcher)) {
+        throw new Error("hook matcher must be a safe regex source of ≤ 500 chars");
+      }
       try {
         new RegExp(payload.matcher);
       } catch {

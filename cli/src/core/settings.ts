@@ -44,29 +44,40 @@ export function mergeHookIntoSettings(
 ): Record<string, any> {
   assertSettingsShape(existing, event);
   const out = { ...existing, hooks: { ...(existing.hooks ?? {}) } };
-  const existingGroups: HookGroup[] = Array.isArray(out.hooks[event]) ? out.hooks[event] : [];
-  const groups: HookGroup[] = [];
-  let matchedGroup: HookGroup | undefined;
-  let matchedHook: HookGroup["hooks"][number] | undefined;
+  const groups: HookGroup[] = (Array.isArray(out.hooks[event]) ? out.hooks[event] : [])
+    .map((group: HookGroup) => ({ ...group, hooks: group.hooks.map(hook => ({ ...hook })) }));
 
-  for (const group of existingGroups) {
-    const hooks = group.hooks ?? [];
-    const match = hooks.find(hook => hook.command === command);
-    if (match && !matchedHook) {
-      matchedGroup = group;
-      matchedHook = match;
-    }
-    const remaining = hooks.filter(hook => hook.command !== command);
-    if (remaining.length > 0) groups.push({ ...group, hooks: remaining });
+  const exactGroup = groups.find(group =>
+    group.matcher === opts.matcher && group.hooks.some(hook => hook.command === command));
+  if (exactGroup) {
+    exactGroup.hooks = exactGroup.hooks.map(hook =>
+      hook.command === command && opts.timeout !== undefined
+        ? { ...hook, timeout: opts.timeout }
+        : hook);
+    out.hooks[event] = groups;
+    return out;
   }
 
-  const hook: HookGroup["hooks"][number] = matchedHook
-    ? { ...matchedHook }
-    : { type: "command", command };
+  // Older gradient versions installed several hooks without matchers. When a
+  // later release gives that same hook an explicit matcher, migrate the lone
+  // legacy entry instead of leaving it active for every tool.
+  let hook: HookGroup["hooks"][number] = { type: "command", command };
+  if (opts.matcher !== undefined) {
+    const legacyGroup = groups.find(group =>
+      (group.matcher === undefined || group.hooks.length > 1) &&
+      group.hooks.some(candidate => candidate.command === command));
+    if (legacyGroup) {
+      const existingHook = legacyGroup.hooks.find(candidate => candidate.command === command)!;
+      hook = { ...existingHook };
+      legacyGroup.hooks = legacyGroup.hooks.filter(candidate => candidate.command !== command);
+      if (legacyGroup.hooks.length === 0) groups.splice(groups.indexOf(legacyGroup), 1);
+    }
+  }
   if (opts.timeout !== undefined) hook.timeout = opts.timeout;
-  const group: HookGroup = { ...(matchedGroup ?? {}), hooks: [hook] };
-  if (opts.matcher !== undefined) group.matcher = opts.matcher;
-  groups.push(group);
+  groups.push({
+    ...(opts.matcher !== undefined ? { matcher: opts.matcher } : {}),
+    hooks: [hook],
+  });
   out.hooks[event] = groups;
   return out;
 }
@@ -75,12 +86,15 @@ export function removeHookFromSettings(
   existing: Record<string, any>,
   event: string,
   command: string,
+  matcher?: string,
 ): Record<string, any> {
   assertSettingsShape(existing, event);
   const out = { ...existing, hooks: { ...(existing.hooks ?? {}) } };
   const groups: HookGroup[] = Array.isArray(out.hooks[event]) ? out.hooks[event] : [];
   const kept = groups
-    .map(g => ({ ...g, hooks: (g.hooks ?? []).filter(h => h.command !== command) }))
+    .map(group => matcher !== undefined && group.matcher !== matcher
+      ? { ...group, hooks: [...group.hooks] }
+      : { ...group, hooks: (group.hooks ?? []).filter(hook => hook.command !== command) })
     .filter(g => g.hooks.length > 0);
   if (kept.length > 0) out.hooks[event] = kept;
   else delete out.hooks[event];
@@ -111,7 +125,12 @@ export async function installHook(
 }
 
 /** Remove a hook. Missing file → no-op; unreadable/corrupt → throw (never overwrite what we can't read). */
-export async function removeHook(projectDir: string, event: string, command: string): Promise<string> {
+export async function removeHook(
+  projectDir: string,
+  event: string,
+  command: string,
+  matcher?: string,
+): Promise<string> {
   const path = settingsPath(projectDir);
   assertInside(join(projectDir, ".claude"), path);
   let existing: Record<string, any>;
@@ -121,7 +140,7 @@ export async function removeHook(projectDir: string, event: string, command: str
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return path; // nothing to remove
     throw new Error(`refusing to overwrite unreadable ${path}: ${(e as Error).message}`);
   }
-  const merged = removeHookFromSettings(existing, event, command);
+  const merged = removeHookFromSettings(existing, event, command, matcher);
   await safeWriteFile(projectDir, path, JSON.stringify(merged, null, 2));
   return path;
 }

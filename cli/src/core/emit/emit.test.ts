@@ -73,6 +73,30 @@ describe("emit", () => {
       payload: { type: "hook", event: "EvilEvent", subcommand: "checkpoint", description: "x" } };
     expect(() => emit(s)).toThrow();
   });
+
+  it("emits an install descriptor for a reviewed command hook", () => {
+    const suggestion: Suggestion = {
+      ...base,
+      id: "a1b2c3d4e5",
+      name: "post-edit-lint",
+      confidence: "inferred",
+      payload: {
+        type: "hook",
+        event: "PostToolUse",
+        matcher: "Edit|Write|NotebookEdit",
+        command: "npm run lint",
+        description: "lint after edits",
+      },
+    };
+    expect(emit(suggestion)).toEqual({
+      kind: "hook",
+      install: {
+        event: "PostToolUse",
+        matcher: "Edit|Write|NotebookEdit",
+        command: "npm run lint",
+      },
+    });
+  });
 });
 
 const skillSug = {

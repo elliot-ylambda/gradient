@@ -61,7 +61,11 @@ function renderedText(
       ? rendered.command
       : rendered.kind === "rule-print"
         ? rendered.text
-        : `.claude/settings.local.json (merged on approve)\n${rendered.settingsPatch}`;
+        : rendered.install
+          ? `.claude/settings.local.json (merged on approve)\n` +
+            `installs a ${rendered.install.event} hook (matcher: ${rendered.install.matcher ?? "all tools"})\n` +
+            `that runs automatically: ${rendered.install.command}`
+          : `.claude/settings.local.json (merged on approve)\n${rendered.settingsPatch ?? ""}`;
   return `[${target}]\n${body}`;
 }
 
@@ -154,8 +158,16 @@ export function readlinePrompter(
     process.stdout.write(
       `\n(${index + 1}/${total})  ${terminalSafeLine(suggestion.name)} · ${label} · ` +
       `seen ${suggestion.evidence.count}× · ${suggestion.confidence}\n` +
-      `  ${terminalSafeLine(suggestion.title)}\n\n${stripUnsafeControls(preview)}\n`,
+      `  ${terminalSafeLine(suggestion.title)}\n`,
     );
+    if (suggestion.payload.type === "hook" && suggestion.payload.command) {
+      process.stdout.write(
+        `  installs a ${terminalSafeLine(suggestion.payload.event)} hook ` +
+        `(matcher: ${terminalSafeLine(suggestion.payload.matcher ?? "all tools")})\n` +
+        `  that runs automatically: ${terminalSafeLine(suggestion.payload.command)}\n`,
+      );
+    }
+    process.stdout.write(`\n${stripUnsafeControls(preview)}\n`);
     if (isNudge(suggestion)) {
       process.stdout.write("  tip: this is what autopilot automates → gradient autopilot nudge\n");
     }
