@@ -85,6 +85,34 @@ describe("review", () => {
     const [applied] = await review(dir, async () => "approve", { home });
     expect(applied.writes.map(write => write.target)).toEqual(["claude-code", "codex"]);
   });
+
+  it("persists skip and hides the suggestion on the next review", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await seed(dir, home, ["ship"]);
+    await review(dir, async () => "skip", { home });
+
+    let prompted = false;
+    expect(await review(dir, async () => {
+      prompted = true;
+      return "approve";
+    }, { home })).toEqual([]);
+    expect(prompted).toBe(false);
+  });
+
+  it("explains and then re-prompts the same suggestion", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const item = { ...mk("ship"), examples: ["ship after checks"], evidence: { count: 3, sessions: 2, estMinutesSavedPerMonth: 7 } };
+    await saveSuggestions(dir, [item], home);
+    const decisions = ["explain", "skip"] as const;
+    const explanations: string[] = [];
+    let calls = 0;
+    await review(dir, async () => decisions[calls++], { home, onExplain: message => explanations.push(message) });
+    expect(calls).toBe(2);
+    expect(explanations[0]).toContain("≈7m/month");
+    expect(explanations[0]).toContain("ship after checks");
+  });
 });
 
 describe("nudge hint", () => {
@@ -143,6 +171,15 @@ describe("reviewJson", () => {
     const { reviewJson } = await import("./review.js");
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    expect(JSON.parse(await reviewJson(dir, home))).toEqual([]);
+  });
+
+  it("omits persistently dismissed suggestions", async () => {
+    const { reviewJson } = await import("./review.js");
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await saveSuggestions(dir, [mk("ship")], home);
+    await review(dir, async () => "skip", { home });
     expect(JSON.parse(await reviewJson(dir, home))).toEqual([]);
   });
 });

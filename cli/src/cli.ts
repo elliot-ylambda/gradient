@@ -130,7 +130,7 @@ async function runReview(
   const applied = await review(projectDir, readlinePrompter({
     targets: resolveTargets(config),
     cheapModel: resolveCheapModel(config),
-  }), { home, onSkip: log, clarifier: readlineClarifier() });
+  }), { home, onSkip: log, onExplain: log, clarifier: readlineClarifier() });
   log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
   for (const a of applied) {
     for (const write of a.writes) {

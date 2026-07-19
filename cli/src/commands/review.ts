@@ -8,13 +8,16 @@ import { refreshRecallIndex } from "./recall.js";
 import { emit, type EmitTarget } from "../core/emit/index.js";
 import { clarifiedWorkflowBody } from "../core/detect.js";
 import { stripUnsafeControls } from "../core/security.js";
+import { addDismissal, isDismissed, loadDismissed } from "../core/dismiss.js";
+
+export type ReviewDecision = "approve" | "skip" | "explain" | "quit";
 
 export type Prompter = (
   suggestion: Suggestion,
   index: number,
   total: number,
   preview: string,
-) => Promise<"approve" | "skip" | "quit">;
+) => Promise<ReviewDecision>;
 
 /** Returns an option label, or null to leave the suggestion unresolved. */
 export type Clarifier = (suggestion: Suggestion) => Promise<string | null>;
@@ -82,9 +85,16 @@ export function suggestionPreview(
 export async function review(
   projectDir: string,
   prompt: Prompter,
-  opts: { home?: string; onSkip?: (message: string) => void; clarifier?: Clarifier } = {},
+  opts: {
+    home?: string;
+    onSkip?: (message: string) => void;
+    onExplain?: (message: string) => void;
+    clarifier?: Clarifier;
+  } = {},
 ): Promise<ApplyResult[]> {
-  const suggestions = await loadSuggestions(projectDir, opts);
+  const cached = await loadSuggestions(projectDir, opts);
+  const dismissed = await loadDismissed(projectDir);
+  const suggestions = cached.filter(suggestion => !isDismissed(suggestion, dismissed));
   const config = await loadConfig(opts.home);
   const emitTarget = config.emitTarget ?? "skill";
   const targets = resolveTargets(config);
@@ -102,17 +112,23 @@ export async function review(
       // An unresolved ambiguity is never eligible for approval in this pass.
       if (!resolved) continue;
       suggestions[index] = suggestion = resolved;
+      const cachedIndex = cached.findIndex(candidate => candidate.id === suggestion.id);
+      if (cachedIndex >= 0) cached[cachedIndex] = resolved;
       // Persist the human decision to the private per-project cache before
       // artifact I/O so its provenance survives a target write failure.
-      await saveSuggestions(projectDir, suggestions, opts.home);
+      await saveSuggestions(projectDir, cached, opts.home);
     }
 
-    const decision = await prompt(
-      suggestion,
-      index,
-      suggestions.length,
-      suggestionPreview(suggestion, emitTarget, { targets, cheapModel }),
-    );
+    let decision: ReviewDecision;
+    do {
+      decision = await prompt(
+        suggestion,
+        index,
+        suggestions.length,
+        suggestionPreview(suggestion, emitTarget, { targets, cheapModel }),
+      );
+      if (decision === "explain") opts.onExplain?.(suggestionExplanation(suggestion));
+    } while (decision === "explain");
     if (decision === "quit") break;
     if (decision === "approve") {
       out.push(await applySuggestion(suggestion, projectDir, {
@@ -121,10 +137,12 @@ export async function review(
         cheapModel,
         home: opts.home,
       }));
+    } else if (decision === "skip") {
+      await addDismissal(projectDir, suggestion);
     }
   }
   if (out.length > 0) {
-    await syncApprovedPlaybook(projectDir, suggestions, opts.home);
+    await syncApprovedPlaybook(projectDir, cached, opts.home);
     await refreshRecallIndex(projectDir, opts.home);
   }
   return out;
@@ -132,6 +150,17 @@ export async function review(
 
 function terminalSafeLine(text: string): string {
   return stripUnsafeControls(text).replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim();
+}
+
+export function suggestionExplanation(suggestion: Suggestion): string {
+  const leverage = suggestion.evidence.estMinutesSavedPerMonth;
+  const lines = [
+    `  why: ${terminalSafeLine(suggestion.rationale)}`,
+    `  evidence: seen ${suggestion.evidence.count}× across ${suggestion.evidence.sessions} sessions` +
+      (leverage !== undefined ? ` · ≈${leverage}m/month` : ""),
+  ];
+  for (const example of suggestion.examples ?? []) lines.push(`    · ${terminalSafeLine(example)}`);
+  return lines.join("\n");
 }
 
 export function readlineClarifier(): Clarifier {
@@ -155,11 +184,16 @@ export function readlinePrompter(
   return async (suggestion, index, total, preview) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     const label = suggestion.payload.type;
+    const leverage = suggestion.evidence.estMinutesSavedPerMonth;
     process.stdout.write(
       `\n(${index + 1}/${total})  ${terminalSafeLine(suggestion.name)} · ${label} · ` +
-      `seen ${suggestion.evidence.count}× · ${suggestion.confidence}\n` +
+      `seen ${suggestion.evidence.count}×` +
+      (leverage !== undefined ? ` · ≈${leverage}m/month` : "") +
+      ` · ${suggestion.confidence}\n` +
       `  ${terminalSafeLine(suggestion.title)}\n`,
     );
+    const firstExample = suggestion.examples?.[0];
+    if (firstExample) process.stdout.write(`  example: ${terminalSafeLine(firstExample)}\n`);
     if (suggestion.payload.type === "hook" && suggestion.payload.command) {
       process.stdout.write(
         `  installs a ${terminalSafeLine(suggestion.payload.event)} hook ` +
@@ -171,9 +205,10 @@ export function readlinePrompter(
     if (isNudge(suggestion)) {
       process.stdout.write("  tip: this is what autopilot automates → gradient autopilot nudge\n");
     }
-    const answer = (await rl.question("  [a]pprove [s]kip [q]uit › ")).trim().toLowerCase();
+    const answer = (await rl.question("  [a]pprove [s]kip [e]xplain [q]uit › ")).trim().toLowerCase();
     rl.close();
     if (answer === "a") return "approve";
+    if (answer === "e") return "explain";
     if (answer === "q") return "quit";
     return "skip";
   };
@@ -182,7 +217,11 @@ export function readlinePrompter(
 /** Non-interactive listing for tooling (the plugin's review skill). */
 export async function reviewJson(projectDir: string, home?: string): Promise<string> {
   try {
-    return JSON.stringify(await loadSuggestions(projectDir, { home }), null, 2);
+    const [suggestions, dismissed] = await Promise.all([
+      loadSuggestions(projectDir, { home }),
+      loadDismissed(projectDir),
+    ]);
+    return JSON.stringify(suggestions.filter(suggestion => !isDismissed(suggestion, dismissed)), null, 2);
   } catch {
     return "[]";
   }
