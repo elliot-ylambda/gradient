@@ -3,13 +3,14 @@
 The local-first `gradient` command-line tool.
 
 ```bash
-npx gradient.md init --target both # configure Claude Code + Codex (existing CLI auth)
+npx gradient.md init --target both --session-scan # configure + surface one suggestion next session
+npx gradient.md           # interactive mirror of the top pending suggestions
 npx gradient.md scan      # mine bounded prompt and tool-activity candidates
-npx gradient.md review    # approve the ones you want; gradient writes the artifacts
+npx gradient.md review    # approve, explain, or persistently dismiss suggestions
 npx gradient.md list      # see what it generated · npx gradient.md remove <name> to undo
 npx gradient.md migrate   # convert older generated commands into skills
 npx gradient.md recall on # hint when prompts match installed artifacts
-npx gradient.md stats     # coverage and artifact adoption
+npx gradient.md stats     # estimated leverage and realized minutes saved
 npx gradient.md insights  # local behavior report and recommended actions
 npx gradient.md continuity on # preserve context across compact/resume
 npx gradient.md bundle team-kit # package approved artifacts as a plugin
@@ -34,7 +35,9 @@ npx gradient.md bundle team-kit # package approved artifacts as a plugin
 3. Sends only the top candidates to an LLM (`claude` by default, isolated
    `codex exec --ephemeral` for a Codex-only target, with an Anthropic API-key
    fallback) to name and type them.
-4. You inspect the exact rendered artifact and approve; it writes
+4. You inspect the exact rendered artifact and approve, explain, or dismiss it;
+   skips persist in the human-editable `.gradient/dismissed.json` and resurface
+   only when a later scan adds genuinely new source evidence. Approval writes
    `.claude/skills/<name>/SKILL.md`, portable Codex skills under
    `.agents/skills/<name>/SKILL.md`, and project rules under `.claude/rules/`,
    prints `/loop` instructions, or installs explicitly reviewed local hook
@@ -62,11 +65,19 @@ skills use `"cheapSkillModel": "haiku"` by default; set it to `""` to disable
 model frontmatter. Codex output stays portable and contains only the Agent
 Skills `name` and `description` metadata.
 
+`gradient init --session-scan` installs a fail-open `SessionStart` hook. It
+prints at most one high-leverage cached suggestion, then launches a detached
+bounded scan; startup never waits on the scan. Interactive bare `gradient`
+shows up to three pending suggestions from a fresh cache (and rescans recent
+user-scope history when the cache is stale). Explicit `gradient help` and
+non-interactive bare invocations remain script-safe help output.
+
 `gradient recall on` installs an LLM-free `UserPromptSubmit` hook in
 `.claude/settings.local.json`. Its private user-cache index covers project and
 user-level commands and skills; its adoption log stores
 only artifact names and match scores, never prompt text. `gradient stats` shows
-uses, last use, retypes caught, and stale-artifact removal suggestions.
+uses, realized minutes saved, last use, retypes caught, and stale-artifact
+removal suggestions.
 
 `scan` writes a private per-project user cache, but it does not install Claude
 artifacts or update the autopilot playbook. Approved artifacts are tracked in

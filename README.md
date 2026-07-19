@@ -74,15 +74,16 @@ every automation stays opt-in.
 **CLI (npx):**
 
 ```bash
-npx gradient.md init --target both # install the gradient skill for Claude Code + Codex
+npx gradient.md init --target both --session-scan # install + surface one suggestion next session
+npx gradient.md             # interactive mirror: top pending suggestions (fresh cache, or bounded scan)
 npx gradient.md scan        # prompts, tool rituals/failures, advisory patterns, and preferences
 npx gradient.md scan --user # all projects, last 7 days — your recent cross-project habits
 npx gradient.md scan --all  # all projects, no time limit (thorough; can be slow)
-npx gradient.md review      # inspect the ranked suggestions and their evidence
+npx gradient.md review      # approve, explain, or persistently dismiss ranked suggestions
 npx gradient.md apply <id>  # generate an approved skill / loop / hook
 npx gradient.md migrate     # convert older generated commands into skills
 npx gradient.md recall on   # hint when a typed prompt matches an installed artifact
-npx gradient.md stats       # coverage plus artifact adoption
+npx gradient.md stats       # estimated leverage plus realized minutes saved from actual use
 npx gradient.md insights    # local behavior report + concrete next actions
 npx gradient.md continuity on # checkpoint before compaction, recap after resume
 npx gradient.md bundle team-kit # package approved artifacts for teammates
@@ -91,11 +92,13 @@ npx gradient.md bundle team-kit # package approved artifacts for teammates
 The npm package is **`gradient.md`**; the command it installs is **`gradient`**.
 So `npx gradient.md scan` and, once installed globally, plain `gradient scan`.
 
-The funnel leads you through itself: `init` offers to run your first scan,
-`scan` offers to open `review` when it finds something (`--no-review` to
-skip), and the first applied artifacts offer `recall`. Every offer is a
-single enter-press and only appears on an interactive terminal — hooks,
-pipes, and `--detach` never prompt.
+The funnel leads you through itself: `init --session-scan` offers a first scan;
+after you work, the next session surfaces at most one cached suggestion and
+rescans in the background. Interactive bare `gradient` mirrors up to three
+pending suggestions, `review` can approve, explain, or persistently dismiss
+them, and `stats` reports both estimated leverage and minutes saved by observed
+artifact use. Hooks and pipes never prompt; non-interactive bare invocation
+continues to print help.
 
 **Scope.** `scan` defaults to the project you're in. `--user` widens to every
 project but bounds it to a recent window (last 7 days, set via `userScopeDays`

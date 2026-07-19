@@ -29,10 +29,13 @@ import { stripUnsafeControls } from "./core/security.js";
 import { readlineConfirm, type Confirm } from "./core/confirm.js";
 import { instructionEffectivenessLine } from "./core/insights.js";
 import { sessionStart } from "./commands/sessionStart.js";
+import { mirror } from "./commands/mirror.js";
 
 const HELP = `gradient — turn repeated Claude Code and Codex workflows into artifacts
 
 Usage:
+  gradient                      show the top pending suggestions (interactive terminals)
+  gradient help                 show this help
   gradient init [--target claude-code|codex|both]
                                 configure + install the skill, then offer a first scan
   gradient init --session-scan  also run a scan at the start of each session
@@ -212,6 +215,7 @@ export async function main(
     readStdin?: () => Promise<Record<string, unknown>>;
     home?: string;
     confirm?: Confirm;
+    isTTY?: boolean;
   } = {},
 ): Promise<number> {
   const log = io.log ?? ((s: string) => process.stdout.write(s + "\n"));
@@ -219,6 +223,10 @@ export async function main(
   const confirm = io.confirm ?? readlineConfirm();
 
   if (argv.length === 0) {
+    if (io.isTTY ?? process.stdout.isTTY === true) {
+      await mirror(process.cwd(), { home: io.home, write: log });
+      return 0;
+    }
     log(`${banner(VERSION)}\n\n${HELP}`);
     return 0;
   }
@@ -232,6 +240,10 @@ export async function main(
     return 0;
   }
   if (argv[0] === "--help" || argv[0] === "-h") {
+    log(`${banner(VERSION)}\n\n${HELP}`);
+    return 0;
+  }
+  if (argv[0] === "help") {
     log(`${banner(VERSION)}\n\n${HELP}`);
     return 0;
   }

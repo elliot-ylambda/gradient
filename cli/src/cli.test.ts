@@ -16,10 +16,12 @@ import { saveSuggestions } from "./commands/apply.js";
 import { clarifiedWorkflowBody } from "./core/detect.js";
 import { scan } from "./commands/scan.js";
 import { sessionStart } from "./commands/sessionStart.js";
+import { mirror } from "./commands/mirror.js";
 
 vi.mock("./commands/scan.js", () => ({ scan: vi.fn(async () => []) }));
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
 vi.mock("./commands/sessionStart.js", () => ({ sessionStart: vi.fn(async () => {}) }));
+vi.mock("./commands/mirror.js", () => ({ mirror: vi.fn(async () => {}) }));
 vi.mock("./commands/migrate.js", () => ({
   migrate: vi.fn(async () => ({ migrated: ["ship"], skipped: ["ghost"] })),
 }));
@@ -181,11 +183,27 @@ describe("--version / --help", () => {
 });
 
 describe("main", () => {
-  it("returns 0 and prints help for no command", async () => {
+  it("returns 0 and prints help for a non-interactive bare invocation", async () => {
     const logs: string[] = [];
-    const code = await main([], { log: (m) => logs.push(m) });
+    const code = await main([], { isTTY: false, log: (m) => logs.push(m) });
     expect(code).toBe(0);
-    expect(logs.join("\n")).toContain("gradient");
+    expect(logs.join("\n")).toContain("Usage:");
+  });
+
+  it("runs the mirror for an interactive bare invocation", async () => {
+    vi.mocked(mirror).mockClear();
+    expect(await main([], { isTTY: true, home: "/home", log: () => {} })).toBe(0);
+    expect(vi.mocked(mirror)).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      home: "/home", write: expect.any(Function),
+    }));
+  });
+
+  it("explicit help always prints usage even on an interactive terminal", async () => {
+    vi.mocked(mirror).mockClear();
+    const logs: string[] = [];
+    expect(await main(["help"], { isTTY: true, log: line => logs.push(line) })).toBe(0);
+    expect(logs.join("\n")).toContain("Usage:");
+    expect(vi.mocked(mirror)).not.toHaveBeenCalled();
   });
 
   it("renders clarification options and the chosen provenance in explain", async () => {
@@ -242,7 +260,7 @@ describe("main", () => {
 
   it("lists migrate in help and dispatches dry runs", async () => {
     const help: string[] = [];
-    await main([], { log: message => help.push(message) });
+    await main(["help"], { log: message => help.push(message) });
     expect(help.join("\n")).toContain("gradient migrate [--dry-run]");
 
     vi.mocked(migrate).mockClear();
@@ -306,7 +324,7 @@ describe("main", () => {
 describe("autopilot dispatch", () => {
   it("help text lists autopilot", async () => {
     const lines: string[] = [];
-    await main([], { log: s => lines.push(s) });
+    await main(["help"], { log: s => lines.push(s) });
     expect(lines.join("\n")).toContain("gradient autopilot <off|nudge>");
   });
 
@@ -332,7 +350,7 @@ describe("respond dispatch", () => {
 describe("notify dispatch", () => {
   it("lists the hook target, drains stdin, stays silent, and exits zero", async () => {
     const help: string[] = [];
-    await main([], { log: line => help.push(line) });
+    await main(["help"], { log: line => help.push(line) });
     expect(help.join("\n")).toContain("gradient notify");
 
     vi.mocked(notify).mockClear();
@@ -355,7 +373,7 @@ describe("notify dispatch", () => {
 describe("recall dispatch", () => {
   it("lists the recall manager in help", async () => {
     const lines: string[] = [];
-    await main([], { log: line => lines.push(line) });
+    await main(["help"], { log: line => lines.push(line) });
     expect(lines.join("\n")).toContain("gradient recall <on|off|status>");
   });
 
@@ -418,7 +436,7 @@ describe("stats adoption rendering", () => {
 describe("insights dispatch", () => {
   it("lists and renders the local behavior report", async () => {
     const help: string[] = [];
-    await main([], { log: line => help.push(line) });
+    await main(["help"], { log: line => help.push(line) });
     expect(help.join("\n")).toContain("gradient insights [--user] [--html]");
 
     vi.mocked(insights).mockClear();
@@ -445,7 +463,7 @@ describe("insights dispatch", () => {
 describe("continuity dispatch", () => {
   it("lists the manager and dispatches on, off, and status", async () => {
     const help: string[] = [];
-    await main([], { log: line => help.push(line) });
+    await main(["help"], { log: line => help.push(line) });
     expect(help.join("\n")).toContain("gradient continuity <on|off|status>");
 
     vi.mocked(setContinuity).mockClear();
@@ -481,7 +499,7 @@ describe("bundle dispatch", () => {
     expect(missing.join("\n")).toContain("bundle needs a name");
 
     const help: string[] = [];
-    await main([], { log: line => help.push(line) });
+    await main(["help"], { log: line => help.push(line) });
     expect(help.join("\n")).toContain("gradient bundle <name>");
   });
 
