@@ -6,7 +6,7 @@
 > References to `playbook.md` below are preserved as the original record.
 
 **Date:** 2026-07-01
-**Status:** Approved (brainstorming complete; implementation plan pending)
+**Status:** Implemented and released (`nudge`; arbitrary-response `full` is security-disabled)
 **Scope:** Third sub-project of `gradient` — the phase-2 autopilot deferred from
 the v1 spec (§1) and sequenced after Continuous Mining (Spec 1).
 

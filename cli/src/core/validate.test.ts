@@ -39,6 +39,15 @@ describe("assertHookRunnable", () => {
   it("exposes recap as a known continuity hook target", () => {
     expect(KNOWN_SUBCOMMANDS.has("recap")).toBe(true);
   });
+  it("treats the exact SessionStart surfacing target as runnable", () => {
+    const hook: Suggestion = {
+      ...good,
+      payload: { type: "hook", event: "SessionStart", subcommand: "session-start", description: "d" },
+    };
+    expect(KNOWN_SUBCOMMANDS.has("session-start")).toBe(true);
+    expect(() => validateSuggestion(hook)).not.toThrow();
+    expect(() => assertHookRunnable(hook)).not.toThrow();
+  });
   it("treats a SessionStart→scan hook as runnable", () => {
     const s: any = { id: "x", name: "n", title: "t", rationale: "r", confidence: "high",
       payload: { type: "hook", event: "SessionStart", subcommand: "scan", description: "d" } };
@@ -59,7 +68,58 @@ describe("assertHookRunnable", () => {
   });
 });
 
+describe("hook payload: subcommand xor command", () => {
+  const hook = (payload: Record<string, unknown>, event = "PostToolUse") => ({
+    ...good,
+    payload: { type: "hook", event, description: "d", ...payload },
+  });
+
+  it("accepts the existing subcommand form", () => {
+    expect(() => validateSuggestion(hook({ subcommand: "checkpoint" }, "PreCompact"))).not.toThrow();
+  });
+
+  it("accepts a command form with matcher", () => {
+    expect(() => validateSuggestion(hook({
+      command: "npm run lint",
+      matcher: "Edit|Write|NotebookEdit",
+    }))).not.toThrow();
+  });
+
+  it("rejects both, neither, multi-line, oversized, and bad matcher", () => {
+    expect(() => validateSuggestion(hook({ subcommand: "scan", command: "npm t" }))).toThrow(/exactly one/);
+    expect(() => validateSuggestion(hook({}))).toThrow(/exactly one/);
+    expect(() => validateSuggestion(hook({ command: "a\nb" }))).toThrow(/single line/);
+    expect(() => validateSuggestion(hook({ command: "x".repeat(201) }))).toThrow(/single line/);
+    expect(() => validateSuggestion(hook({ command: "npm t", matcher: "[unclosed" }))).toThrow(/matcher/);
+    expect(() => validateSuggestion(hook({ command: "npm t", matcher: "x".repeat(501) }))).toThrow(/matcher/);
+  });
+});
+
 describe("optional suggestion fields", () => {
+  it("accepts valid leverage, temporal evidence, and redacted source signatures", () => {
+    expect(() => validateSuggestion({
+      ...good,
+      evidence: {
+        ...good.evidence,
+        estMinutesSavedPerMonth: 12,
+        temporal: { maxRunLength: 3, runSessions: 2, medianGapMinutes: 5, distinctDays: 8, spanDays: 9.5 },
+      },
+      sourceSignatures: ["email [REDACTED]", "lgtm"],
+    })).not.toThrow();
+  });
+
+  it("rejects malformed optional evidence and provenance", () => {
+    expect(() => validateSuggestion({
+      ...good, evidence: { ...good.evidence, estMinutesSavedPerMonth: -1 },
+    })).toThrow(/estMinutes/);
+    expect(() => validateSuggestion({
+      ...good, evidence: { ...good.evidence, temporal: { maxRunLength: 1 } },
+    })).toThrow(/temporal/);
+    expect(() => validateSuggestion({ ...good, sourceSignatures: ["dup", "dup"] })).toThrow(/sourceSignatures/);
+    expect(() => validateSuggestion({ ...good, sourceSignatures: ["person@example.com"] })).toThrow(/sourceSignatures/);
+    expect(() => validateSuggestion({ ...good, sourceSignatures: ["line\nbreak"] })).toThrow(/sourceSignatures/);
+  });
+
   it("accepts a complete clarification and rejects malformed options", () => {
     const clarify = {
       question: "Acknowledge or merge?",

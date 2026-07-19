@@ -30,6 +30,8 @@ describe("mineSequences", () => {
     });
     expect(chains[0].sessions).toBeGreaterThanOrEqual(2);
     expect(chains[0].sessionIds.length).toBe(chains[0].sessions);
+    expect(chains[0].occurrences).toHaveLength(chains[0].count);
+    expect(chains[0].occurrences[0]).toEqual({ ts: "2026-07-01T00:01:00Z", sessionId: "s0" });
     expect(chains[0].examples[0]).toEqual(["review the spec", "write the plan"]);
   });
 

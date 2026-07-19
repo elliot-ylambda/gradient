@@ -93,7 +93,9 @@ export async function init(
 
   let sessionScanInstalled = false;
   if (opts.sessionScan) {
-    await installHook(opts.projectDir ?? process.cwd(), "SessionStart", "gradient scan --detach");
+    await installHook(opts.projectDir ?? process.cwd(), "SessionStart", "gradient session-start", {
+      replacing: ["gradient scan --detach"],
+    });
     sessionScanInstalled = true;
   }
 

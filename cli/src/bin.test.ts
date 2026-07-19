@@ -7,8 +7,10 @@ import { isEntrypoint, runBinary } from "./bin.js";
 import { saveRecallIndex } from "./core/recall.js";
 import { projectKey, saveConfig } from "./config.js";
 import { notify } from "./commands/notify.js";
+import { sessionStart } from "./commands/sessionStart.js";
 
 vi.mock("./commands/notify.js", () => ({ notify: vi.fn(async () => {}) }));
+vi.mock("./commands/sessionStart.js", () => ({ sessionStart: vi.fn(async (_dir, deps) => deps.write?.("surface")) }));
 
 describe("binary bootstrap", () => {
   it("recognizes npm's symlinked bin path as the entrypoint", async () => {
@@ -61,6 +63,18 @@ describe("binary bootstrap", () => {
     expect(drained).toBe(true);
     expect(vi.mocked(notify)).toHaveBeenCalledOnce();
     expect(output).toEqual([]);
+  });
+
+  it("uses the lightweight session-start path", async () => {
+    vi.mocked(sessionStart).mockClear();
+    const output: string[] = [];
+    const code = await runBinary(["session-start"], {
+      cwd: "/repo",
+      write: chunk => output.push(chunk),
+    });
+    expect(code).toBe(0);
+    expect(vi.mocked(sessionStart)).toHaveBeenCalledWith("/repo", expect.objectContaining({ write: expect.any(Function) }));
+    expect(output).toEqual(["surface\n"]);
   });
 
   it("delegates normal commands to the full CLI", async () => {

@@ -317,4 +317,97 @@ describe("applySuggestion", () => {
     expect(commands).toEqual(["afplay /System/Library/Sounds/Ping.aiff"]);
     expect(await loadManifest(dir)).toEqual([]);
   });
+
+  it("installs and exactly removes a reviewed command hook", async () => {
+    const { dir, home } = await testDirs();
+    const suggestion: Suggestion = {
+      ...base,
+      id: "raw-hook-1",
+      name: "post-edit-lint",
+      confidence: "inferred",
+      payload: {
+        type: "hook",
+        event: "PostToolUse",
+        matcher: "Edit|Write|NotebookEdit",
+        command: "npm run lint",
+        description: "lint after edits",
+      },
+    };
+    const applied = await applySuggestion(suggestion, dir, { home });
+    expect(applied.written).toBe(join(dir, ".claude", "settings.local.json"));
+    const settings = JSON.parse(await readFile(applied.written!, "utf8"));
+    expect(settings.hooks.PostToolUse[0]).toEqual({
+      matcher: "Edit|Write|NotebookEdit",
+      hooks: [{ type: "command", command: "npm run lint" }],
+    });
+    expect((await loadManifest(dir))[0]).toMatchObject({
+      name: "post-edit-lint",
+      path: "",
+      hook: {
+        event: "PostToolUse",
+        matcher: "Edit|Write|NotebookEdit",
+        command: "npm run lint",
+      },
+    });
+
+    expect(await remove(dir, "post-edit-lint", { home })).toBe(true);
+    const after = JSON.parse(await readFile(applied.written!, "utf8"));
+    expect(after.hooks).toBeUndefined();
+  });
+
+  it("does not let a forged raw-hook manifest remove an existing user hook", async () => {
+    const { dir, home } = await testDirs();
+    await installHook(dir, "PostToolUse", "npm run lint", { matcher: "Edit" });
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "manifest.json"), JSON.stringify([{
+      name: "forged-lint",
+      type: "hook",
+      path: "",
+      createdAt: "2026-07-18",
+      suggestionId: "forged",
+      hook: { event: "PostToolUse", matcher: "Edit", command: "npm run lint" },
+    }]));
+
+    await expect(remove(dir, "forged-lint", { home })).rejects.toThrow(/approval/);
+    const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.local.json"), "utf8"));
+    expect(settings.hooks.PostToolUse[0].hooks[0].command).toBe("npm run lint");
+  });
+
+  it("does not treat an arbitrary gradient-prefixed command as a legacy owned hook", async () => {
+    const { dir, home } = await testDirs();
+    await installHook(dir, "PostToolUse", "gradient custom", { matcher: "Edit" });
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "manifest.json"), JSON.stringify([{
+      name: "forged-gradient-command",
+      type: "hook",
+      path: "",
+      createdAt: "2026-07-18",
+      suggestionId: "forged",
+      hook: { event: "PostToolUse", matcher: "Edit", command: "gradient custom" },
+    }]));
+
+    await expect(remove(dir, "forged-gradient-command", { home })).rejects.toThrow(/approval/);
+    const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.local.json"), "utf8"));
+    expect(settings.hooks.PostToolUse[0].hooks[0].command).toBe("gradient custom");
+  });
+
+  it("removes a v0.4 hook whose manifest did not retain its matcher", async () => {
+    const { dir, home } = await testDirs();
+    await installHook(dir, "Notification", "gradient notify", {
+      matcher: "permission_prompt|idle_prompt",
+    });
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "manifest.json"), JSON.stringify([{
+      name: "legacy-notify",
+      type: "hook",
+      path: "",
+      createdAt: "2026-07-01",
+      suggestionId: "legacy",
+      hook: { event: "Notification", command: "gradient notify" },
+    }]));
+
+    await expect(remove(dir, "legacy-notify", { home })).resolves.toBe(true);
+    const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.local.json"), "utf8"));
+    expect(settings.hooks).toBeUndefined();
+  });
 });

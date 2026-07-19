@@ -1,5 +1,8 @@
 # Continuous Mining & Scan Quality Implementation Plan
 
+**Status:** Complete and released. Unchecked boxes below preserve the original
+test-first execution recipe.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Sharpen gradient's scan pipeline — semantic dedup, `stats`/`explain`, an opt-in session-start scan, and scalable clustering — without adding a new subsystem.

@@ -1,5 +1,8 @@
 # gradient.md — Branded Playbook File Implementation Plan
 
+**Status:** Complete and released. Unchecked boxes below preserve the original
+test-first execution recipe.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rename the autopilot playbook to `gradient.md`, add an optional committed per-project `gradient.md` layer whose frontmatter can only *clamp* (never raise) autopilot authority, and compose both files in the `respond` judge pipeline.

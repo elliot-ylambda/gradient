@@ -17,8 +17,29 @@ export interface Clarify {
   chosen?: string;
 }
 
+/** Local-only temporal evidence per cluster (core/temporal.ts). */
+export interface TemporalFeatures {
+  maxRunLength: number;      // longest streak of consecutive user prompts in one session, all in this cluster
+  runSessions: number;       // sessions containing a run of length ≥ 2
+  medianGapMinutes: number;  // median gap between successive occurrences
+  distinctDays: number;
+  spanDays: number;
+}
+
+/** A slash-command invocation extracted from a `<command-name>` turn at parse
+ * time (core/parse.ts). Structured replacement for ad-hoc regex scraping in
+ * usage.ts (adoption counting) and insights.ts (compact/model-switch metrics);
+ * never enters clustering. */
+export interface CommandEvent {
+  ts: string;
+  sessionId: string;
+  project: string;
+  command: string;
+}
+
 /** One genuine user prompt after parse + filter. (The mining pipeline consumes
- * only user text; assistant turns are rendered by core/tail.ts for autopilot.) */
+ * only user text; tool and command activity is mined separately; assistant
+ * turns are rendered by core/tail.ts for autopilot.) */
 export interface Turn {
   ts: string;
   project: string;
@@ -32,23 +53,47 @@ export interface Turn {
   usageTokens?: number;
 }
 
+/** One tool invocation mined from a transcript. Only Bash and file-edit tools
+ * are extracted; outputs never exceed a redacted, bounded error head. */
+export interface ToolEvent {
+  ts: string;
+  sessionId: string;
+  kind: "bash" | "edit";
+  command?: string;
+  isError?: boolean;
+  errorHead?: string;
+  file?: string;
+}
+
 /** Pre-LLM grouping produced by cluster.ts (no model involved). */
 export interface Candidate {
-  kind: ArtifactType | "unknown" | "paste" | "answer" | "sequence";
+  kind: ArtifactType | "unknown" | "paste" | "answer" | "sequence" | "correction" | "toolfail" | "ritual" | "instruction";
   signature: string;     // normalized key the cluster grouped on
   examples: string[];    // representative raw prompts
   count: number;
   sessions: number;
   sessionIds: string[];  // distinct session ids (for exact union when clusters merge)
+  /** One entry per occurrence; unioned when clusters merge (bucket order after a
+   * fuzzy merge, not chronological — consumers re-sort by timestamp). */
+  occurrences: { ts: string; sessionId: string }[];
+  /** Host signature plus every absorbed near-duplicate signature (for turn→cluster
+   * membership). Non-cluster producers (paste/answer/sequence) leave it empty. */
+  memberSignatures: string[];
   confidence: Confidence;
   assistants?: Assistant[];
+  /** Redacted routing context for specialized detect candidates. */
+  hint?: string;
+  temporal?: TemporalFeatures;
+  /** Set by classify.ts's markLoops when temporal.distinctDays crosses the
+   * daily-coverage floor; a deterministic UTC cron expression. */
+  cadence?: string;
 }
 
 /** Semantic content of a suggestion; emit/* formats it into an artifact. */
 export type SuggestionPayload =
   | { type: "command"; commandName: string; body: string; triggers?: string[]; mechanical?: boolean }
   | { type: "loop"; instruction: string; cadence?: string }
-  | { type: "hook"; event: string; subcommand: string; description: string; matcher?: string }
+  | { type: "hook"; event: string; description: string; matcher?: string; subcommand?: string; command?: string }
   | { type: "rule"; target: "project" | "user"; ruleName: string; text: string };
 
 /** Post-LLM (or post-degradation), ready to present/emit. */
@@ -57,10 +102,22 @@ export interface Suggestion {
   name: string;
   title: string;
   rationale: string;
-  evidence: { count: number; sessions: number; assistants?: Assistant[] };
+  evidence: {
+    count: number;
+    sessions: number;
+    assistants?: Assistant[];
+    /** Optional: absent on pre-existing caches/fixtures written before this field existed. */
+    estMinutesSavedPerMonth?: number;
+    /** Optional: temporal evidence of the highest-count source candidate, when annotated. */
+    temporal?: TemporalFeatures;
+  };
   confidence: Confidence;
   clarify?: Clarify;
   examples?: string[];   // representative redacted prompts, for `explain`
+  /** Redacted union of source candidates' memberSignatures (fallback [signature] when
+   * empty). Optional: absent on pre-existing caches/fixtures written before this field
+   * existed. Stable across corpus growth — the basis for this suggestion's id. */
+  sourceSignatures?: string[];
   payload: SuggestionPayload;
 }
 
@@ -73,7 +130,7 @@ export interface ManifestEntry {
   /** Absent means claude-code for manifests written before multi-assistant support. */
   target?: Assistant;
   /** Installed hook artifacts record what to un-merge from settings on removal. */
-  hook?: { event: string; command: string };
+  hook?: { event: string; matcher?: string; command: string };
 }
 
 export interface Config {
@@ -85,7 +142,7 @@ export interface Config {
   userScopeDays?: number;
   /** Max prompts fed into clustering before older ones are dropped. Defaults to 1500. */
   maxPrompts?: number;
-  /** When true, a SessionStart hook runs `gradient scan --detach`. */
+  /** When true, SessionStart surfaces one cached suggestion and starts a detached scan. */
   scanOnSessionStart?: boolean;
   /** Legacy global mode. Ignored by 0.1.1+; users must re-consent per project. */
   autopilot?: AutopilotMode;
@@ -107,6 +164,8 @@ export interface Config {
   targets?: Assistant[];
   /** Claude model frontmatter for mechanical skills. Empty disables it. Default "haiku". */
   cheapSkillModel?: string;
+  /** Mine tool events for failure loops and post-edit rituals. Absent = on. */
+  mineToolEvents?: boolean;
 }
 
 /** Autopilot authority ladder (spec §2 #1). */

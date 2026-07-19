@@ -1,15 +1,16 @@
-import type { ArtifactType, Confidence, Turn } from "../core/types.js";
+import type { ArtifactType, CommandEvent, Confidence, Suggestion } from "../core/types.js";
 import { loadManifest } from "../core/manifest.js";
 import { loadSuggestions } from "./apply.js";
 import { loadConfig, resolveTargets } from "../config.js";
 import { collect } from "../core/collect.js";
 import { collectCodex } from "../core/collect-codex.js";
-import { parseFile } from "../core/parse.js";
+import { parseTranscriptFile } from "../core/parse.js";
 import { parseCodexFile } from "../core/parse-codex.js";
 import { countArtifactUses } from "../core/usage.js";
 import { adoptionPath } from "./recall.js";
 import { safeReadFile } from "../core/safeFs.js";
 import { homedir } from "node:os";
+import { perOccurrenceSeconds, type LeverageKind } from "../core/leverage.js";
 
 const ADOPTION_LOG_MAX_BYTES = 5_000_000;
 
@@ -19,6 +20,7 @@ export interface StatPattern {
   sessions: number;
   confidence: Confidence;
   covered: boolean;
+  estMinutesSavedPerMonth?: number;
 }
 
 export interface StatsReport {
@@ -38,6 +40,7 @@ export interface AdoptionRow {
   uses: number;
   lastUsed?: string;
   retypesCaught: number;
+  realizedMinutesSaved: number;
   suggestRemoval: boolean;
 }
 
@@ -49,7 +52,7 @@ export interface StatsOptions {
   now?: number;
   collectFn?: typeof collect;
   collectCodexFn?: typeof collectCodex;
-  parseFn?: typeof parseFile;
+  parseFn?: typeof parseTranscriptFile;
   parseCodexFn?: typeof parseCodexFile;
   onSkip?: (message: string) => void;
   /** Test/embedding overrides can only lower the hard resource ceilings. */
@@ -60,10 +63,15 @@ export interface StatsOptions {
 export const STATS_MAX_FILES = 2_000;
 export const STATS_MAX_TURNS = 100_000;
 
-export async function adoptionFromTurns(
+export async function adoptionFromEvents(
   projectDir: string,
-  turns: Turn[],
-  opts: { home?: string; now?: number; manifest?: Awaited<ReturnType<typeof loadManifest>> } = {},
+  events: CommandEvent[],
+  opts: {
+    home?: string;
+    now?: number;
+    manifest?: Awaited<ReturnType<typeof loadManifest>>;
+    suggestions?: Suggestion[];
+  } = {},
 ): Promise<AdoptionRow[]> {
   const manifest = opts.manifest ?? (await loadManifest(projectDir));
   const logical = new Map<string, (typeof manifest)[number]>();
@@ -72,12 +80,21 @@ export async function adoptionFromTurns(
     if (!prior || entry.createdAt < prior.createdAt) logical.set(entry.name, entry);
   }
   const since = new Map([...logical.values()].map(entry => [entry.name, entry.createdAt]));
-  const uses = countArtifactUses(turns, since);
+  const uses = countArtifactUses(events, since);
   const retypes = await readRetypes(projectDir, since, opts.home);
+  const suggestionsById = new Map((opts.suggestions ?? []).map(suggestion => [suggestion.id, suggestion]));
+  const suggestionsByName = new Map((opts.suggestions ?? []).map(suggestion => [suggestion.name, suggestion]));
   const now = opts.now ?? Date.now();
   return [...logical.values()].map(entry => {
     const usage = uses.get(entry.name) ?? { uses: 0, lastUsed: undefined };
     const retypesCaught = retypes.get(entry.name) ?? 0;
+    const suggestion = suggestionsById.get(entry.suggestionId) ?? suggestionsByName.get(entry.name);
+    const realizedMinutesSaved = Math.round(
+      usage.uses * perOccurrenceSeconds({
+        chars: suggestionChars(suggestion),
+        kind: artifactLeverageKind(entry.type, suggestion),
+      }) / 60,
+    );
     const age = now - Date.parse(entry.createdAt);
     return {
       name: entry.name,
@@ -86,6 +103,7 @@ export async function adoptionFromTurns(
       uses: usage.uses,
       lastUsed: usage.lastUsed,
       retypesCaught,
+      realizedMinutesSaved,
       suggestRemoval: (
         usage.uses === 0 &&
         retypesCaught === 0 &&
@@ -94,6 +112,21 @@ export async function adoptionFromTurns(
       ),
     };
   });
+}
+
+function artifactLeverageKind(type: ArtifactType, suggestion: Suggestion | undefined): LeverageKind {
+  if (suggestion) return suggestion.payload.type;
+  if (type === "loop" || type === "hook" || type === "rule") return type;
+  return "command";
+}
+
+function suggestionChars(suggestion: Suggestion | undefined): number {
+  if (!suggestion) return 0;
+  const values = suggestion.payload.type === "command" && suggestion.payload.triggers?.length
+    ? suggestion.payload.triggers
+    : suggestion.examples ?? [];
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value.length, 0) / values.length;
 }
 
 async function readRetypes(
@@ -142,20 +175,26 @@ export async function stats(projectDir: string, opts: StatsOptions = {}): Promis
       sessions: s.evidence.sessions,
       confidence: s.confidence,
       covered: coveredIds.has(s.id),
+      ...(s.evidence.estMinutesSavedPerMonth !== undefined
+        ? { estMinutesSavedPerMonth: s.evidence.estMinutesSavedPerMonth }
+        : {}),
     }))
-    .sort((a, b) => b.count - a.count);
+    .sort((a, b) =>
+      (b.estMinutesSavedPerMonth ?? 0) - (a.estMinutesSavedPerMonth ?? 0) ||
+      b.count - a.count ||
+      a.name.localeCompare(b.name));
 
   const total = patterns.length;
   const covered = patterns.filter(p => p.covered).length;
   const coveragePct = total === 0 ? 0 : Math.round((covered / total) * 100);
 
-  const turns: Turn[] = [];
+  const events: CommandEvent[] = [];
   let capped = false;
   if (manifest.length > 0) {
     const targets = resolveTargets(config);
     const collectFn = opts.collectFn ?? collect;
     const collectCodexFn = opts.collectCodexFn ?? collectCodex;
-    const parseFn = opts.parseFn ?? parseFile;
+    const parseFn = opts.parseFn ?? parseTranscriptFile;
     const parseCodexFn = opts.parseCodexFn ?? parseCodexFile;
     const collectOptions = { scope: "project" as const, projectPath: projectDir, home: opts.home };
     const claudeFiles = targets.includes("claude-code") ? await collectFn(collectOptions) : [];
@@ -168,19 +207,33 @@ export async function stats(projectDir: string, opts: StatsOptions = {}): Promis
     const maxFiles = Math.max(1, Math.min(opts.maxFiles ?? STATS_MAX_FILES, STATS_MAX_FILES));
     const maxTurns = Math.max(1, Math.min(opts.maxTurns ?? STATS_MAX_TURNS, STATS_MAX_TURNS));
     if (files.length > maxFiles) capped = true;
+    let processed = 0;
     for (const file of files.slice(0, maxFiles)) {
-      if (turns.length >= maxTurns) { capped = true; break; }
-      const parsed = file.assistant === "codex" ? await parseCodexFn(file.path) : await parseFn(file.path);
-      const remaining = maxTurns - turns.length;
-      if (parsed.length > remaining) capped = true;
-      for (const turn of parsed.slice(0, remaining)) turns.push(turn);
+      if (processed >= maxTurns) { capped = true; break; }
+      const remaining = maxTurns - processed;
+      if (file.assistant === "codex") {
+        // Codex parsing is untouched — its transcripts carry no command-tag
+        // events — but its turn volume still counts against the resource cap.
+        const turnCount = (await parseCodexFn(file.path)).length;
+        if (turnCount > remaining) capped = true;
+        processed += Math.min(turnCount, remaining);
+        continue;
+      }
+      const parsed = await parseFn(file.path);
+      // Events share the turn ceiling: a transcript that is all slash commands
+      // must not bypass the resource cap by contributing zero turns.
+      const eventBudget = Math.max(0, remaining - parsed.turns.length);
+      if (parsed.turns.length > remaining || parsed.events.length > eventBudget) capped = true;
+      processed += Math.min(parsed.turns.length + parsed.events.length, remaining);
+      events.push(...parsed.events.slice(0, eventBudget));
     }
   }
 
-  const adoption = await adoptionFromTurns(projectDir, turns, {
+  const adoption = await adoptionFromEvents(projectDir, events, {
     home: opts.home,
     now: opts.now,
     manifest,
+    suggestions,
   });
 
   return {

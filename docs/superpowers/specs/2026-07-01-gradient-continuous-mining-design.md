@@ -1,7 +1,7 @@
 # gradient — Continuous Mining & Scan Quality: Design
 
 **Date:** 2026-07-01
-**Status:** Approved (brainstorming complete; implementation plan pending)
+**Status:** Implemented and released
 **Scope:** Second sub-project of `gradient`. Ships before the personalized
 auto-responder (which gets its own later spec).
 

@@ -10,7 +10,7 @@ const outfile = join(pluginDir, "bin", "gradient.mjs");
 const pkg = JSON.parse(await readFile(join(cliDir, "package.json"), "utf8"));
 
 await build({
-  entryPoints: [join(cliDir, "src", "cli.ts")],
+  entryPoints: [join(cliDir, "src", "bin.ts")],
   outfile,
   bundle: true,
   platform: "node",
@@ -28,7 +28,7 @@ await build({
   define: {
     __GRADIENT_BUNDLED_VERSION__: JSON.stringify(pkg.version),
   },
-  // No "#!/usr/bin/env node" banner: esbuild already hoists cli.ts's own
+  // No "#!/usr/bin/env node" banner: esbuild already hoists bin.ts's own
   // leading shebang to the top of the bundle. Adding one here would
   // duplicate it, producing an invalid second shebang line that Node's
   // ESM loader rejects with a SyntaxError.

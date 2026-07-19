@@ -1,6 +1,8 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
-import type { Assistant, Role, Turn } from "./types.js";
+import { redact } from "./security.js";
+import type { Assistant, CommandEvent, Role, ToolEvent, Turn } from "./types.js";
+import { normalizeCommandName } from "./command.js";
 
 export const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 export const MAX_PARSED_TURNS_PER_FILE = 20_000;
@@ -31,6 +33,14 @@ async function readTranscriptTail(path: string): Promise<string> {
 }
 
 interface RawBlock { type?: string; text?: string }
+interface RawToolBlock extends RawBlock {
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  tool_use_id?: string;
+  is_error?: boolean;
+  content?: unknown;
+}
 interface RawQuestion { question?: string }
 interface RawToolUseResult {
   questions?: RawQuestion[];
@@ -98,8 +108,21 @@ function usageTokens(raw: Raw): number {
     sum + (Number.isSafeInteger(value) && (value as number) > 0 ? value as number : 0), 0));
 }
 
-export function parseLines(lines: string[], maxTurns = MAX_PARSED_TURNS_PER_FILE): Turn[] {
-  const out: Turn[] = [];
+export interface ParsedTranscript {
+  turns: Turn[];
+  events: CommandEvent[];
+}
+
+// A user turn whose text opens with a slash-command echo tag (Claude Code's
+// own rendering of a typed `/foo` invocation). Anchored so a genuine prompt
+// that merely mentions the tag stays a turn.
+const COMMAND_TAG_RE = /^\s*<command-name>\s*([^<]*)\s*<\/command-name>/i;
+const COMMAND_ENVELOPE_RE = /^\s*<command-name(?:>|\s)/i;
+
+export function parseTranscript(lines: string[], maxTurns = MAX_PARSED_TURNS_PER_FILE): ParsedTranscript {
+  const turns: Turn[] = [];
+  const events: CommandEvent[] = [];
+  const pendingBySession = new Map<string, Turn>();
   const limit = Math.max(1, Math.min(maxTurns, MAX_PARSED_TURNS_PER_FILE));
   const start = Math.max(0, lines.length - limit * 4);
   for (let index = start; index < lines.length; index++) {
@@ -113,19 +136,192 @@ export function parseLines(lines: string[], maxTurns = MAX_PARSED_TURNS_PER_FILE
     }
     const turn = parseOne(raw);
     if (turn) {
-      out.push(turn);
-      if (out.length > limit) out.shift();
+      if (turn.text && COMMAND_ENVELOPE_RE.test(turn.text)) {
+        // A command envelope is never a minable prompt. Invalid/empty husks are
+        // dropped, and either form clears usage attribution for the prior turn.
+        pendingBySession.delete(turn.sessionId);
+        const match = COMMAND_TAG_RE.exec(turn.text);
+        const command = normalizeCommandName(match?.[1]);
+        if (command) {
+          events.push({
+            ts: turn.ts,
+            sessionId: turn.sessionId,
+            project: turn.project,
+            command,
+          });
+          if (events.length > limit) events.shift();
+        }
+        continue;
+      }
+      turns.push(turn);
+      pendingBySession.set(turn.sessionId, turn);
+      if (turns.length > limit) {
+        const removed = turns.shift();
+        if (removed && pendingBySession.get(removed.sessionId) === removed) {
+          pendingBySession.delete(removed.sessionId);
+        }
+      }
       continue;
     }
     const tokens = usageTokens(raw);
-    const pending = out[out.length - 1];
+    const sessionId = (raw.sessionId ?? "?").slice(0, 200);
+    const pending = pendingBySession.get(sessionId);
     if (pending && tokens > 0) pending.usageTokens = Math.min(MAX_USAGE_TOKENS, (pending.usageTokens ?? 0) + tokens);
+  }
+  return { turns, events };
+}
+
+export async function parseTranscriptFile(path: string): Promise<ParsedTranscript> {
+  return parseTranscript((await readTranscriptTail(path)).split(/\r?\n/));
+}
+
+export function parseLines(lines: string[], maxTurns = MAX_PARSED_TURNS_PER_FILE): Turn[] {
+  return parseTranscript(lines, maxTurns).turns;
+}
+
+export async function parseFile(path: string): Promise<Turn[]> {
+  return (await parseTranscriptFile(path)).turns;
+}
+
+/** Return genuine user prompts that followed assistant activity in the same
+ * session. Tool-result wrapper records do not clear the activity marker. */
+export function parseAssistantFollowedUserLines(lines: string[]): Turn[] {
+  const out: Turn[] = [];
+  const assistantActive = new Map<string, boolean>();
+  for (const line of lines.slice(-MAX_PARSED_TURNS_PER_FILE * 4)) {
+    if (!line.trim()) continue;
+    let raw: Raw;
+    try {
+      raw = JSON.parse(line) as Raw;
+    } catch {
+      continue;
+    }
+    if (raw.isSidechain) continue;
+    const sessionId = (raw.sessionId ?? "?").slice(0, 200);
+    if (raw.type === "assistant") {
+      assistantActive.set(sessionId, true);
+      continue;
+    }
+    if (raw.type !== "user") continue;
+    const turn = parseOne(raw);
+    if (!turn) continue;
+    if (assistantActive.get(sessionId)) out.push(turn);
+    assistantActive.set(sessionId, false);
+    if (out.length > MAX_PARSED_TURNS_PER_FILE) out.shift();
   }
   return out;
 }
 
-export async function parseFile(path: string): Promise<Turn[]> {
-  return parseLines((await readTranscriptTail(path)).split(/\r?\n/));
+export async function parseAssistantFollowedUserFile(path: string): Promise<Turn[]> {
+  return parseAssistantFollowedUserLines((await readTranscriptTail(path)).split(/\r?\n/));
+}
+
+const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
+const PER_SESSION_EVENT_CAP = 400;
+const ERROR_HEAD_MAX = 120;
+const TOOL_COMMAND_MAX = 1_000;
+
+function firstLine(value: unknown): string {
+  let text = "";
+  if (typeof value === "string") {
+    text = value;
+  } else if (Array.isArray(value)) {
+    text = value.map(block => {
+      if (typeof block === "string") return block;
+      if (!block || typeof block !== "object") return "";
+      const candidate = block as { text?: unknown; content?: unknown };
+      if (typeof candidate.text === "string") return candidate.text;
+      return typeof candidate.content === "string" ? candidate.content : "";
+    }).join("\n");
+  }
+  return text.split(/\r?\n/).find(line => line.trim())?.trim() ?? "";
+}
+
+/** Extract the deliberately small tool-activity surface used by tool mining.
+ * Bash calls are emitted only after their result is paired; edit calls have
+ * no useful result and are emitted at invocation time. */
+export function parseToolEventLines(lines: string[]): { events: ToolEvent[]; dropped: number } {
+  const pending = new Map<string, ToolEvent>();
+  const perSession = new Map<string, ToolEvent[]>();
+  let dropped = 0;
+
+  const push = (event: ToolEvent): void => {
+    const events = perSession.get(event.sessionId) ?? [];
+    if (events.length >= PER_SESSION_EVENT_CAP) {
+      events.shift();
+      dropped++;
+    }
+    events.push(event);
+    perSession.set(event.sessionId, events);
+  };
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let raw: Raw;
+    try {
+      raw = JSON.parse(line) as Raw;
+    } catch {
+      continue;
+    }
+    if (raw.isSidechain) continue;
+    const content = raw.message?.content;
+    if (!Array.isArray(content)) continue;
+
+    const sessionId = (raw.sessionId ?? "?").slice(0, 200);
+    for (const block of content as RawToolBlock[]) {
+      if (raw.type === "assistant" && block.type === "tool_use" && block.id) {
+        if (block.name === "Bash") {
+          const commandValue = block.input?.command;
+          const command = (typeof commandValue === "string" ? commandValue.slice(0, TOOL_COMMAND_MAX + 1) : "")
+            .split(/\r?\n/, 1)[0]
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, TOOL_COMMAND_MAX);
+          if (command) {
+            pending.set(`${sessionId}:${block.id}`, {
+              ts: (raw.timestamp ?? "").slice(0, 100),
+              sessionId,
+              kind: "bash",
+              command,
+            });
+          }
+          continue;
+        }
+
+        if (EDIT_TOOLS.has(block.name ?? "")) {
+          const fileValue = block.input?.file_path ?? block.input?.notebook_path;
+          const file = typeof fileValue === "string" ? fileValue.slice(0, 1_000) : "";
+          push({
+            ts: (raw.timestamp ?? "").slice(0, 100),
+            sessionId,
+            kind: "edit",
+            ...(file ? { file } : {}),
+          });
+        }
+        continue;
+      }
+
+      if (raw.type === "user" && block.type === "tool_result" && block.tool_use_id) {
+        const key = `${sessionId}:${block.tool_use_id}`;
+        const event = pending.get(key);
+        if (!event) continue;
+        pending.delete(key);
+        const isError = block.is_error === true;
+        const errorHead = isError ? redact(firstLine(block.content)).slice(0, ERROR_HEAD_MAX) : "";
+        push({
+          ...event,
+          isError,
+          ...(errorHead ? { errorHead } : {}),
+        });
+      }
+    }
+  }
+
+  return { events: [...perSession.values()].flat(), dropped };
+}
+
+export async function parseToolEventsFile(path: string): Promise<{ events: ToolEvent[]; dropped: number }> {
+  return parseToolEventLines((await readTranscriptTail(path)).split(/\r?\n/));
 }
 
 export interface DialogueTurn {

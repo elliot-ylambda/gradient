@@ -55,7 +55,7 @@ export function extractPasteKey(text: string): string | null {
 
 /** Group repeated error pastes without retaining their potentially sensitive bodies. */
 export function detectPasteCandidates(prompts: Turn[]): Candidate[] {
-  const groups = new Map<string, { count: number; sessions: Set<string>; assistants: Set<"claude-code" | "codex"> }>();
+  const groups = new Map<string, { count: number; sessions: Set<string>; assistants: Set<"claude-code" | "codex">; occurrences: { ts: string; sessionId: string }[] }>();
   for (const prompt of prompts) {
     if (prompt.role !== "user" || !prompt.text) continue;
     const key = extractPasteKey(prompt.text);
@@ -64,9 +64,11 @@ export function detectPasteCandidates(prompts: Turn[]): Candidate[] {
       count: 0,
       sessions: new Set<string>(),
       assistants: new Set<"claude-code" | "codex">(),
+      occurrences: [],
     };
     group.count++;
     group.sessions.add(prompt.sessionId);
+    group.occurrences.push({ ts: prompt.ts, sessionId: prompt.sessionId });
     group.assistants.add(prompt.assistant ?? "claude-code");
     groups.set(key, group);
   }
@@ -81,6 +83,8 @@ export function detectPasteCandidates(prompts: Turn[]): Candidate[] {
       count: group.count,
       sessions: group.sessions.size,
       sessionIds: [...group.sessions],
+      occurrences: group.occurrences,
+      memberSignatures: [],
       confidence: "high",
       assistants: [...group.assistants],
     });

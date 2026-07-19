@@ -132,6 +132,27 @@ export async function safeReadFile(
   }
 }
 
+/** Read file metadata through an O_NOFOLLOW descriptor after validating every
+ * path component. Useful for freshness checks without trusting a path-based
+ * stat that could race with a symlink replacement. */
+export async function safeFileMtimeMs(base: string, path: string): Promise<number> {
+  const resolved = resolvedInside(base, path);
+  await assertNoSymlinkPath(resolved.base, resolved.target);
+  const handle = await open(
+    resolved.target,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile()) {
+      throw Object.assign(new Error(`refusing non-file path: ${resolved.target}`), { code: "EISDIR" });
+    }
+    return metadata.mtimeMs;
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function safeWriteFile(
   base: string,
   path: string,

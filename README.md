@@ -4,9 +4,10 @@
 
 **The prompts you keep retyping into Claude Code and Codex, compiled into skills.**
 
-`gradient` reads your own Claude Code and Codex history, finds repeated prompts, error
-pastes, short preference answers, and recurring sequences, then generates the
-automations to stop — **skills, rules, loops, and hooks** — through a
+`gradient` reads your own Claude Code and Codex history, finds repeated prompts,
+recurring command failures, post-edit verification rituals, error pastes, short
+preference answers, and recurring sequences, then generates the automations to
+stop — **skills, rules, loops, and hooks** — through a
 local-mining **scan** → approve **review** → reversible **apply** flow.
 It only ever suggests: nothing runs without you turning it on.
 
@@ -28,6 +29,9 @@ the same things everyone does in Claude Code:
   to be named
 
 `gradient` mines those patterns out of your history and hands you the artifact.
+It also audits project and user `CLAUDE.md` instructions read-only: when you keep
+restating an instruction or correcting the assistant after activity, gradient
+can propose a safer rule—or, for an explicit post-edit check, a reviewed hook.
 
 ## Repository layout
 
@@ -70,15 +74,16 @@ every automation stays opt-in.
 **CLI (npx):**
 
 ```bash
-npx gradient.md init --target both # install the gradient skill for Claude Code + Codex
-npx gradient.md scan        # prompts, advisory paste/sequence patterns, and safe preferences
+npx gradient.md init --target both --session-scan # install + surface one suggestion next session
+npx gradient.md             # interactive mirror: top pending suggestions (fresh cache, or bounded scan)
+npx gradient.md scan        # prompts, tool rituals/failures, advisory patterns, and preferences
 npx gradient.md scan --user # all projects, last 7 days — your recent cross-project habits
 npx gradient.md scan --all  # all projects, no time limit (thorough; can be slow)
-npx gradient.md review      # inspect the ranked suggestions and their evidence
+npx gradient.md review      # approve, explain, or persistently dismiss ranked suggestions
 npx gradient.md apply <id>  # generate an approved skill / loop / hook
 npx gradient.md migrate     # convert older generated commands into skills
 npx gradient.md recall on   # hint when a typed prompt matches an installed artifact
-npx gradient.md stats       # coverage plus artifact adoption
+npx gradient.md stats       # estimated leverage plus realized minutes saved from actual use
 npx gradient.md insights    # local behavior report + concrete next actions
 npx gradient.md continuity on # checkpoint before compaction, recap after resume
 npx gradient.md bundle team-kit # package approved artifacts for teammates
@@ -87,11 +92,13 @@ npx gradient.md bundle team-kit # package approved artifacts for teammates
 The npm package is **`gradient.md`**; the command it installs is **`gradient`**.
 So `npx gradient.md scan` and, once installed globally, plain `gradient scan`.
 
-The funnel leads you through itself: `init` offers to run your first scan,
-`scan` offers to open `review` when it finds something (`--no-review` to
-skip), and the first applied artifacts offer `recall`. Every offer is a
-single enter-press and only appears on an interactive terminal — hooks,
-pipes, and `--detach` never prompt.
+The funnel leads you through itself: `init --session-scan` offers a first scan;
+after you work, the next session surfaces at most one cached suggestion and
+rescans in the background. Interactive bare `gradient` mirrors up to three
+pending suggestions, `review` can approve, explain, or persistently dismiss
+them, and `stats` reports both estimated leverage and minutes saved by observed
+artifact use. Hooks and pipes never prompt; non-interactive bare invocation
+continues to print help.
 
 **Scope.** `scan` defaults to the project you're in. `--user` widens to every
 project but bounds it to a recent window (last 7 days, set via `userScopeDays`
@@ -119,10 +126,13 @@ for workflows the judge marks mechanical, and an empty string disables it.
 The default backend reuses the CLI auth you already have: `claude` for the
 default Claude Code target and `codex exec --ephemeral` for a Codex-only target.
 No API key is required for local use.
-Clustering is local and LLM-free. `scan` sends bounded candidate snippets—not
-whole transcripts—to the selected model after redacting common credential and
-PII formats. Redaction is defense in depth, not a guarantee that arbitrary
-private or proprietary text is removed; review the
+Prompt clustering and tool-activity mining are local and LLM-free. `scan` sends
+bounded candidate snippets—not whole transcripts—to the selected model after
+redacting common credential and PII formats. Tool candidates contain only a
+bounded command head and, for failures, a redacted first error line; successful
+tool output and file contents are never extracted. Redaction is defense in
+depth, not a guarantee that arbitrary private or proprietary text is removed;
+review the
 [data and trust boundaries](#data-and-trust-boundaries) before scanning
 sensitive history.
 
@@ -271,7 +281,8 @@ and model/effort churn. It makes no model call. Each hot metric points to a
 specific action such as `gradient autopilot nudge`, `gradient scan`, or
 `gradient recall on`; `--user` uses the same recent cross-project window as
 scan, and `--html` writes a self-contained private
-`.gradient/insights.html`.
+`.gradient/insights.html`. Project reports also show up to 15 instruction
+effectiveness findings from the most recent scan.
 
 `gradient continuity on` installs locally consented `PreCompact` checkpoint
 and `SessionStart` recap hooks. Bounded, redacted recent user intents plus a
@@ -283,16 +294,27 @@ consent, deletes the checkpoint, then removes only those two hooks.
 ## Data and trust boundaries
 
 - `scan` reads user-authored turns from enabled local Claude Code and Codex
-  transcripts (excluding Codex subagent rollouts), writes a
+  transcripts (excluding Codex subagent rollouts). From Claude Code history it
+  also pairs bounded Bash calls with their results and records file-edit events
+  locally to detect recurring failures and post-edit rituals. It extracts no
+  successful output; at most a redacted 120-character first error line can join
+  a candidate. It writes a
   private per-project cache under `~/.config/gradient/projects/`, and sends only
   capped/redacted candidate snippets to the selected model. Project-scoped
   preference mining also reads bounded assistant questions; cross-project scans
   skip that pass. `--user --since` filters individual turn timestamps; every
   scope keeps the default 1,500-prompt processing cap and an absolute 5,000
-  prompt ceiling. Transcript traversal, individual files, total input bytes,
-  candidate count, caches, settings, playbooks, and append-only logs are also
-  bounded. Site-specific `ignorePatterns` accept only a capped, linear-looking
-  regex subset to avoid backtracking denial of service.
+  prompt ceiling. Tool events have a 400-per-session cap and a 20,000-event
+  global cap, with all drops reported. Transcript traversal, individual files,
+  total input bytes, candidate count, caches, settings, playbooks, and
+  append-only logs are also bounded. Site-specific `ignorePatterns` accept only
+  a capped, linear-looking regex subset to avoid backtracking denial of service.
+- Project scans read `CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/*.md`, and
+  the user's `~/.claude/CLAUDE.md` without following imports or symlinks and
+  never modify them. Instruction-audit tallies are private `0600` user-cache
+  data, not repository files. Corrections count only when same-session
+  transcript ordering confirms preceding assistant activity; cross-project
+  scans skip the audit so one repository's instructions cannot affect another.
 - Suggestions must map to opaque IDs for exact local source candidates; redacted
   text is never used as a provenance key. Artifact bodies, titles, triggers,
   rule text, and hook commands are reconstructed locally, and `review` shows the
@@ -347,6 +369,9 @@ cd cli && npm install && npm test && npm run build
 
 ## Status
 
+The current public npm release is `gradient.md@0.4.0`. The product is published
+on npm's `latest` channel; it is a pre-1.0 release, not a beta-tagged build.
+
 Phase A of the v2 funnel makes both ends of mining more honest: continuation
 summaries, task notifications, configured injectors, and template floods are
 excluded from habit detection; approved command-type suggestions now become
@@ -354,6 +379,14 @@ model-invoked Claude Code skills under `.claude/skills/` by default. Existing
 current-safe gradient-generated commands can be converted with `gradient
 migrate` (`--dry-run` previews the change). Pre-0.1.1 commands lack the private
 exact-content approval and are skipped; re-scan, review, and apply them first.
+
+**0.6 stable-id migration:** suggestion ids now derive from their source
+evidence instead of an LLM-chosen name. After upgrading from an earlier
+release, run `gradient scan` and `gradient review`. If an already-applied
+artifact appears again, re-apply the reviewed suggestion and remove the old
+manifest entry with `gradient remove <name>`. Gradient does not rewrite or
+delete existing artifacts automatically.
+
 Set `emitTarget` to `"command"` in the gradient config only when legacy
 `.claude/commands/` output is required. Phase B
 adds local recall hints and artifact adoption reporting, closing the gap between

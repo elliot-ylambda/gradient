@@ -1,7 +1,7 @@
 # gradient — Instruction Audit: Does Your CLAUDE.md Actually Work? — Design
 
 **Date:** 2026-07-06
-**Status:** Draft (brainstorming complete; awaiting user review)
+**Status:** Implemented (2026-07-18)
 **Scope:** Spec 7. Measures whether written instructions (CLAUDE.md,
 `.claude/rules/*.md`) actually hold, by mining two signals — **restated
 instructions** (the user keeps typing what is already written) and
@@ -39,7 +39,7 @@ user *wrote* and what the user *had to say anyway*.
 | 3 | Instruction unit | A markdown list item or short paragraph line (8–200 chars) outside code blocks; headings, links-only lines, and marker regions are skipped. Normalized with `cluster.ts#normalize`. |
 | 4 | Restatement detector | `similarity(normalize(prompt), normalize(instruction)) ≥ ~0.7` over `"human"`-class prompts (Phase A classifier). **≥ 3 restatements across ≥ 2 sessions** → finding. |
 | 5 | Correction detector | Short (< 200 chars) human prompts matching a correction lexicon (leading "no," / "don't" / "stop" / "never" / "actually" / "instead" / "that's wrong" / "undo" / "revert" …), clustered with the existing trigram machinery over the correction subset. **≥ 3 across ≥ 2 sessions** → candidate. Uses Phase C2's opt-in assistant-turn parse only to confirm the prompt follows assistant activity in-session. |
-| 6 | Cross-reference | Every correction cluster is checked against instruction lines. Match → **violated instruction**: suggest a mechanical artifact — a Spec 6 command-`hook` when the instruction is hook-shaped (imperative + a runnable command), else a project rule restating it in enforceable terms. No match → **missing instruction**: a `rule` suggestion (Phase C2 payload/emitter unchanged). |
+| 6 | Cross-reference | Every correction cluster is checked against instruction lines. Match → **violated instruction**: suggest a project rule, or a Spec 6 command-`hook` only when the instruction explicitly mandates a safe, non-consequential command after edits. Prohibitions and broad/long-running commands remain rules. No match → **missing instruction**: a `rule` suggestion (Phase C2 payload/emitter unchanged). |
 | 7 | Funnel integration | New candidate kind hint `"instruction"`; candidates carry the quoted instruction line (when matched) so the detect judge sees exactly what failed. Same detect window, same cap-and-log stance as Spec 6 Decision 5. |
 | 8 | Insights section | Per instruction: restatements · violations · last seen, sorted by (restatements + violations), capped at 15 rows. Owned by `insights` (behavior view); `stats` does not grow this. Without Phase D, `scan` prints a one-line summary. |
 
@@ -49,8 +49,8 @@ user *wrote* and what the user *had to say anyway*.
 |------|----------------|
 | `core/instructions.ts` (create) | Load instruction sources for a scope (project dir + home), extract instruction lines (Decision 3), tag each with `{source, line, normalized}`. |
 | `core/audit.ts` (create) | Restatement detector (Decision 4), correction detector (Decision 5), cross-reference (Decision 6); emits `Candidate`s and the per-instruction tallies consumed by insights. |
-| `core/detect.ts` (modify) | Briefing for `"instruction"` candidates: violated + hook-shaped → command hook; violated otherwise → project rule; unmatched correction → project rule; user-global source → `target: "user"` (print-only). |
-| `commands/scan.ts` (modify) | Run the audit after classification; merge candidates into the detect window; summary line. |
+| `core/detect.ts` (modify) | Briefing for `"instruction"` candidates: an explicit safe post-edit command may become a reviewed hook; all other violated/restated instructions and unmatched corrections become rules; user-global source → `target: "user"` (print-only). |
+| `commands/scan.ts` (modify) | Run the project-scoped audit after classification; merge candidates into the detect window; persist tallies in the private per-project user cache; summary line. |
 | `insights` (Phase D file, modify when present) | "Instruction effectiveness" section (Decision 8). |
 
 ## 4. Detection flow
@@ -79,6 +79,12 @@ user *wrote* and what the user *had to say anyway*.
   CLAUDE.md is never touched (Decision 2).
 - A correction-derived rule quotes the *pattern*, never a specific
   session's content beyond the redacted example lines shown in `review`.
+- Instruction sources are bounded and read without following symlinks or
+  `@import`s. Tallies live under `~/.config/gradient/projects/` with private
+  permissions; no `audit.json` is written into the repository.
+- Corrections enter the detector only when raw transcript ordering confirms
+  preceding assistant activity in the same session. Project instruction audit
+  is skipped for cross-project scans.
 
 ## 6. Explicitly out of scope (YAGNI)
 
@@ -120,9 +126,9 @@ independent; 7 last.
 - Corrections: lexicon precision on a redacted fixture from real history
   (pinned in the plan); a correction matching an instruction routes to
   *violated*; one matching nothing routes to *missing*.
-- Cross-reference artifact choice: hook-shaped violated instruction →
-  command-hook payload; prose-shaped → project rule; user-global source →
-  print-only.
+- Cross-reference artifact choice: explicit safe post-edit command →
+  command-hook payload; prohibitions, broad/long-running commands, and prose →
+  project rule; user-global source → print-only.
 - Insights: tallies, sort, 15-row cap; empty-CLAUDE.md project renders
   nothing and exits green.
 - Redaction: instruction lines and examples pass through `redact()`.

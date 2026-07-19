@@ -1,5 +1,8 @@
 # gradient v2 Phase E — `gradient bundle` (Team Distribution) — Implementation Plan
 
+**Status:** Complete. Unchecked boxes below preserve the original plan; the
+security revision documents the shipped behavior.
+
 > **Security revision (0.1.1):** This historical plan's hook export and raw file
 > copy were superseded by the public-release audit. The shipped implementation
 > requires exact validated manifest paths plus matching provenance markers,

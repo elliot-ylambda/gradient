@@ -3,7 +3,6 @@ import type { Turn, Candidate } from "./types.js";
 // Anchored at the start so a genuine prompt that merely *mentions* one of these
 // wrappers ("why did the task-notification fire twice?") is still mined.
 const INJECTED_PATTERNS: RegExp[] = [
-  /^<command-(name|message|args)/i,
   /<system-reminder>/i,
   /local-command-stdout/i,
   /^Base directory for/i,
@@ -16,6 +15,10 @@ const INJECTED_PATTERNS: RegExp[] = [
   /^<apps_instructions>/i,
   /^<plugins_instructions>/i,
   /^<multi_agent_mode>/i,
+  // Defensive fallback for Claude command wrapper fragments. A valid
+  // <command-name> envelope is consumed by parseTranscript; message/args-only
+  // fragments and older cached parser output must still never be mined.
+  /^<command-(?:message|args)>/i,
   /^\[Request interrupted/i,
   // Harness-scheduled autonomous-loop wakeups arrive in the user role but are
   // machine text, not habits: match the resolved tick/check headers and the
@@ -25,9 +28,6 @@ const INJECTED_PATTERNS: RegExp[] = [
   // A prompt that is only a slash-command invocation is already automation;
   // mining it would suggest a skill that duplicates the command itself.
   /^\/[\w:-]+$/,
-  // Pasted-image placeholders arrive as user text; a prompt that is only
-  // image tags carries no mineable intent.
-  /^\s*(?:\[image(?::| #\d+)[^\]]*\]\s*)+$/i,
   // Feature-instruction blocks the harness injects when a capability connects
   // mid-session (observed: Claude-in-Chrome browser automation guidelines).
   /^# claude in chrome browser automation\b/i,
@@ -38,10 +38,43 @@ export type PromptClass = "human" | "injected" | "continuation" | "notification"
 const CONTINUATION_RE = /^this session is being continued from a previous/i;
 const NOTIFICATION_RE = /^<task-notification>/i;
 
+/** Linear scanner for one or more pasted-image placeholders. Keeping this out
+ * of a nested-quantifier regexp avoids attacker-controlled transcript text
+ * triggering catastrophic backtracking. */
+function isOnlyImagePlaceholders(text: string): boolean {
+  let index = 0;
+  let count = 0;
+  const skipWhitespace = (): void => {
+    while (index < text.length && /\s/u.test(text[index])) index += 1;
+  };
+
+  skipWhitespace();
+  while (index < text.length) {
+    if (text.slice(index, index + 6).toLowerCase() !== "[image") return false;
+    index += 6;
+    if (text[index] === ":") {
+      index += 1;
+    } else {
+      if (text[index] !== " " || text[index + 1] !== "#") return false;
+      index += 2;
+      const digitsStart = index;
+      while (index < text.length && text[index] >= "0" && text[index] <= "9") index += 1;
+      if (index === digitsStart || text[index] !== ":") return false;
+      index += 1;
+    }
+    const close = text.indexOf("]", index);
+    if (close === -1) return false;
+    index = close + 1;
+    count += 1;
+    skipWhitespace();
+  }
+  return count > 0;
+}
+
 export function isInjected(text: string): boolean {
   const t = text.trim();
   if (!t) return true;
-  return INJECTED_PATTERNS.some(re => re.test(t));
+  return isOnlyImagePlaceholders(t) || INJECTED_PATTERNS.some(re => re.test(t));
 }
 
 export function compileIgnorePatterns(raw?: string[]): RegExp[] {
@@ -71,7 +104,7 @@ export function classifyPrompt(text: string, ignore: RegExp[] = []): PromptClass
   if (!t) return "injected";
   if (CONTINUATION_RE.test(t)) return "continuation";
   if (NOTIFICATION_RE.test(t)) return "notification";
-  if (INJECTED_PATTERNS.some(re => re.test(t))) return "injected";
+  if (isOnlyImagePlaceholders(t) || INJECTED_PATTERNS.some(re => re.test(t))) return "injected";
   if (ignore.some(re => re.test(t))) return "injected";
   return "human";
 }
