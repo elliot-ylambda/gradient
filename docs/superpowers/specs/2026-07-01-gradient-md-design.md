@@ -1,7 +1,20 @@
 # gradient — `gradient.md`: the branded playbook file — Design
 
+> **Amended 2026-07-18:** implementation (PR #3) tightened Decision 3. The
+> project `gradient.md` contributes machine-readable clamps only
+> (`autopilot.max-mode`, `autopilot.budget`); its prose never reaches the
+> judge prompt or the emitted nudge — a committed file is writable by anyone
+> who can merge a PR, so the clamp-only rule now covers prose too and the
+> judge prompt stays trusted-input-only. This supersedes Decision 3's "prose
+> rules from both files reach the judge", §3's "prose for the judge" /
+> "prose-only judge context" lines, and §4's `PROJECT PLAYBOOK` prompt block
+> and "prose rules union", all preserved below as the original record.
+> Shipped behavior is locked in by `judge.test.ts` ("does not create a
+> repository playbook section") and `respond.test.ts` ("repository prose
+> never reaches the judge prompt or emitted nudge").
+
 **Date:** 2026-07-01
-**Status:** Approved (brainstorming complete; implementation plan pending)
+**Status:** Implemented and released
 **Scope:** Amendment to Spec 2 (Personalized Auto-Responder). Renames the
 autopilot playbook artifact to `gradient.md`, adds a per-project layer, and
 defines how the two layers compose. Applies on top of the merged Spec 2
