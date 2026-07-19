@@ -453,6 +453,9 @@ function validateConfig(value) {
   if (config.scanOnSessionStart !== void 0 && typeof config.scanOnSessionStart !== "boolean") {
     throw new Error("config scanOnSessionStart must be a boolean");
   }
+  if (config.mineToolEvents !== void 0 && typeof config.mineToolEvents !== "boolean") {
+    throw new Error("config mineToolEvents must be a boolean");
+  }
   if (config.autopilot !== void 0 && !AUTOPILOT_MODES.has(config.autopilot)) {
     throw new Error("config autopilot must be off, nudge, or full");
   }
@@ -1437,7 +1440,7 @@ function parseToolEventLines(lines) {
       if (raw.type === "assistant" && block.type === "tool_use" && block.id) {
         if (block.name === "Bash") {
           const commandValue = block.input?.command;
-          const command = (typeof commandValue === "string" ? commandValue : "").split(/\r?\n/, 1)[0].replace(/\s+/g, " ").trim();
+          const command = (typeof commandValue === "string" ? commandValue.slice(0, TOOL_COMMAND_MAX + 1) : "").split(/\r?\n/, 1)[0].replace(/\s+/g, " ").trim().slice(0, TOOL_COMMAND_MAX);
           if (command) {
             pending.set(`${sessionId}:${block.id}`, {
               ts: (raw.timestamp ?? "").slice(0, 100),
@@ -1527,7 +1530,7 @@ function parseDialogueLines(lines) {
 async function parseDialogueFile(path5) {
   return parseDialogueLines((await readTranscriptTail(path5)).split(/\r?\n/));
 }
-var MAX_TRANSCRIPT_BYTES, MAX_PARSED_TURNS_PER_FILE, MAX_TURN_TEXT_CHARS, MAX_DIALOGUE_TEXT_CHARS, MAX_USAGE_TOKENS, EDIT_TOOLS, PER_SESSION_EVENT_CAP, ERROR_HEAD_MAX;
+var MAX_TRANSCRIPT_BYTES, MAX_PARSED_TURNS_PER_FILE, MAX_TURN_TEXT_CHARS, MAX_DIALOGUE_TEXT_CHARS, MAX_USAGE_TOKENS, EDIT_TOOLS, PER_SESSION_EVENT_CAP, ERROR_HEAD_MAX, TOOL_COMMAND_MAX;
 var init_parse = __esm({
   "src/core/parse.ts"() {
     "use strict";
@@ -1540,6 +1543,7 @@ var init_parse = __esm({
     EDIT_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "NotebookEdit"]);
     PER_SESSION_EVENT_CAP = 400;
     ERROR_HEAD_MAX = 120;
+    TOOL_COMMAND_MAX = 1e3;
   }
 });
 
@@ -3006,7 +3010,7 @@ var init_sleep = __esm({
 var VERSION;
 var init_version = __esm({
   "node_modules/@anthropic-ai/sdk/version.mjs"() {
-    VERSION = "0.112.1";
+    VERSION = "0.112.3";
   }
 });
 
@@ -18613,7 +18617,11 @@ function renderInsightsHtml(report) {
     ["compacts", metrics.compacts],
     ["error pastes", metrics.errorPastes],
     ["model switches", metrics.modelSwitches],
-    ["effort switches", metrics.effortSwitches]
+    ["effort switches", metrics.effortSwitches],
+    ...report.toolActivity ? [
+      ["in-session failure loops", report.toolActivity.failureLoops],
+      ["post-edit rituals", report.toolActivity.postEditRituals]
+    ] : []
   ];
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>gradient insights</title>
 <style>
@@ -18660,6 +18668,7 @@ async function insights(opts, deps = {}) {
   const collectFn = deps.collectFn ?? collect;
   const collectCodexFn = deps.collectCodexFn ?? collectCodex;
   const parseFn = deps.parseFn ?? parseFile;
+  const parseToolEventsFn = deps.parseToolEventsFn ?? (deps.parseFn ? void 0 : parseToolEventsFile);
   const parseCodexFn = deps.parseCodexFn ?? parseCodexFile;
   const days = config.userScopeDays ?? DEFAULT_USER_SCOPE_DAYS;
   const scope = opts.user ? { scope: "all", sinceDays: days, home: opts.home } : { scope: "project", projectPath: opts.projectDir, home: opts.home };
@@ -18678,6 +18687,8 @@ async function insights(opts, deps = {}) {
   const ignore = compileIgnorePatterns(config.ignorePatterns);
   const metrics = computeMetrics([], ignore);
   const analysisTurns = [];
+  let toolEvents = [];
+  let toolEventsDropped = 0;
   let processedTurns = 0;
   let analysisComplete = true;
   let capped = claudeFiles.length + codexFiles.length > files.length;
@@ -18697,6 +18708,20 @@ async function insights(opts, deps = {}) {
     if (scoped.length > parsed.length) capped = true;
     processedTurns += parsed.length;
     addMetrics(metrics, computeMetrics(parsed, ignore));
+    if (file.assistant === "claude-code" && config.mineToolEvents !== false && parseToolEventsFn) {
+      const parsedEvents = await parseToolEventsFn(file.path);
+      const scopedEvents = cutoff === void 0 ? parsedEvents.events : parsedEvents.events.filter((event) => {
+        const timestamp = Date.parse(event.ts);
+        return Number.isFinite(timestamp) && timestamp >= cutoff;
+      });
+      toolEventsDropped += parsedEvents.dropped;
+      toolEvents.push(...scopedEvents);
+      if (toolEvents.length > INSIGHTS_MAX_TOOL_EVENTS) {
+        toolEvents.sort((left, right) => left.ts < right.ts ? 1 : left.ts > right.ts ? -1 : 0);
+        toolEventsDropped += toolEvents.length - INSIGHTS_MAX_TOOL_EVENTS;
+        toolEvents = toolEvents.slice(0, INSIGHTS_MAX_TOOL_EVENTS);
+      }
+    }
     if (analysisComplete) {
       const analysisRemaining = INSIGHTS_MAX_ANALYSIS_TURNS - analysisTurns.length;
       if (parsed.length <= analysisRemaining) analysisTurns.push(...parsed);
@@ -18708,6 +18733,11 @@ async function insights(opts, deps = {}) {
     }
   }
   const costs = buildCostRows(analysisTurns, ignore);
+  const toolActivity = {
+    failureLoops: failureLoops(toolEvents).length,
+    postEditRituals: rituals(toolEvents).length
+  };
+  if (toolEventsDropped > 0) capped = true;
   const avoided = await sumAutopilotAvoided(opts.home);
   const recallInstalled = await hookInstalled(opts.projectDir, "UserPromptSubmit", "gradient recall");
   const auditSnapshot = opts.user ? null : await loadInstructionAudit(opts.projectDir, opts.home);
@@ -18719,19 +18749,29 @@ async function insights(opts, deps = {}) {
     } catch {
     }
   }
+  const recommendations = buildRecommendations(metrics, {
+    autopilotMode: config.autopilotProjects?.[projectKey(opts.projectDir)],
+    avoided,
+    recallInstalled,
+    unusedArtifacts
+  });
+  if (toolActivity.postEditRituals > 0) recommendations.unshift({
+    metric: "post-edit-rituals",
+    line: `${toolActivity.postEditRituals} post-edit ritual(s) detected \u2014 run gradient scan, then gradient review`
+  });
+  if (toolActivity.failureLoops > 0) recommendations.unshift({
+    metric: "failure-loops",
+    line: `${toolActivity.failureLoops} recurring in-session command failure loop(s) \u2014 run gradient scan, then gradient review`
+  });
   return {
     label,
     metrics,
     costs,
     avoided,
     capped,
+    toolActivity,
     ...instructionEffectiveness?.length ? { instructionEffectiveness } : {},
-    recommendations: buildRecommendations(metrics, {
-      autopilotMode: config.autopilotProjects?.[projectKey(opts.projectDir)],
-      avoided,
-      recallInstalled,
-      unusedArtifacts
-    })
+    recommendations
   };
 }
 async function writeInsightsHtml(projectDir, report) {
@@ -18739,7 +18779,7 @@ async function writeInsightsHtml(projectDir, report) {
   await safeWriteFile(projectDir, path5, renderInsightsHtml(report), { mode: 384 });
   return path5;
 }
-var INSIGHTS_MAX_FILES, INSIGHTS_MAX_TURNS, INSIGHTS_MAX_ANALYSIS_TURNS;
+var INSIGHTS_MAX_FILES, INSIGHTS_MAX_TURNS, INSIGHTS_MAX_ANALYSIS_TURNS, INSIGHTS_MAX_TOOL_EVENTS;
 var init_insights2 = __esm({
   "src/commands/insights.ts"() {
     "use strict";
@@ -18756,9 +18796,11 @@ var init_insights2 = __esm({
     init_manifest();
     init_safeFs();
     init_audit();
+    init_toolmine();
     INSIGHTS_MAX_FILES = 2e3;
     INSIGHTS_MAX_TURNS = 1e5;
     INSIGHTS_MAX_ANALYSIS_TURNS = 1e4;
+    INSIGHTS_MAX_TOOL_EVENTS = 2e4;
   }
 });
 
@@ -19446,6 +19488,9 @@ ${c.muted("session-start scan:")} ${r.sessionScanInstalled}`
         log(`  ${c.bold("prompts")} ${metrics.prompts}   ${c.bold("nudges")} ${metrics.nudges}   ${c.bold("interrupts")} ${metrics.interrupts}`);
         log(`  ${c.bold("context deaths")} ${metrics.continuations}   ${c.bold("compacts")} ${metrics.compacts}   ${c.bold("error pastes")} ${metrics.errorPastes}`);
         log(`  ${c.bold("model switches")} ${metrics.modelSwitches}   ${c.bold("effort switches")} ${metrics.effortSwitches}`);
+        log(
+          `  ${c.bold("in-session failure loops")} ${report.toolActivity.failureLoops}   ${c.bold("post-edit rituals")} ${report.toolActivity.postEditRituals}`
+        );
         if ((report.costs ?? []).length > 0) {
           log(`
 ${c.bold("cost of unautomated habits")}`);
