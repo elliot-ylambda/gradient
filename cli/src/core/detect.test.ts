@@ -709,6 +709,58 @@ describe("detect", () => {
     expect(out[0].evidence.sessions).toBe(3);
     expect(out[0].sourceSignatures?.slice().sort()).toEqual(["lgtm", "looks good"]);
     expect(out[0].id).toBe(idFor(["lgtm", "looks good"], "command"));
+    // The merged rationale must describe the post-merge evidence, not the host's
+    // pre-merge counts.
+    expect(out[0].rationale).toContain("6×");
+    expect(out[0].rationale).toContain("3 distinct sessions");
+  });
+
+  // The other lexical signal: near-identical trigger text merges two
+  // suggestions even when the model names them in completely unrelated ways
+  // ("ship-changes" vs "open-pr" — name similarity 0.000, trigger similarity
+  // 0.771). Concatenated name+trigger comparison would miss this (0.456).
+  it("merges on trigger similarity alone when the model names the duplicates differently", async () => {
+    const a: Candidate = {
+      kind: "unknown", signature: "push and create a pull request",
+      examples: ["push and create a pull request"], count: 3, sessions: 2, sessionIds: ["s1", "s2"],
+      occurrences: [
+        { ts: "2026-06-01T10:00:00Z", sessionId: "s1" },
+        { ts: "2026-06-01T11:00:00Z", sessionId: "s1" },
+        { ts: "2026-06-02T09:00:00Z", sessionId: "s2" },
+      ],
+      memberSignatures: ["push and create a pull request"], confidence: "high",
+    };
+    const b: Candidate = {
+      kind: "unknown", signature: "push and create the pull request",
+      examples: ["push and create the pull request"], count: 3, sessions: 2, sessionIds: ["s2", "s3"],
+      occurrences: [
+        { ts: "2026-06-02T10:00:00Z", sessionId: "s2" },
+        { ts: "2026-06-03T09:00:00Z", sessionId: "s3" },
+        { ts: "2026-06-03T10:00:00Z", sessionId: "s3" },
+      ],
+      memberSignatures: ["push and create the pull request"], confidence: "high",
+    };
+    const llm = {
+      name: "fake",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => {
+        const wire = JSON.parse(prompt) as { id: string; signature: string }[];
+        return JSON.stringify({ suggestions: [
+          {
+            sourceIds: [wire[0].id], name: "ship changes", confidence: "high",
+            payload: { type: "command", commandName: "ship-changes" },
+          },
+          {
+            sourceIds: [wire[1].id], name: "open pr", confidence: "high",
+            payload: { type: "command", commandName: "open-pr" },
+          },
+        ] });
+      },
+    };
+    const out = await detect([a, b], llm);
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence.count).toBe(6);
+    expect(out[0].evidence.sessions).toBe(3);
   });
 });
 
@@ -761,6 +813,49 @@ describe("mergeNearDuplicates", () => {
     };
     const out = mergeNearDuplicates([a, b], new Map());
     expect(out).toHaveLength(2);
+  });
+
+  // Ambiguity must survive a merge: folding a flagged suggestion (with its
+  // clarify) into a confident host keeps the flag and adopts the clarify —
+  // otherwise the disambiguation the flag existed to force silently vanishes.
+  it("keeps the more cautious confidence and adopts the duplicate's clarify on merge", () => {
+    const host: Suggestion = {
+      id: "host", name: "approve-pr", title: "t", rationale: "Observed 5× across 5 distinct sessions; generated content is reconstructed locally.",
+      confidence: "high",
+      evidence: { count: 5, sessions: 5, estMinutesSavedPerMonth: 9 },
+      sourceSignatures: ["approve the pr"],
+      payload: { type: "command", commandName: "approve-pr", body: "x", triggers: ["approve the pr"] },
+    };
+    const flaggedDup: Suggestion = {
+      id: "dup", name: "approve-pr-too", title: "t", rationale: "r",
+      confidence: "flagged",
+      clarify: {
+        question: "Acknowledge or merge?",
+        options: [
+          { label: "Acknowledge as sign-off only", body: "b1" },
+          { label: "Approve and merge after checks pass", body: "b2" },
+        ],
+      },
+      evidence: { count: 3, sessions: 2, estMinutesSavedPerMonth: 4 },
+      sourceSignatures: ["approve this pr"],
+      payload: { type: "command", commandName: "approve-pr-too", body: "x", triggers: ["approve this pr"] },
+    };
+    const mk = (signature: string, count: number, sessionIds: string[]): Candidate => ({
+      kind: "unknown", signature, examples: [signature], count, sessions: sessionIds.length,
+      sessionIds, occurrences: sessionIds.map((sessionId, i) => ({ ts: `2026-06-0${i + 1}T10:00:00Z`, sessionId })),
+      memberSignatures: [signature], confidence: "high",
+    });
+    const bySignature = new Map<string, Candidate>([
+      ["approve the pr", mk("approve the pr", 5, ["s1", "s2", "s3", "s4", "s5"])],
+      ["approve this pr", mk("approve this pr", 3, ["s5", "s6"])],
+    ]);
+    const out = mergeNearDuplicates([host, flaggedDup], bySignature);
+    expect(out).toHaveLength(1);
+    expect(out[0].confidence).toBe("flagged");
+    expect(out[0].clarify?.question).toBe("Acknowledge or merge?");
+    expect(out[0].evidence.count).toBe(8);
+    expect(out[0].rationale).toContain("8×");
+    expect(out[0].rationale).toContain("6 distinct sessions");
   });
 });
 

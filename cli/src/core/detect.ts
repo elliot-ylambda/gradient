@@ -350,25 +350,39 @@ function mergeDistinctiveText(payload: SuggestionPayload): string {
   return payload.description;
 }
 
-function mergeText(s: Suggestion): string {
-  return normalize(`${s.name} ${mergeDistinctiveText(s.payload)}`);
+/** Two independent lexical signals, either sufficient: the model naming two
+ * clusters alike, or the underlying trigger/instruction text overlapping.
+ * Concatenating them into one string dilutes both — a 0.77-similar trigger
+ * pair drops below threshold once two unrelated names are prepended. */
+function isNearDuplicate(a: Suggestion, b: Suggestion): boolean {
+  if (a.payload.type !== b.payload.type) return false;
+  return similarity(normalize(a.name), normalize(b.name)) >= NEAR_DUPLICATE_THRESHOLD ||
+    similarity(normalize(mergeDistinctiveText(a.payload)), normalize(mergeDistinctiveText(b.payload))) >= NEAR_DUPLICATE_THRESHOLD;
 }
+
+const CONFIDENCE_CAUTION: Record<Confidence, number> = { high: 0, inferred: 1, flagged: 2 };
 
 /** Deterministic backstop for the LLM's `sourceIds` grouping: the model is
  * asked to merge synonymous clusters, but nothing guarantees it will (the
  * dogfood case — "lgtm" and "looks good" returned as two separate command
  * suggestions for one habit). Hosts are considered in leverage order; a
- * suggestion folds into the first host of the same payload type whose
- * distinctive text is near-identical (trigram similarity ≥ 0.6). A merge
- * that can't re-resolve every unioned sourceSignature back to a candidate
- * (e.g. a signature outside this detect() window) leaves the host untouched
- * and simply drops the duplicate rather than fabricate evidence. */
+ * suggestion folds into the first host of the same payload type that
+ * isNearDuplicate judges lexically equivalent (either the names or the
+ * distinctive payload text at trigram similarity ≥ 0.6). A merge that can't
+ * re-resolve every unioned sourceSignature back to a candidate (e.g. a
+ * signature outside this detect() window) leaves the host untouched and
+ * simply drops the duplicate rather than fabricate evidence.
+ *
+ * Honest boundary: trigram similarity catches LEXICAL near-duplicates —
+ * overlapping triggers ("push and create a/the pull request") or the model
+ * naming two clusters alike ("lgtm-approve"/"looks-good-approve"). True
+ * synonyms with dissimilar names AND triggers ("lgtm" vs "looks good" under
+ * unrelated names) are not trigram-detectable; merging those remains the
+ * model's prompt-instructed job, and this pass is the net under it. */
 export function mergeNearDuplicates(suggestions: Suggestion[], bySignature: Map<string, Candidate>): Suggestion[] {
   const hosts: Suggestion[] = [];
   for (const suggestion of [...suggestions].sort(byLeverage)) {
-    const hostIndex = hosts.findIndex(host =>
-      host.payload.type === suggestion.payload.type &&
-      similarity(mergeText(host), mergeText(suggestion)) >= NEAR_DUPLICATE_THRESHOLD);
+    const hostIndex = hosts.findIndex(host => isNearDuplicate(host, suggestion));
     if (hostIndex === -1) {
       hosts.push(suggestion);
       continue;
@@ -380,12 +394,24 @@ export function mergeNearDuplicates(suggestions: Suggestion[], bySignature: Map<
     if (!matched.every((c): c is Candidate => c !== undefined)) continue; // unresolvable union: drop duplicate, host unchanged
 
     const unionExamples = [...new Set([...(host.examples ?? []), ...(suggestion.examples ?? [])])].slice(0, 5);
+    const evidence = evidenceFor(matched, host.payload.type);
+    // Ambiguity survives the merge: confidence is the more cautious of the
+    // pair, and a duplicate's clarify is adopted when the host has none —
+    // folding a flagged suggestion into a confident host must not silently
+    // discard the disambiguation the flag existed to force.
+    const confidence = CONFIDENCE_CAUTION[suggestion.confidence] > CONFIDENCE_CAUTION[host.confidence]
+      ? suggestion.confidence
+      : host.confidence;
+    const clarify = host.clarify ?? suggestion.clarify;
     hosts[hostIndex] = {
       ...host,
-      evidence: evidenceFor(matched, host.payload.type),
+      evidence,
       id: idFor(unionSignatures, host.payload.type),
       sourceSignatures: unionSignatures,
       examples: unionExamples,
+      rationale: `Observed ${evidence.count}× across ${evidence.sessions} distinct sessions; generated content is reconstructed locally.`,
+      confidence,
+      ...(clarify ? { clarify } : {}),
     };
   }
   return hosts;
