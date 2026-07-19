@@ -228,7 +228,16 @@ export async function main(
 
   if (argv.length === 0) {
     if (io.isTTY ?? process.stdout.isTTY === true) {
-      await mirror(process.cwd(), { home: io.home, write: log });
+      // A bare invocation is a foreground command like `scan` or `stats`, not
+      // a hook target, so a genuine failure (e.g. a corrupt manifest) is
+      // reported like any other command failure below, not left to crash as
+      // an unhandled rejection.
+      try {
+        await mirror(process.cwd(), { home: io.home, write: log });
+      } catch (e) {
+        log(c.coral(`gradient: ${terminalSafeLine((e as Error).message)}`));
+        return 1;
+      }
       return 0;
     }
     log(`${banner(VERSION)}\n\n${HELP}`);

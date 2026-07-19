@@ -198,6 +198,15 @@ describe("main", () => {
     }));
   });
 
+  it("reports a mirror failure like any other command instead of crashing", async () => {
+    vi.mocked(mirror).mockClear();
+    vi.mocked(mirror).mockRejectedValueOnce(new Error("corrupt manifest"));
+    const logs: string[] = [];
+    const code = await main([], { isTTY: true, log: (m) => logs.push(m) });
+    expect(code).toBe(1);
+    expect(logs.join("\n")).toContain("gradient: corrupt manifest");
+  });
+
   it("explicit help always prints usage even on an interactive terminal", async () => {
     vi.mocked(mirror).mockClear();
     const logs: string[] = [];
