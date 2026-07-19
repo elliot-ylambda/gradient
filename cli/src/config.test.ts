@@ -49,6 +49,13 @@ describe("config", () => {
     expect(boundedAutopilotBudget(1_000_000)).toBe(MAX_AUTOPILOT_BUDGET);
     expect(boundedAutopilotBudget(0)).toBe(0);
   });
+  it("round-trips boardProjects and rejects relative paths", async () => {
+    const home = await mkdtemp(join(tmpdir(), "gradient-config-"));
+    await saveConfig({ boardProjects: ["/repo/a"] }, home);
+    expect((await loadConfig(home)).boardProjects).toEqual(["/repo/a"]);
+    await expect(saveConfig({ boardProjects: ["relative/path"] }, home))
+      .rejects.toThrow(/boardProjects/);
+  });
 });
 
 describe("assistant target config", () => {

@@ -8,21 +8,26 @@
 
 ## Releasing
 
-Complete all three steps in order so npm, GitHub, and the deployed site stay in
-sync. A release is not complete until every step is verified:
+A release is not complete until both steps are done and verified:
 
-1. `make publish` — publishes `cli/` to npm and pushes the `v<version>` tag. Guarded: refuses when not logged in, the tree is dirty, or the version is already live.
-2. `gh release create v<version> --title "gradient <version>"` — with release notes and the exact registry tarball attached (`npm pack gradient.md@<version>`).
-3. Update the version and any changed feature copy in the private `gradient-web`
-   repository, push its `main`, and verify both `https://gradient.md` and
-   `gh release view v<version>` report the new version.
+1. `make publish` — from a clean checkout of origin/main's tip: publishes `cli/`
+   to npm, pushes the `v<version>` tag, and creates the GitHub release with the
+   exact registry tarball attached. Guarded (npm/gh auth, clean tree, HEAD must
+   equal origin/main, version not already fully released) and convergent —
+   rerun it to finish a partially completed release.
+2. Update the version and any changed feature copy in the private `gradient-web`
+   repository and push its `main` (deploys the site).
+
+Then run `make release-check` — it verifies npm, the GitHub release, and
+https://gradient.md all report `cli/package.json`'s version.
 
 ## Make targets
 
 - `make test` — run the CLI suite (vitest, from `cli/`)
 - `make build` — compile `cli/` to `dist/`
 - `make publish-dry` — preview exactly what `make publish` would ship
-- `make publish` — guarded npm publish + version tag (see Releasing)
+- `make publish` — guarded npm publish + version tag + GitHub release (see Releasing)
+- `make release-check` — verify npm, GitHub, and the website agree on the version
 
 ## Housekeeping
 

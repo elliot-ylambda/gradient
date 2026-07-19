@@ -40,6 +40,9 @@ export interface AdoptionRow {
   uses: number;
   lastUsed?: string;
   retypesCaught: number;
+  /** Realized minutes saved so far: uses × per-occurrence estimate (leverage
+   * constants). 0 when there are no uses yet or no chars could be recovered —
+   * callers should treat 0 as "nothing to report", not print it. */
   realizedMinutesSaved: number;
   suggestRemoval: boolean;
 }

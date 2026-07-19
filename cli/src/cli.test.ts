@@ -198,6 +198,15 @@ describe("main", () => {
     }));
   });
 
+  it("reports a mirror failure like any other command instead of crashing", async () => {
+    vi.mocked(mirror).mockClear();
+    vi.mocked(mirror).mockRejectedValueOnce(new Error("corrupt manifest"));
+    const logs: string[] = [];
+    const code = await main([], { isTTY: true, log: (m) => logs.push(m) });
+    expect(code).toBe(1);
+    expect(logs.join("\n")).toContain("gradient: corrupt manifest");
+  });
+
   it("explicit help always prints usage even on an interactive terminal", async () => {
     vi.mocked(mirror).mockClear();
     const logs: string[] = [];
@@ -443,8 +452,48 @@ describe("stats adoption rendering", () => {
     expect(vi.mocked(stats)).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ home: "/home" }));
     const output = lines.join("\n");
     expect(output).toContain("adoption:");
-    expect(output).toContain("0 use(s) · ≈0m saved · last never · 0 retype(s) caught");
+    expect(output).toContain("0 use(s) · last never · 0 retype(s) caught");
     expect(output).toContain("gradient remove dead");
+  });
+
+  it("omits the realized-savings clause for unused artifacts but shows it for real ones", async () => {
+    vi.mocked(stats).mockClear();
+    vi.mocked(stats).mockResolvedValueOnce({
+      total: 0,
+      covered: 0,
+      coveragePct: 0,
+      sessionScanEnabled: false,
+      capped: false,
+      patterns: [],
+      adoption: [
+        {
+          name: "dead",
+          type: "skill",
+          createdAt: "2026-05-01",
+          uses: 0,
+          lastUsed: undefined,
+          retypesCaught: 0,
+          realizedMinutesSaved: 0,
+          suggestRemoval: true,
+        },
+        {
+          name: "ship",
+          type: "command",
+          createdAt: "2026-06-01",
+          uses: 4,
+          lastUsed: "2026-07-10T00:00:00Z",
+          retypesCaught: 2,
+          realizedMinutesSaved: 6,
+          suggestRemoval: false,
+        },
+      ],
+    });
+    const lines: string[] = [];
+    expect(await main(["stats"], { log: line => lines.push(line) })).toBe(0);
+    const output = lines.join("\n");
+    expect(output).toContain("0 use(s) · last never · 0 retype(s) caught");
+    expect(output).not.toContain("≈0m saved");
+    expect(output).toContain("4 use(s) · ≈6m saved · last 2026-07-10 · 2 retype(s) caught");
   });
 });
 
@@ -559,4 +608,23 @@ describe("bundle dispatch", () => {
     expect(lines.join("\n")).toContain("executable command omitted");
     expect(lines.join("\n")).not.toContain("claude --plugin-dir");
   });
+});
+
+it("board: help lists it, unknown action exits 2, hook targets stay silent without consent", async () => {
+  const lines: string[] = [];
+  const log = (s: string) => { lines.push(s); };
+  const home = await mkdtemp(join(tmpdir(), "gradient-cli-home-"));
+
+  expect(await main(["--help"], { log, home })).toBe(0);
+  expect(lines.join("\n")).toContain("gradient board");
+
+  expect(await main(["board", "bogus"], { log, home })).toBe(2);
+
+  // Hook target without consent: exit 0, no output — never breaks a session.
+  lines.length = 0;
+  const code = await main(["board", "digest"], {
+    log, home, readStdin: async () => ({ session_id: "s1" }),
+  });
+  expect(code).toBe(0);
+  expect(lines).toEqual([]);
 });

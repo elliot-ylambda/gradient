@@ -153,6 +153,8 @@ export interface Config {
   recallProjects?: string[];
   /** Canonical project paths where checkpoint/recap hooks are locally consented. */
   continuityProjects?: string[];
+  /** Canonical board-root paths (git common-dir roots) where cross-session board hooks are consented. */
+  boardProjects?: string[];
   /** Max paid judge attempts per session. Defaults to 10. */
   autopilotBudget?: number;
   /** Judge model (fast by design; the judge sits in the user's stop path). Defaults to "haiku". */
