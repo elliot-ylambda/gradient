@@ -179,3 +179,26 @@ describe("rule validation", () => {
     })).toThrow(/text/);
   });
 });
+
+describe("project-playbook payload", () => {
+  const pb = (payload: Record<string, unknown>) => ({
+    ...good,
+    payload: { type: "project-playbook", section: "workflows", text: "After tests pass, run make build.", ...payload },
+  });
+
+  it("accepts a valid workflows entry", () => {
+    expect(() => validateSuggestion(pb({}))).not.toThrow();
+  });
+
+  it("accepts a valid rules entry", () => {
+    expect(() => validateSuggestion(pb({ section: "rules", text: "Never deploy from autopilot here." }))).not.toThrow();
+  });
+
+  it("rejects unknown sections, multi-line, oversized, and comment-marker text", () => {
+    expect(() => validateSuggestion(pb({ section: "notes" }))).toThrow(/section/);
+    expect(() => validateSuggestion(pb({ text: "a\nb" }))).toThrow(/one-line/);
+    expect(() => validateSuggestion(pb({ text: "x".repeat(501) }))).toThrow(/one-line/);
+    expect(() => validateSuggestion(pb({ text: "sneaky <!-- gradient:x -->" }))).toThrow(/comment/);
+    expect(() => validateSuggestion(pb({ text: "  " }))).toThrow(/one-line/);
+  });
+});

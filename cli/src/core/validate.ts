@@ -3,7 +3,7 @@ import { AUTHORIZATION_GUARD, clarifiedWorkflowBody } from "./detect.js";
 import { sanitizeName, stripUnsafeControls } from "./security.js";
 
 export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan", "recap", "notify"]);
-const TYPES = new Set(["command", "loop", "hook", "rule"]);
+const TYPES = new Set(["command", "loop", "hook", "rule", "project-playbook"]);
 const CONFIDENCES = new Set(["high", "inferred", "flagged"]);
 const HOOK_EVENTS = new Set(["PreCompact", "SessionStart", "Notification"]);
 const NOTIFICATION_MATCHER = "permission_prompt|idle_prompt";
@@ -88,6 +88,17 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
     if (payload.ruleName !== s.name) throw new Error("ruleName must match suggestion.name");
     if (!validText(payload.text, 2_000) || payload.text.trim().length === 0) {
       throw new Error("rule payload needs safe bounded text");
+    }
+  }
+  if (payload.type === "project-playbook") {
+    if (payload.section !== "rules" && payload.section !== "workflows") {
+      throw new Error("project-playbook payload section must be rules|workflows");
+    }
+    if (!validOneLine(payload.text, 500)) {
+      throw new Error("project-playbook payload needs safe bounded one-line text");
+    }
+    if ((payload.text as string).includes("<!--") || (payload.text as string).includes("-->")) {
+      throw new Error("project-playbook text must not contain comment markers");
     }
   }
 
