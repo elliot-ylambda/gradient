@@ -34,6 +34,57 @@ describe("stats", () => {
     expect(report.patterns[1]).toMatchObject({ name: "ship", estMinutesSavedPerMonth: 5, covered: true });
   });
 
+  it("sorts by leverage descending, count as tiebreak, old caches (?? 0) included, and name as the final tiebreak", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-stats-leverage-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    const suggestions = [
+      {
+        id: "a", name: "low-leverage-high-count", title: "A", rationale: "r",
+        evidence: { count: 50, sessions: 5, estMinutesSavedPerMonth: 2 }, confidence: "high" as const,
+        payload: { type: "command" as const, commandName: "low-leverage-high-count", body: "x" },
+      },
+      {
+        id: "b", name: "high-leverage", title: "B", rationale: "r",
+        evidence: { count: 3, sessions: 2, estMinutesSavedPerMonth: 40 }, confidence: "high" as const,
+        payload: { type: "command" as const, commandName: "high-leverage", body: "y" },
+      },
+      {
+        id: "c", name: "old-cache-no-field", title: "C", rationale: "r",
+        // Pre-leverage cache entry: no estMinutesSavedPerMonth field at all.
+        evidence: { count: 10, sessions: 4 }, confidence: "inferred" as const,
+        payload: { type: "command" as const, commandName: "old-cache-no-field", body: "z" },
+      },
+      {
+        id: "d", name: "zero-tiebreak-low-count", title: "D", rationale: "r",
+        evidence: { count: 1, sessions: 1 }, confidence: "inferred" as const,
+        payload: { type: "command" as const, commandName: "zero-tiebreak-low-count", body: "w" },
+      },
+      {
+        // Ties zero-tiebreak-low-count on both leverage (?? 0) and count —
+        // only the name localeCompare can decide the order between them.
+        id: "e", name: "zero-tiebreak-zebra", title: "E", rationale: "r",
+        evidence: { count: 1, sessions: 1 }, confidence: "inferred" as const,
+        payload: { type: "command" as const, commandName: "zero-tiebreak-zebra", body: "v" },
+      },
+    ];
+    const path = suggestionsPath(dir, home);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify(suggestions));
+    await writeFile(join(dir, ".gradient", "manifest.json"), JSON.stringify([]));
+
+    const report = await stats(dir, { home });
+    expect(report.patterns.map(p => p.name)).toEqual([
+      "high-leverage",
+      "low-leverage-high-count",
+      "old-cache-no-field",
+      "zero-tiebreak-low-count",
+      "zero-tiebreak-zebra",
+    ]);
+    expect(report.patterns[0].estMinutesSavedPerMonth).toBe(40);
+    expect(report.patterns.find(p => p.name === "old-cache-no-field")!.estMinutesSavedPerMonth).toBeUndefined();
+  });
+
   it("reports zeros with no cache", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-stats-empty-"));
     const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
@@ -120,6 +171,25 @@ describe("stats", () => {
       { ts: "2026-07-02T00:00:00Z", project: "p", sessionId: "s2", command: "/ship" },
     ], { home, manifest, suggestions });
     expect(rows[0].realizedMinutesSaved).toBe(1);
+  });
+
+  it("reports zero realized minutes-saved for zero uses, even with a recoverable example length", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-stats-zerouse-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
+    const manifest = [{
+      name: "quiet", type: "command" as const, path: ".claude/commands/quiet.md",
+      createdAt: "2026-06-01", suggestionId: "quiet-id",
+    }];
+    const suggestions = [{
+      id: "quiet-id", name: "quiet", title: "Quiet", rationale: "r",
+      evidence: { count: 5, sessions: 2 }, confidence: "high" as const,
+      examples: ["a".repeat(500)],
+      payload: { type: "command" as const, commandName: "quiet", body: "x" },
+    }];
+    // No events at all — zero uses despite a long, recoverable example the
+    // per-occurrence estimate could otherwise draw leverage from.
+    const rows = await adoptionFromEvents(dir, [], { home, manifest, suggestions });
+    expect(rows[0]).toMatchObject({ name: "quiet", uses: 0, realizedMinutesSaved: 0 });
   });
 
   it("suggests removal at 30 unused days with no hinted retypes", async () => {
