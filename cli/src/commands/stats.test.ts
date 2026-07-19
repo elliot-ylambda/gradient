@@ -156,6 +156,31 @@ describe("stats", () => {
     expect(report.capped).toBe(true);
   });
 
+  it("counts command events against the turn ceiling (all-slash transcripts cannot dodge the cap)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-stats-evcap-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-stats-evhome-"));
+    await addEntry(dir, {
+      name: "ship", type: "skill", path: ".claude/skills/ship/SKILL.md",
+      createdAt: "2026-06-15", suggestionId: "ship-id",
+    });
+    const report = await stats(dir, {
+      home,
+      maxTurns: 2,
+      collectFn: async () => ["only-slash-commands"],
+      parseFn: async () => ({
+        turns: [],
+        events: [
+          { ts: "2026-07-01T10:00:00Z", sessionId: "s1", project: "p", command: "/ship" },
+          { ts: "2026-07-02T10:00:00Z", sessionId: "s1", project: "p", command: "/ship" },
+          { ts: "2026-07-03T10:00:00Z", sessionId: "s1", project: "p", command: "/ship" },
+        ],
+      }),
+    });
+    expect(report.capped).toBe(true);
+    const ship = report.adoption.find(row => row.name === "ship")!;
+    expect(ship.uses).toBe(2); // third event fell outside the shared ceiling
+  });
+
   it("uses enabled Codex rollouts and reports a dual-target artifact once", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-stats-codex-"));
     const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));

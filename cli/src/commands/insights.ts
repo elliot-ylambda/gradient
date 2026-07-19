@@ -119,10 +119,13 @@ export async function insights(
     const scopedTurns = raw.turns.filter(turn => inCutoff(turn.ts));
     const scopedEvents = raw.events.filter(event => inCutoff(event.ts));
     const parsedTurns = scopedTurns.slice(0, remaining);
-    if (scopedTurns.length > parsedTurns.length) capped = true;
-    processedTurns += parsedTurns.length;
-    events.push(...scopedEvents);
-    addMetrics(metrics, computeMetrics(parsedTurns, scopedEvents, ignore));
+    // Events share the turn ceiling: a transcript that is all slash commands
+    // must not bypass the resource cap by contributing zero turns.
+    const parsedEvents = scopedEvents.slice(0, Math.max(0, remaining - parsedTurns.length));
+    if (scopedTurns.length > parsedTurns.length || scopedEvents.length > parsedEvents.length) capped = true;
+    processedTurns += parsedTurns.length + parsedEvents.length;
+    events.push(...parsedEvents);
+    addMetrics(metrics, computeMetrics(parsedTurns, parsedEvents, ignore));
     pushAnalysis(parsedTurns);
   }
 

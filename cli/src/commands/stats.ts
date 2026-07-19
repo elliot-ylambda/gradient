@@ -181,9 +181,12 @@ export async function stats(projectDir: string, opts: StatsOptions = {}): Promis
         continue;
       }
       const parsed = await parseFn(file.path);
-      if (parsed.turns.length > remaining) capped = true;
-      processed += Math.min(parsed.turns.length, remaining);
-      events.push(...parsed.events);
+      // Events share the turn ceiling: a transcript that is all slash commands
+      // must not bypass the resource cap by contributing zero turns.
+      const eventBudget = Math.max(0, remaining - parsed.turns.length);
+      if (parsed.turns.length > remaining || parsed.events.length > eventBudget) capped = true;
+      processed += Math.min(parsed.turns.length + parsed.events.length, remaining);
+      events.push(...parsed.events.slice(0, eventBudget));
     }
   }
 
