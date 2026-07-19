@@ -68,6 +68,17 @@ describe("emit", () => {
     expect(r.command).toContain('\\"hi\\"');
     expect(r.command).not.toContain('"hi"'); // unescaped form absent
   });
+  it("escapes backslashes before quoting the loop instruction", () => {
+    const s: Suggestion = {
+      ...base,
+      name: "x",
+      payload: { type: "loop", instruction: 'inspect C:\\tmp and say "hi"' },
+    };
+    const r = emit(s);
+    if (r.kind !== "loop") throw new Error("wrong kind");
+    expect(r.command).toContain(String.raw`C:\\tmp`);
+    expect(r.command).toContain('\\"hi\\"');
+  });
   it("rejects an unknown hook event", () => {
     const s: Suggestion = { ...base, name: "x",
       payload: { type: "hook", event: "EvilEvent", subcommand: "checkpoint", description: "x" } };

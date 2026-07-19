@@ -66,6 +66,13 @@ describe("isInjected", () => {
     expect(isInjected("[Image: source: /users/x/.claude/image-cache/abc/1.png]")).toBe(true);
     expect(isInjected("[Image #1: source: /tmp/a.png] [Image #2: source: /tmp/b.png]")).toBe(true);
   });
+  it("handles long or malformed image-placeholder sequences in linear time", () => {
+    const valid = Array.from({ length: 5_000 }, (_, index) =>
+      `[Image #${index}: source: /tmp/${index}.png]`).join(" ");
+    const malformed = `[Image #${"00][Image #".repeat(5_000)}`;
+    expect(isInjected(valid)).toBe(true);
+    expect(isInjected(malformed)).toBe(false);
+  });
   it("keeps prompts that add intent to a pasted image", () => {
     expect(isInjected("[Image: source: /tmp/shot.png] why is the footer broken here?")).toBe(false);
   });

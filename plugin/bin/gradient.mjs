@@ -1349,7 +1349,7 @@ var init_command = __esm({
 // src/core/emit/loop.ts
 function emitLoop(s) {
   if (s.payload.type !== "loop") throw new Error("emitLoop needs a loop payload");
-  const instruction = s.payload.instruction.replace(/[\r\n]+/g, " ").replace(/"/g, '\\"').trim();
+  const instruction = s.payload.instruction.replace(/[\r\n]+/g, " ").replace(/\\/g, "\\\\").replace(/"/g, '\\"').trim();
   const verb = s.payload.cadence ? "/schedule" : "/loop";
   const cadence = s.payload.cadence ? `${s.payload.cadence.replace(/[^A-Za-z0-9 */,:-]/g, "").trim()} ` : "";
   return { command: `${verb} ${cadence}"${instruction}"` };
@@ -3685,6 +3685,34 @@ var init_parse_codex = __esm({
 });
 
 // src/core/filter.ts
+function isOnlyImagePlaceholders(text) {
+  let index = 0;
+  let count = 0;
+  const skipWhitespace = () => {
+    while (index < text.length && /\s/u.test(text[index])) index += 1;
+  };
+  skipWhitespace();
+  while (index < text.length) {
+    if (text.slice(index, index + 6).toLowerCase() !== "[image") return false;
+    index += 6;
+    if (text[index] === ":") {
+      index += 1;
+    } else {
+      if (text[index] !== " " || text[index + 1] !== "#") return false;
+      index += 2;
+      const digitsStart = index;
+      while (index < text.length && text[index] >= "0" && text[index] <= "9") index += 1;
+      if (index === digitsStart || text[index] !== ":") return false;
+      index += 1;
+    }
+    const close = text.indexOf("]", index);
+    if (close === -1) return false;
+    index = close + 1;
+    count += 1;
+    skipWhitespace();
+  }
+  return count > 0;
+}
 function compileIgnorePatterns(raw) {
   if (!Array.isArray(raw)) return [];
   const out = [];
@@ -3706,7 +3734,7 @@ function classifyPrompt(text, ignore = []) {
   if (!t) return "injected";
   if (CONTINUATION_RE.test(t)) return "continuation";
   if (NOTIFICATION_RE.test(t)) return "notification";
-  if (INJECTED_PATTERNS.some((re) => re.test(t))) return "injected";
+  if (isOnlyImagePlaceholders(t) || INJECTED_PATTERNS.some((re) => re.test(t))) return "injected";
   if (ignore.some((re) => re.test(t))) return "injected";
   return "human";
 }
@@ -3758,9 +3786,6 @@ var init_filter = __esm({
       // A prompt that is only a slash-command invocation is already automation;
       // mining it would suggest a skill that duplicates the command itself.
       /^\/[\w:-]+$/,
-      // Pasted-image placeholders arrive as user text; a prompt that is only
-      // image tags carries no mineable intent.
-      /^\s*(?:\[image(?::| #\d+)[^\]]*\]\s*)+$/i,
       // Feature-instruction blocks the harness injects when a capability connects
       // mid-session (observed: Claude-in-Chrome browser automation guidelines).
       /^# claude in chrome browser automation\b/i
