@@ -1,5 +1,7 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { createHash } from "node:crypto";
+import { projectCacheDir } from "../config.js";
 import type { Suggestion, AutopilotMode } from "./types.js";
 import { safeReadFile, safeWriteFile } from "./safeFs.js";
 import type { ChainFinding } from "./sequence.js";
@@ -206,4 +208,72 @@ export async function loadProjectPlaybook(cwd: string): Promise<ProjectPlaybook 
     if (err.code === "ENOENT") return null; // no file → no clamp, no prose
     return { prose: "", clamps: { malformed: true } }; // unreadable → fail closed
   }
+}
+
+/** Local exact-bytes consent for the committed gradient.md's prose. Stored in
+ * the per-project cache, never in the repo: consent is per-user. */
+export interface PlaybookPin {
+  hash: string;     // sha-256 of the pinned prose
+  prose: string;    // the pinned prose itself, kept for review diffs
+  pinnedAt: string;
+}
+
+export type PinState = "pinned" | "changed" | "unpinned" | "none";
+
+const PIN_FILE_MAX_BYTES = 300_000;
+
+export function playbookPinPath(projectDir: string, home?: string): string {
+  return join(projectCacheDir(projectDir, home), "playbook-pin.json");
+}
+
+export function proseHash(prose: string): string {
+  return createHash("sha256").update(prose, "utf8").digest("hex");
+}
+
+/** Missing, unreadable, corrupt, or internally inconsistent pin → null.
+ * Consent is never assumed. */
+export async function loadPlaybookPin(projectDir: string, home?: string): Promise<PlaybookPin | null> {
+  const userHome = home ?? homedir();
+  try {
+    const parsed = JSON.parse(await safeReadFile(
+      userHome,
+      playbookPinPath(projectDir, userHome),
+      { maxBytes: PIN_FILE_MAX_BYTES },
+    )) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" ||
+      typeof parsed.hash !== "string" || !/^[a-f0-9]{64}$/.test(parsed.hash) ||
+      typeof parsed.prose !== "string" || proseHash(parsed.prose) !== parsed.hash ||
+      typeof parsed.pinnedAt !== "string") {
+      return null;
+    }
+    return parsed as unknown as PlaybookPin;
+  } catch {
+    return null;
+  }
+}
+
+export async function savePlaybookPin(
+  projectDir: string,
+  prose: string,
+  home?: string,
+  now?: () => string,
+): Promise<void> {
+  const userHome = home ?? homedir();
+  const pin: PlaybookPin = {
+    hash: proseHash(prose),
+    prose,
+    pinnedAt: (now ?? (() => new Date().toISOString()))(),
+  };
+  await safeWriteFile(userHome, playbookPinPath(projectDir, userHome), `${JSON.stringify(pin, null, 2)}\n`, { mode: 0o600 });
+}
+
+export function pinState(project: ProjectPlaybook | null, pin: PlaybookPin | null): PinState {
+  if (project === null) return "none";
+  if (pin === null) return "unpinned";
+  return proseHash(project.prose) === pin.hash ? "pinned" : "changed";
+}
+
+/** The only prose the judge may see: exact-bytes consent or nothing. */
+export function pinnedProse(project: ProjectPlaybook | null, pin: PlaybookPin | null): string {
+  return pinState(project, pin) === "pinned" && project !== null ? project.prose : "";
 }
