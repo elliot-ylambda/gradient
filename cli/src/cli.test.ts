@@ -40,6 +40,7 @@ vi.mock("./commands/stats.js", () => ({
       uses: 0,
       lastUsed: undefined,
       retypesCaught: 0,
+      realizedMinutesSaved: 0,
       suggestRemoval: true,
     }],
   })),
@@ -396,7 +397,7 @@ describe("stats adoption rendering", () => {
     expect(await main(["stats"], { log: line => lines.push(line) })).toBe(0);
     const output = lines.join("\n");
     expect(output).toContain("adoption:");
-    expect(output).toContain("0 use(s) · last never · 0 retype(s) caught");
+    expect(output).toContain("0 use(s) · ≈0m saved · last never · 0 retype(s) caught");
     expect(output).toContain("gradient remove dead");
   });
 });

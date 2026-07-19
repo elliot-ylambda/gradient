@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { estMinutesSavedPerMonth, candidateLeverage, CORRECTION_S } from "./leverage.js";
+import { estMinutesSavedPerMonth, candidateLeverage, CORRECTION_S, ROUND_TRIP_S } from "./leverage.js";
 import type { Candidate } from "./types.js";
 
 describe("estMinutesSavedPerMonth", () => {
@@ -22,6 +22,13 @@ describe("estMinutesSavedPerMonth", () => {
     const long = estMinutesSavedPerMonth({ count: 5, chars: 500, spanDays: 30, kind: "rule" });
     expect(short).toBe(long);
     expect(short).toBe(Math.round(5 * (CORRECTION_S / 60) * (30 / 30)));
+  });
+
+  it("uses only round-trip time for loops, independent of instruction length", () => {
+    const short = estMinutesSavedPerMonth({ count: 12, chars: 5, spanDays: 30, kind: "loop" });
+    const long = estMinutesSavedPerMonth({ count: 12, chars: 500, spanDays: 30, kind: "loop" });
+    expect(short).toBe(long);
+    expect(short).toBe(Math.round(12 * (ROUND_TRIP_S / 60)));
   });
 });
 
@@ -59,7 +66,14 @@ describe("candidateLeverage", () => {
     expect(short).toBe(candidateLeverage(anchor({ kind: "answer", examples: ["a"] })));
   });
 
-  it("maps every non-answer kind to the command (typing-cost) formula", () => {
+  it("maps instruction candidates to rule cost and loops to round-trip-only cost", () => {
+    expect(candidateLeverage(anchor({ kind: "instruction", examples: ["a"] })))
+      .toBe(candidateLeverage(anchor({ kind: "answer", examples: ["a"] })));
+    expect(candidateLeverage(anchor({ kind: "loop", examples: ["a"] })))
+      .toBe(candidateLeverage(anchor({ kind: "loop", examples: ["a".repeat(500)] })));
+  });
+
+  it("maps other mining kinds to the command typing-cost formula", () => {
     const unknown = candidateLeverage(anchor({ kind: "unknown" }));
     const paste = candidateLeverage(anchor({ kind: "paste" }));
     const sequence = candidateLeverage(anchor({ kind: "sequence" }));

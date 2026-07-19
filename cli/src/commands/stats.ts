@@ -1,4 +1,4 @@
-import type { ArtifactType, CommandEvent, Confidence } from "../core/types.js";
+import type { ArtifactType, CommandEvent, Confidence, Suggestion } from "../core/types.js";
 import { loadManifest } from "../core/manifest.js";
 import { loadSuggestions } from "./apply.js";
 import { loadConfig, resolveTargets } from "../config.js";
@@ -10,6 +10,7 @@ import { countArtifactUses } from "../core/usage.js";
 import { adoptionPath } from "./recall.js";
 import { safeReadFile } from "../core/safeFs.js";
 import { homedir } from "node:os";
+import { perOccurrenceSeconds, type LeverageKind } from "../core/leverage.js";
 
 const ADOPTION_LOG_MAX_BYTES = 5_000_000;
 
@@ -19,6 +20,7 @@ export interface StatPattern {
   sessions: number;
   confidence: Confidence;
   covered: boolean;
+  estMinutesSavedPerMonth?: number;
 }
 
 export interface StatsReport {
@@ -38,6 +40,7 @@ export interface AdoptionRow {
   uses: number;
   lastUsed?: string;
   retypesCaught: number;
+  realizedMinutesSaved: number;
   suggestRemoval: boolean;
 }
 
@@ -63,7 +66,12 @@ export const STATS_MAX_TURNS = 100_000;
 export async function adoptionFromEvents(
   projectDir: string,
   events: CommandEvent[],
-  opts: { home?: string; now?: number; manifest?: Awaited<ReturnType<typeof loadManifest>> } = {},
+  opts: {
+    home?: string;
+    now?: number;
+    manifest?: Awaited<ReturnType<typeof loadManifest>>;
+    suggestions?: Suggestion[];
+  } = {},
 ): Promise<AdoptionRow[]> {
   const manifest = opts.manifest ?? (await loadManifest(projectDir));
   const logical = new Map<string, (typeof manifest)[number]>();
@@ -74,10 +82,19 @@ export async function adoptionFromEvents(
   const since = new Map([...logical.values()].map(entry => [entry.name, entry.createdAt]));
   const uses = countArtifactUses(events, since);
   const retypes = await readRetypes(projectDir, since, opts.home);
+  const suggestionsById = new Map((opts.suggestions ?? []).map(suggestion => [suggestion.id, suggestion]));
+  const suggestionsByName = new Map((opts.suggestions ?? []).map(suggestion => [suggestion.name, suggestion]));
   const now = opts.now ?? Date.now();
   return [...logical.values()].map(entry => {
     const usage = uses.get(entry.name) ?? { uses: 0, lastUsed: undefined };
     const retypesCaught = retypes.get(entry.name) ?? 0;
+    const suggestion = suggestionsById.get(entry.suggestionId) ?? suggestionsByName.get(entry.name);
+    const realizedMinutesSaved = Math.round(
+      usage.uses * perOccurrenceSeconds({
+        chars: suggestionChars(suggestion),
+        kind: artifactLeverageKind(entry.type, suggestion),
+      }) / 60,
+    );
     const age = now - Date.parse(entry.createdAt);
     return {
       name: entry.name,
@@ -86,6 +103,7 @@ export async function adoptionFromEvents(
       uses: usage.uses,
       lastUsed: usage.lastUsed,
       retypesCaught,
+      realizedMinutesSaved,
       suggestRemoval: (
         usage.uses === 0 &&
         retypesCaught === 0 &&
@@ -94,6 +112,21 @@ export async function adoptionFromEvents(
       ),
     };
   });
+}
+
+function artifactLeverageKind(type: ArtifactType, suggestion: Suggestion | undefined): LeverageKind {
+  if (suggestion) return suggestion.payload.type;
+  if (type === "loop" || type === "hook" || type === "rule") return type;
+  return "command";
+}
+
+function suggestionChars(suggestion: Suggestion | undefined): number {
+  if (!suggestion) return 0;
+  const values = suggestion.payload.type === "command" && suggestion.payload.triggers?.length
+    ? suggestion.payload.triggers
+    : suggestion.examples ?? [];
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value.length, 0) / values.length;
 }
 
 async function readRetypes(
@@ -142,8 +175,14 @@ export async function stats(projectDir: string, opts: StatsOptions = {}): Promis
       sessions: s.evidence.sessions,
       confidence: s.confidence,
       covered: coveredIds.has(s.id),
+      ...(s.evidence.estMinutesSavedPerMonth !== undefined
+        ? { estMinutesSavedPerMonth: s.evidence.estMinutesSavedPerMonth }
+        : {}),
     }))
-    .sort((a, b) => b.count - a.count);
+    .sort((a, b) =>
+      (b.estMinutesSavedPerMonth ?? 0) - (a.estMinutesSavedPerMonth ?? 0) ||
+      b.count - a.count ||
+      a.name.localeCompare(b.name));
 
   const total = patterns.length;
   const covered = patterns.filter(p => p.covered).length;
@@ -194,6 +233,7 @@ export async function stats(projectDir: string, opts: StatsOptions = {}): Promis
     home: opts.home,
     now: opts.now,
     manifest,
+    suggestions,
   });
 
   return {

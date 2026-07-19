@@ -12,6 +12,15 @@ export const CORRECTION_S = 60;
 
 export type LeverageKind = "command" | "loop" | "hook" | "rule";
 
+export function perOccurrenceSeconds(input: { chars: number; kind: LeverageKind }): number {
+  if (input.kind === "rule") return CORRECTION_S;
+  // A loop replaces the round trip needed to ask for continuation; unlike a
+  // reusable command/hook, it does not claim to save retyping an instruction.
+  if (input.kind === "loop") return ROUND_TRIP_S;
+  const chars = Number.isFinite(input.chars) && input.chars > 0 ? input.chars : 0;
+  return chars / TYPING_CPS + ROUND_TRIP_S;
+}
+
 /**
  * Minutes/month a user would save automating an observed pattern, extrapolated
  * from how often it actually occurred over the observed span. The span is
@@ -21,10 +30,8 @@ export type LeverageKind = "command" | "loop" | "hook" | "rule";
 export function estMinutesSavedPerMonth(
   input: { count: number; chars: number; spanDays: number; kind: LeverageKind },
 ): number {
-  const perOccurrenceSeconds = input.kind === "rule"
-    ? CORRECTION_S
-    : input.chars / TYPING_CPS + ROUND_TRIP_S;
-  const monthly = input.count * (perOccurrenceSeconds / 60) * (30 / Math.max(input.spanDays, 7));
+  const seconds = perOccurrenceSeconds(input);
+  const monthly = input.count * (seconds / 60) * (30 / Math.max(input.spanDays, 7));
   return Math.round(monthly);
 }
 
@@ -35,16 +42,19 @@ function meanLength(strings: string[]): number {
 /**
  * Ranks a pre-classification Candidate by estimated leverage, for ordering the
  * detect window before the LLM (or the degrade path) assigns a payload type.
- * Only "answer" and "correction" candidates are rule-shaped (flat correction
- * cost); every other kind (unknown/paste/sequence/etc.) uses the typing-cost
- * formula, matching degradeToCommands's own answer/correction/non-answer
- * split in detect.ts.
+ * Deterministically classified loops use the round-trip-only estimate;
+ * answer/correction/instruction candidates are rule-shaped; everything else
+ * uses the command typing-cost estimate.
  */
 export function candidateLeverage(c: Candidate): number {
   return estMinutesSavedPerMonth({
     count: c.count,
     chars: meanLength(c.examples),
     spanDays: spanDays(c.occurrences),
-    kind: c.kind === "answer" || c.kind === "correction" ? "rule" : "command",
+    kind: c.kind === "loop"
+      ? "loop"
+      : c.kind === "answer" || c.kind === "correction" || c.kind === "instruction"
+        ? "rule"
+        : "command",
   });
 }

@@ -407,7 +407,8 @@ export async function main(
         if (r.capped) log(c.dim("stats input cap reached; adoption covers the bounded recent corpus"));
         log(c.dim(`session-start scan: ${r.sessionScanEnabled ? "on" : "off"}`));
         for (const p of r.patterns) {
-          log(`  ${confidenceChip(p.confidence)} ${c.bold(p.name)}  ${c.dim(`(seen ${p.count}× · ${p.sessions} sessions)`)}  ${p.covered ? c.ok("✓ automated") : c.muted("—")}`);
+          const leverage = p.estMinutesSavedPerMonth !== undefined ? ` · ≈${p.estMinutesSavedPerMonth}m/mo` : "";
+          log(`  ${confidenceChip(p.confidence)} ${c.bold(p.name)}  ${c.dim(`(seen ${p.count}× · ${p.sessions} sessions${leverage})`)}  ${p.covered ? c.ok("✓ automated") : c.muted("—")}`);
         }
         if (r.adoption.length > 0) {
           log(c.dim("\nadoption:"));
@@ -418,7 +419,7 @@ export async function main(
               : "";
             log(
               `  ${c.bold(artifact.name)}  ` +
-              c.dim(`${artifact.uses} use(s) · last ${lastUsed} · ${artifact.retypesCaught} retype(s) caught`) +
+              c.dim(`${artifact.uses} use(s) · ≈${artifact.realizedMinutesSaved}m saved · last ${lastUsed} · ${artifact.retypesCaught} retype(s) caught`) +
               removal,
             );
           }

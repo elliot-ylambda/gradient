@@ -11,8 +11,8 @@ async function seed(home: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "grad-stats-"));
   await mkdir(join(dir, ".gradient"), { recursive: true });
   const suggestions = [
-    { id: "aaa", name: "ship", title: "Ship", rationale: "r", evidence: { count: 9, sessions: 3 }, confidence: "high", payload: { type: "command", commandName: "ship", body: "x" } },
-    { id: "bbb", name: "plan", title: "Plan", rationale: "r", evidence: { count: 4, sessions: 2 }, confidence: "inferred", payload: { type: "command", commandName: "plan", body: "y" } },
+    { id: "aaa", name: "ship", title: "Ship", rationale: "r", evidence: { count: 9, sessions: 3, estMinutesSavedPerMonth: 5 }, confidence: "high", payload: { type: "command", commandName: "ship", body: "x" } },
+    { id: "bbb", name: "plan", title: "Plan", rationale: "r", evidence: { count: 4, sessions: 2, estMinutesSavedPerMonth: 20 }, confidence: "inferred", payload: { type: "command", commandName: "plan", body: "y" } },
   ];
   const manifest = [{ name: "ship", type: "command", path: ".claude/commands/ship.md", createdAt: "2026-07-01", suggestionId: "aaa" }];
   const path = suggestionsPath(dir, home);
@@ -23,16 +23,15 @@ async function seed(home: string): Promise<string> {
 }
 
 describe("stats", () => {
-  it("reports coverage and top patterns sorted by frequency", async () => {
+  it("reports coverage and sorts patterns by leverage before count", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
     const report = await stats(await seed(home), { home });
     expect(report.total).toBe(2);
     expect(report.covered).toBe(1);
     expect(report.coveragePct).toBe(50);
     expect(report.sessionScanEnabled).toBe(false);
-    expect(report.patterns[0].name).toBe("ship");
-    expect(report.patterns[0].covered).toBe(true);
-    expect(report.patterns[1].covered).toBe(false);
+    expect(report.patterns[0]).toMatchObject({ name: "plan", estMinutesSavedPerMonth: 20, covered: false });
+    expect(report.patterns[1]).toMatchObject({ name: "ship", estMinutesSavedPerMonth: 5, covered: true });
   });
 
   it("reports zeros with no cache", async () => {
@@ -102,6 +101,25 @@ describe("stats", () => {
       retypesCaught: 1,
       suggestRemoval: false,
     })]);
+  });
+
+  it("reports realized minutes from observed uses and command trigger length", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-stats-value-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
+    const manifest = [{
+      name: "ship", type: "skill" as const, path: ".claude/skills/ship/SKILL.md",
+      createdAt: "2026-06-15", suggestionId: "ship-id",
+    }];
+    const suggestions = [{
+      id: "ship-id", name: "ship", title: "Ship", rationale: "r",
+      evidence: { count: 3, sessions: 2 }, confidence: "high" as const,
+      payload: { type: "command" as const, commandName: "ship", body: "x", triggers: ["x".repeat(66)] },
+    }];
+    const rows = await adoptionFromEvents(dir, [
+      { ts: "2026-07-01T00:00:00Z", project: "p", sessionId: "s1", command: "/ship" },
+      { ts: "2026-07-02T00:00:00Z", project: "p", sessionId: "s2", command: "/ship" },
+    ], { home, manifest, suggestions });
+    expect(rows[0].realizedMinutesSaved).toBe(1);
   });
 
   it("suggests removal at 30 unused days with no hinted retypes", async () => {
