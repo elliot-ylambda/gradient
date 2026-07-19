@@ -25,6 +25,12 @@ describe("mergeHookIntoSettings", () => {
     expect(JSON.stringify(migrated)).toContain("gradient session-start");
     expect(JSON.stringify(migrated)).toContain("other-tool startup");
   });
+  it("is a no-op when there is nothing to replace (fresh install, no old hook)", () => {
+    const out = mergeHookIntoSettings({}, "SessionStart", "gradient session-start", {
+      replacing: ["gradient scan --detach"],
+    });
+    expect(out.hooks.SessionStart[0].hooks[0].command).toBe("gradient session-start");
+  });
 });
 
 describe("installHook", () => {
@@ -62,6 +68,19 @@ describe("installHook", () => {
     await symlink(outside, join(dir, ".claude"));
     await expect(installHook(dir, "Stop", "gradient respond")).rejects.toThrow(/symlink/);
     await expect(readFile(join(outside, "settings.local.json"), "utf8")).rejects.toThrow();
+  });
+
+  it("migrates an on-disk hook end to end via the replacing option", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-settings-migrate-"));
+    await installHook(dir, "SessionStart", "gradient scan --detach");
+    const p = await installHook(dir, "SessionStart", "gradient session-start", {
+      replacing: ["gradient scan --detach"],
+    });
+    const written = JSON.parse(await readFile(p, "utf8"));
+    const commands = written.hooks.SessionStart.flatMap(
+      (group: { hooks: { command: string }[] }) => group.hooks.map(hook => hook.command),
+    );
+    expect(commands).toEqual(["gradient session-start"]);
   });
 });
 

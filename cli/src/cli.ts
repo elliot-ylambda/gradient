@@ -228,7 +228,16 @@ export async function main(
 
   if (argv.length === 0) {
     if (io.isTTY ?? process.stdout.isTTY === true) {
-      await mirror(process.cwd(), { home: io.home, write: log });
+      // A bare invocation is a foreground command like `scan` or `stats`, not
+      // a hook target, so a genuine failure (e.g. a corrupt manifest) is
+      // reported like any other command failure below, not left to crash as
+      // an unhandled rejection.
+      try {
+        await mirror(process.cwd(), { home: io.home, write: log });
+      } catch (e) {
+        log(c.coral(`gradient: ${terminalSafeLine((e as Error).message)}`));
+        return 1;
+      }
       return 0;
     }
     log(`${banner(VERSION)}\n\n${HELP}`);
@@ -451,12 +460,13 @@ export async function main(
           log(c.dim("\nadoption:"));
           for (const artifact of r.adoption) {
             const lastUsed = artifact.lastUsed ? artifact.lastUsed.slice(0, 10) : "never";
+            const realized = artifact.realizedMinutesSaved > 0 ? ` · ≈${artifact.realizedMinutesSaved}m saved` : "";
             const removal = artifact.suggestRemoval
               ? c.coral(`  → unused 30d+, consider: gradient remove ${artifact.name}`)
               : "";
             log(
               `  ${c.bold(artifact.name)}  ` +
-              c.dim(`${artifact.uses} use(s) · ≈${artifact.realizedMinutesSaved}m saved · last ${lastUsed} · ${artifact.retypesCaught} retype(s) caught`) +
+              c.dim(`${artifact.uses} use(s)${realized} · last ${lastUsed} · ${artifact.retypesCaught} retype(s) caught`) +
               removal,
             );
           }

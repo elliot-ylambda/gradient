@@ -213,13 +213,21 @@ export function readlinePlaybookPrompter(): PlaybookPrompter {
 }
 
 export function readlinePrompter(
-  _opts: { targets?: Assistant[]; cheapModel?: string } = {},
+  opts: {
+    targets?: Assistant[];
+    cheapModel?: string;
+    /** Test seam: real usage always reads/writes the process's own TTY. */
+    input?: NodeJS.ReadableStream;
+    output?: NodeJS.WritableStream;
+  } = {},
 ): Prompter {
   return async (suggestion, index, total, preview) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const input = opts.input ?? process.stdin;
+    const output = opts.output ?? process.stdout;
+    const rl = createInterface({ input, output });
     const label = suggestion.payload.type;
     const leverage = suggestion.evidence.estMinutesSavedPerMonth;
-    process.stdout.write(
+    output.write(
       `\n(${index + 1}/${total})  ${terminalSafeLine(suggestion.name)} · ${label} · ` +
       `seen ${suggestion.evidence.count}×` +
       (leverage !== undefined ? ` · ≈${leverage}m/month` : "") +
@@ -227,17 +235,17 @@ export function readlinePrompter(
       `  ${terminalSafeLine(suggestion.title)}\n`,
     );
     const firstExample = suggestion.examples?.[0];
-    if (firstExample) process.stdout.write(`  example: ${terminalSafeLine(firstExample)}\n`);
+    if (firstExample) output.write(`  example: ${terminalSafeLine(firstExample)}\n`);
     if (suggestion.payload.type === "hook" && suggestion.payload.command) {
-      process.stdout.write(
+      output.write(
         `  installs a ${terminalSafeLine(suggestion.payload.event)} hook ` +
         `(matcher: ${terminalSafeLine(suggestion.payload.matcher ?? "all tools")})\n` +
         `  that runs automatically: ${terminalSafeLine(suggestion.payload.command)}\n`,
       );
     }
-    process.stdout.write(`\n${stripUnsafeControls(preview)}\n`);
+    output.write(`\n${stripUnsafeControls(preview)}\n`);
     if (isNudge(suggestion)) {
-      process.stdout.write("  tip: this is what autopilot automates → gradient autopilot nudge\n");
+      output.write("  tip: this is what autopilot automates → gradient autopilot nudge\n");
     }
     const answer = (await rl.question("  [a]pprove [s]kip [e]xplain [q]uit › ")).trim().toLowerCase();
     rl.close();

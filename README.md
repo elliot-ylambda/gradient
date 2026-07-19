@@ -80,7 +80,7 @@ npx gradient.md scan        # prompts, tool rituals/failures, advisory patterns,
 npx gradient.md scan --user # all projects, last 7 days — your recent cross-project habits
 npx gradient.md scan --all  # all projects, no time limit (thorough; can be slow)
 npx gradient.md review      # approve, explain, or persistently dismiss ranked suggestions
-npx gradient.md apply <id>  # generate an approved skill / loop / hook
+npx gradient.md apply <id|name>...  # generate an approved skill / loop / hook
 npx gradient.md migrate     # convert older generated commands into skills
 npx gradient.md recall on   # hint when a typed prompt matches an installed artifact
 npx gradient.md stats       # estimated leverage plus realized minutes saved from actual use
@@ -95,10 +95,11 @@ So `npx gradient.md scan` and, once installed globally, plain `gradient scan`.
 The funnel leads you through itself: `init --session-scan` offers a first scan;
 after you work, the next session surfaces at most one cached suggestion and
 rescans in the background. Interactive bare `gradient` mirrors up to three
-pending suggestions, `review` can approve, explain, or persistently dismiss
-them, and `stats` reports both estimated leverage and minutes saved by observed
-artifact use. Hooks and pipes never prompt; non-interactive bare invocation
-continues to print help.
+pending suggestions straight from the cache when it's fresh — under a day
+old — and refreshes it first otherwise; `review` can approve, explain, or
+persistently dismiss them, and `stats` reports both estimated leverage and
+minutes saved by observed artifact use. Hooks and pipes never prompt;
+non-interactive bare invocation continues to print help.
 
 **Scope.** `scan` defaults to the project you're in. `--user` widens to every
 project but bounds it to a recent window (last 7 days, set via `userScopeDays`
@@ -387,6 +388,12 @@ release, run `gradient scan` and `gradient review`. If an already-applied
 artifact appears again, re-apply the reviewed suggestion and remove the old
 manifest entry with `gradient remove <name>`. Gradient does not rewrite or
 delete existing artifacts automatically.
+
+**0.6 session-start migration:** `gradient session-start` now prints the
+single highest-leverage pending suggestion before its detached rescan,
+instead of running silently. Existing installs keep the old silent `gradient
+scan --detach` hook exactly as configured until they rerun `gradient init
+--session-scan`, which migrates it to `gradient session-start` in place.
 
 Set `emitTarget` to `"command"` in the gradient config only when legacy
 `.claude/commands/` output is required. Phase B

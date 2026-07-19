@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { resolveClarify, review, reviewJson, suggestionPreview } from "./review.js";
+import { PassThrough, Writable } from "node:stream";
+import { resolveClarify, review, reviewJson, suggestionPreview, readlinePrompter } from "./review.js";
 import { loadSuggestions, saveSuggestions } from "./apply.js";
 import { isNudge } from "../core/playbook.js";
 import type { Suggestion } from "../core/types.js";
@@ -359,5 +360,107 @@ describe("reviewJson project playbook state", () => {
     const parsed = JSON.parse(await reviewJson(proj, home));
     expect(parsed.projectPlaybook).toBe("unpinned");
     expect(Array.isArray(parsed.suggestions)).toBe(true);
+  });
+});
+
+describe("readlinePrompter", () => {
+  function capture(): { output: Writable; text(): string } {
+    const chunks: string[] = [];
+    const output = new Writable({
+      write(chunk, _enc, callback) {
+        chunks.push(chunk.toString());
+        callback();
+      },
+    });
+    return { output, text: () => chunks.join("") };
+  }
+
+  it("shows the leverage badge and first example in the rendered preview", async () => {
+    const suggestion: Suggestion = {
+      id: "id-x", name: "x", title: "t", rationale: "because it repeats a lot",
+      evidence: { count: 12, sessions: 4, estMinutesSavedPerMonth: 30 },
+      examples: ["do the thing", "do the thing again"],
+      confidence: "high",
+      payload: { type: "command", commandName: "x", body: "do it" },
+    };
+    const input = new PassThrough();
+    const { output, text } = capture();
+    input.write("s\n");
+
+    const prompter = readlinePrompter({ input, output });
+    const decision = await prompter(suggestion, 0, 1, "preview text");
+
+    expect(decision).toBe("skip");
+    const printed = text();
+    expect(printed).toContain("≈30m/month");
+    expect(printed).toContain("example: do the thing");
+    expect(printed).not.toContain("do the thing again");
+  });
+
+  it("omits the leverage badge when estMinutesSavedPerMonth is absent", async () => {
+    const suggestion: Suggestion = {
+      id: "id-y", name: "y", title: "t", rationale: "r",
+      evidence: { count: 1, sessions: 1 }, confidence: "high",
+      payload: { type: "command", commandName: "y", body: "do it" },
+    };
+    const input = new PassThrough();
+    const { output, text } = capture();
+    input.write("s\n");
+
+    const prompter = readlinePrompter({ input, output });
+    const decision = await prompter(suggestion, 0, 1, "preview text");
+
+    expect(decision).toBe("skip");
+    expect(text()).not.toContain("m/month");
+  });
+
+  it("[e]xplain returns control to review()'s own loop, which calls onExplain and re-prompts", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-prompter-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const suggestion: Suggestion = {
+      id: "id-x", name: "x", title: "t", rationale: "because it repeats a lot",
+      evidence: { count: 12, sessions: 4, estMinutesSavedPerMonth: 30 },
+      examples: ["do the thing", "do the thing again"],
+      confidence: "high",
+      payload: { type: "command", commandName: "x", body: "do it" },
+    };
+    await saveSuggestions(dir, [suggestion], home);
+
+    const input = new PassThrough();
+    const { output, text } = capture();
+    const explanations: string[] = [];
+
+    // review()'s do-while loop calls onExplain synchronously right after the
+    // first prompt() resolves to "explain", then — still in that same
+    // synchronous continuation — calls prompt() again, which synchronously
+    // creates a fresh readline interface and attaches its 'line' listener
+    // (everything up to its own `await rl.question(...)` runs synchronously).
+    // So once onExplain fires, the second interface is already listening,
+    // and it is safe to write the next line without a race.
+    let explainSignaled = () => {};
+    const explainSignal = new Promise<void>(resolve => { explainSignaled = resolve; });
+    const reviewPromise = review(dir, readlinePrompter({ input, output }), {
+      home,
+      onExplain: message => {
+        explanations.push(message);
+        explainSignaled();
+      },
+    });
+    input.write("e\n");
+    await explainSignal;
+    input.write("a\n");
+    const applied = await reviewPromise;
+
+    expect(applied.map(a => a.suggestion.name)).toEqual(["x"]);
+    // onExplain — not the prompter's own output — carries the explanation,
+    // preserving the ReviewDecision/onExplain contract unchanged.
+    expect(explanations).toHaveLength(1);
+    expect(explanations[0]).toContain("because it repeats a lot");
+    expect(explanations[0]).toContain("do the thing again");
+    const printed = text();
+    expect(printed).toContain("≈30m/month");
+    expect(printed).toContain("example: do the thing");
+    // The suggestion is rendered twice: once before "e", once more before "a".
+    expect((printed.match(/\[a\]pprove/g) ?? []).length).toBe(2);
   });
 });

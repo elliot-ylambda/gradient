@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ManifestEntry, Suggestion } from "../core/types.js";
 import type { Dismissal } from "../core/dismiss.js";
 import { MIN_SURFACE_MINUTES, sessionStart } from "./sessionStart.js";
+import { saveSuggestions } from "./apply.js";
+import { gradientDir } from "../core/manifest.js";
 
 function suggestion(name: string, minutes: number, count = 3): Suggestion {
   return {
@@ -77,5 +82,44 @@ describe("sessionStart", () => {
       spawnDetachedFn: () => { throw new Error("spawn failed"); },
     })).resolves.toBeUndefined();
     expect(output).toHaveLength(1);
+  });
+
+  it("treats a suggestion with no estMinutesSavedPerMonth (pre-leverage cache) as below the floor", async () => {
+    const oldCache: Suggestion = {
+      id: "old-cache-id", name: "old-cache", title: "Old cache workflow", rationale: "Observed",
+      // No estMinutesSavedPerMonth field at all — a cache written before
+      // leverage estimation shipped, not merely a suggestion with 0 leverage.
+      evidence: { count: 3, sessions: 2 },
+      confidence: "high", sourceSignatures: ["old-cache"],
+      payload: { type: "command", commandName: "old-cache", body: "Do it" },
+    };
+    const output: string[] = [];
+    await sessionStart("/repo", {
+      ...deps([oldCache]),
+      write: line => output.push(line),
+      spawnDetachedFn: () => {},
+    });
+    expect(output).toEqual([]);
+  });
+
+  it("fails open when the manifest on disk is corrupt: prints nothing but still spawns", async () => {
+    // Exercises the real loadManifest failure path (invalid JSON on disk),
+    // not a mocked throwing loader — a corrupt manifest.json is a real
+    // failure mode a bare invocation or session start can hit in practice.
+    const dir = await mkdtemp(join(tmpdir(), "grad-session-start-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-session-start-home-"));
+    await saveSuggestions(dir, [suggestion("high", 40)], home);
+    await mkdir(gradientDir(dir), { recursive: true });
+    await writeFile(join(gradientDir(dir), "manifest.json"), "{ not json");
+
+    const output: string[] = [];
+    const spawnCalls: unknown[] = [];
+    await expect(sessionStart(dir, {
+      home,
+      write: line => output.push(line),
+      spawnDetachedFn: (...args: unknown[]) => { spawnCalls.push(args); },
+    })).resolves.toBeUndefined();
+    expect(output).toEqual([]);
+    expect(spawnCalls.length).toBe(1);
   });
 });
