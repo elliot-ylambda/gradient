@@ -29,6 +29,9 @@ the same things everyone does in Claude Code:
   to be named
 
 `gradient` mines those patterns out of your history and hands you the artifact.
+It also audits project and user `CLAUDE.md` instructions read-only: when you keep
+restating an instruction or correcting the assistant after activity, gradient
+can propose a safer rule—or, for an explicit post-edit check, a reviewed hook.
 
 ## Repository layout
 
@@ -275,7 +278,8 @@ and model/effort churn. It makes no model call. Each hot metric points to a
 specific action such as `gradient autopilot nudge`, `gradient scan`, or
 `gradient recall on`; `--user` uses the same recent cross-project window as
 scan, and `--html` writes a self-contained private
-`.gradient/insights.html`.
+`.gradient/insights.html`. Project reports also show up to 15 instruction
+effectiveness findings from the most recent scan.
 
 `gradient continuity on` installs locally consented `PreCompact` checkpoint
 and `SessionStart` recap hooks. Bounded, redacted recent user intents plus a
@@ -302,6 +306,12 @@ consent, deletes the checkpoint, then removes only those two hooks.
   total input bytes, candidate count, caches, settings, playbooks, and
   append-only logs are also bounded. Site-specific `ignorePatterns` accept only
   a capped, linear-looking regex subset to avoid backtracking denial of service.
+- Project scans read `CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/*.md`, and
+  the user's `~/.claude/CLAUDE.md` without following imports or symlinks and
+  never modify them. Instruction-audit tallies are private `0600` user-cache
+  data, not repository files. Corrections count only when same-session
+  transcript ordering confirms preceding assistant activity; cross-project
+  scans skip the audit so one repository's instructions cannot affect another.
 - Suggestions must map to opaque IDs for exact local source candidates; redacted
   text is never used as a provenance key. Artifact bodies, titles, triggers,
   rule text, and hook commands are reconstructed locally, and `review` shows the

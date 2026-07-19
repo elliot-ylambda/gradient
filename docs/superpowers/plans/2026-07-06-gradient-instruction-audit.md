@@ -1,10 +1,19 @@
 # gradient — Instruction Audit — Implementation Plan
 
+**Status:** Complete (2026-07-18). Tasks U1–U6 are implemented and verified;
+the unchecked step boxes below are retained as the original test-first recipe.
+
+**Implemented deviations from the recipe:** audit snapshots are private `0600`
+user-cache files rather than `.gradient/audit.json`; corrections require
+same-session preceding assistant activity; cross-project scans skip project
+instruction audit; and hooks require an explicit safe post-edit command (a
+prohibition such as “never run X” can never become a hook that runs X).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Detect instructions that don't hold — prompts restating what CLAUDE.md already says, and corrections that follow assistant actions — and route them into the suggestion funnel (rules / command hooks) plus an `insights` "Instruction effectiveness" section. Spec: `docs/superpowers/specs/2026-07-06-gradient-instruction-audit-design.md`.
 
-**Architecture:** New `core/instructions.ts` loads and extracts instruction lines from the four sources (project CLAUDE.md, CLAUDE.local.md, `.claude/rules/*.md`, `~/.claude/CLAUDE.md`), read-only. New `core/audit.ts` runs the restatement detector (similarity vs. instruction lines), the correction detector (lexicon + existing clustering), and the cross-reference (violated vs. missing), producing `Candidate`s (`kind: "instruction"`, routing context in a new optional `Candidate.hint`) and per-instruction tallies persisted to `.gradient/audit.json` for insights. `detect` gains the instruction briefing; suggestions reuse Phase C2's `rule` payload and Spec 6's command-`hook` payload.
+**Architecture:** New `core/instructions.ts` loads and extracts instruction lines from the four sources (project CLAUDE.md, CLAUDE.local.md, `.claude/rules/*.md`, `~/.claude/CLAUDE.md`), read-only and symlink-refusing. New `core/audit.ts` runs the restatement detector (similarity vs. instruction lines), the assistant-context-confirmed correction detector (lexicon + existing clustering), and the cross-reference (violated vs. missing), producing `Candidate`s (`kind: "instruction"`, routing context in `Candidate.hint`) and per-instruction tallies persisted to the private per-project user cache for insights. `detect` gains the instruction briefing; suggestions reuse Phase C2's `rule` payload and Spec 6's reviewed command-`hook` payload.
 
 **Tech Stack:** TypeScript (ESM, `.js` import suffixes), Node ≥ 20, vitest, zero new runtime dependencies. All work in `cli/`.
 
@@ -25,7 +34,7 @@
 | `cli/src/core/instructions.ts` (create) | `InstructionLine`, `extractInstructionLines`, `loadInstructions` |
 | `cli/src/core/audit.ts` (create) | `CORRECTION_RE`, `audit()`, tallies, cross-reference |
 | `cli/src/core/detect.ts` (modify) | instruction briefing (rule vs command-hook vs user-target) |
-| `cli/src/commands/scan.ts` (modify) | run audit, merge candidates, write `.gradient/audit.json`, summary log |
+| `cli/src/commands/scan.ts` (modify) | run audit, merge candidates, write the private instruction-audit snapshot, summary log |
 | `cli/src/commands/insights.ts` (modify, if Phase D merged) | "Instruction effectiveness" section |
 | `README.md`, `cli/README.md` (modify) | wording |
 

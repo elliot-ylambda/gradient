@@ -24,10 +24,13 @@ npx gradient.md bundle team-kit # package approved artifacts as a plugin
 2. Clusters repeated prompts, failing-command pastes, recurring sequences, and
    conservative low-impact Q→A preferences locally (no LLM). It separately
    detects commands that fail across sessions and commands repeatedly run after
-   edits. Tool candidates retain only bounded command heads and redacted first
-   error lines—never successful output or file contents. Pasted bodies and
-   command arguments are discarded; cross-project scans skip Q→A rules. It also
-   measures long Claude question→answer waits with bounded local reads.
+   edits. Project scans also audit `CLAUDE.md`, `CLAUDE.local.md`, and
+   `.claude/rules/*.md` read-only for instructions you keep restating or
+   correcting after assistant activity. Tool candidates retain only bounded
+   command heads and redacted first error lines—never successful output or file
+   contents. Pasted bodies and command arguments are discarded; cross-project
+   scans skip Q→A rules. It also measures long Claude question→answer waits with
+   bounded local reads.
 3. Sends only the top candidates to an LLM (`claude` by default, isolated
    `codex exec --ephemeral` for a Codex-only target, with an Anthropic API-key
    fallback) to name and type them.
