@@ -2,7 +2,7 @@ import type { Config } from "../core/types.js";
 import { boundedAutopilotBudget, loadConfig, DEFAULT_AUTOPILOT_MODEL, projectKey } from "../config.js";
 import { loadState, saveState, cleanupStale } from "../core/state.js";
 import { renderTail, fingerprint, readTranscriptLines } from "../core/tail.js";
-import { loadPlaybook, loadProjectPlaybook, clampMode } from "../core/playbook.js";
+import { loadPlaybook, loadProjectPlaybook, clampMode, loadPlaybookPin, pinnedProse } from "../core/playbook.js";
 import { buildJudgePrompt, judge } from "../core/judge.js";
 import { redact } from "../core/security.js";
 import { selectBackend } from "../llm/index.js";
@@ -117,6 +117,10 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
 
     const tail = redact(renderTail(lines));
     const playbook = redact(await loadPlaybook(deps.home)).slice(0, PLAYBOOK_CAP);
+    // Pin check fails closed: any error below yields "" and the judge sees
+    // only the personal playbook. Clamps above already applied regardless.
+    const pin = await loadPlaybookPin(input.cwd, deps.home);
+    const projectProse = redact(pinnedProse(project, pin)).slice(0, PLAYBOOK_CAP);
     // Persist the attempt and fingerprint before the paid call. Errors and
     // stand-downs still consume budget and identical failed tails are not retried.
     state.attempts += 1;
@@ -124,7 +128,7 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
     await saveState(input.session_id, state, deps.home);
     const decision = await judge(
       backend,
-      buildJudgePrompt(effectiveMode, playbook, "", tail),
+      buildJudgePrompt(effectiveMode, playbook, projectProse, tail),
       { timeoutMs: deps.timeoutMs },
     );
 
