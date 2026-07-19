@@ -33,6 +33,7 @@ const LEGACY_GRADIENT_HOOKS: readonly HookTuple[] = [
   { event: "PreCompact", command: "gradient checkpoint" },
   { event: "SessionStart", command: "gradient scan" },
   { event: "SessionStart", command: "gradient scan --detach" },
+  { event: "SessionStart", command: "gradient session-start" },
   // v0.4 manifests did not retain matchers, even when settings did.
   { event: "SessionStart", command: "gradient recap" },
   { event: "SessionStart", command: "gradient recap", matcher: "resume|compact" },

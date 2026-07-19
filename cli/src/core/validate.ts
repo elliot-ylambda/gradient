@@ -2,7 +2,7 @@ import type { Suggestion } from "./types.js";
 import { AUTHORIZATION_GUARD, clarifiedWorkflowBody } from "./detect.js";
 import { sanitizeName, stripUnsafeControls } from "./security.js";
 
-export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan", "recap", "notify"]);
+export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan", "session-start", "recap", "notify"]);
 const TYPES = new Set(["command", "loop", "hook", "rule"]);
 const CONFIDENCES = new Set(["high", "inferred", "flagged"]);
 const HOOK_EVENTS = new Set(["PreCompact", "SessionStart", "Notification", "PostToolUse"]);
@@ -22,6 +22,7 @@ function validHookTuple(payload: Record<string, unknown>): boolean {
     return payload.subcommand === "checkpoint" && payload.matcher === undefined;
   }
   if (payload.event === "SessionStart") {
+    if (payload.subcommand === "session-start") return payload.matcher === undefined;
     return (payload.subcommand === "scan" || payload.subcommand === "recap") &&
       (payload.matcher === undefined || payload.matcher === "resume|compact");
   }

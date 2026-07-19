@@ -6,6 +6,7 @@ export interface BinaryIo {
   readStdin?: () => Promise<Record<string, unknown>>;
   write?: (chunk: string) => void;
   home?: string;
+  cwd?: string;
 }
 
 const STDIN_MAX_CHARS = 1_000_000;
@@ -59,6 +60,19 @@ export async function runBinary(argv: string[], io: BinaryIo = {}): Promise<numb
       await notify();
     } catch {
       // Fail open and silent: desktop notification support is advisory.
+    }
+    return 0;
+  }
+
+  if (argv.length === 1 && argv[0] === "session-start") {
+    try {
+      const { sessionStart } = await import("./commands/sessionStart.js");
+      await sessionStart(io.cwd ?? process.cwd(), {
+        home: io.home,
+        write: line => write(`${line}\n`),
+      });
+    } catch {
+      // Fail open and silent: SessionStart must never block the host assistant.
     }
     return 0;
   }

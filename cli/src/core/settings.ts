@@ -40,12 +40,19 @@ export function mergeHookIntoSettings(
   existing: Record<string, any>,
   event: string,
   command: string,
-  opts: { timeout?: number; matcher?: string } = {},
+  opts: { timeout?: number; matcher?: string; replacing?: string[] } = {},
 ): Record<string, any> {
   assertSettingsShape(existing, event);
   const out = { ...existing, hooks: { ...(existing.hooks ?? {}) } };
-  const groups: HookGroup[] = (Array.isArray(out.hooks[event]) ? out.hooks[event] : [])
+  let groups: HookGroup[] = (Array.isArray(out.hooks[event]) ? out.hooks[event] : [])
     .map((group: HookGroup) => ({ ...group, hooks: group.hooks.map(hook => ({ ...hook })) }));
+
+  const replacing = new Set((opts.replacing ?? []).filter(candidate => candidate !== command));
+  if (replacing.size > 0) {
+    groups = groups
+      .map(group => ({ ...group, hooks: group.hooks.filter(hook => !replacing.has(hook.command)) }))
+      .filter(group => group.hooks.length > 0);
+  }
 
   const exactGroup = groups.find(group =>
     group.matcher === opts.matcher && group.hooks.some(hook => hook.command === command));
@@ -106,7 +113,7 @@ export async function installHook(
   projectDir: string,
   event: string,
   command: string,
-  opts: { timeout?: number; matcher?: string } = {},
+  opts: { timeout?: number; matcher?: string; replacing?: string[] } = {},
 ): Promise<string> {
   const path = settingsPath(projectDir);
   assertInside(join(projectDir, ".claude"), path);

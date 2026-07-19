@@ -142,7 +142,7 @@ export interface Config {
   userScopeDays?: number;
   /** Max prompts fed into clustering before older ones are dropped. Defaults to 1500. */
   maxPrompts?: number;
-  /** When true, a SessionStart hook runs `gradient scan --detach`. */
+  /** When true, SessionStart surfaces one cached suggestion and starts a detached scan. */
   scanOnSessionStart?: boolean;
   /** Legacy global mode. Ignored by 0.1.1+; users must re-consent per project. */
   autopilot?: AutopilotMode;

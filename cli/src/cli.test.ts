@@ -15,9 +15,11 @@ import { notify } from "./commands/notify.js";
 import { saveSuggestions } from "./commands/apply.js";
 import { clarifiedWorkflowBody } from "./core/detect.js";
 import { scan } from "./commands/scan.js";
+import { sessionStart } from "./commands/sessionStart.js";
 
 vi.mock("./commands/scan.js", () => ({ scan: vi.fn(async () => []) }));
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
+vi.mock("./commands/sessionStart.js", () => ({ sessionStart: vi.fn(async () => {}) }));
 vi.mock("./commands/migrate.js", () => ({
   migrate: vi.fn(async () => ({ migrated: ["ship"], skipped: ["ghost"] })),
 }));
@@ -261,6 +263,17 @@ describe("main", () => {
     expect(forwardedArgs).not.toContain("--detach");
     expect(forwardedArgs).toContain("scan");
     expect(forwardedArgs).toContain("--all");
+  });
+
+  it("dispatches the session-start hook target with fail-open dependencies", async () => {
+    vi.mocked(sessionStart).mockClear();
+    const logs: string[] = [];
+    expect(await main(["session-start"], { home: "/home", log: line => logs.push(line) })).toBe(0);
+    expect(vi.mocked(sessionStart)).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      home: "/home",
+      write: expect.any(Function),
+      spawnDetachedFn: spawnDetached,
+    }));
   });
 
   it("shows an estimated minutes-saved-per-month next to each scan suggestion when known", async () => {

@@ -28,6 +28,7 @@ import type { Assistant } from "./core/types.js";
 import { stripUnsafeControls } from "./core/security.js";
 import { readlineConfirm, type Confirm } from "./core/confirm.js";
 import { instructionEffectivenessLine } from "./core/insights.js";
+import { sessionStart } from "./commands/sessionStart.js";
 
 const HELP = `gradient — turn repeated Claude Code and Codex workflows into artifacts
 
@@ -40,6 +41,7 @@ Usage:
   gradient scan --all           cross-project patterns, no time limit (no preference rules)
     [--since 7d] [--limit N] [--max-prompts N] [--no-review]
   gradient review [--json]      approve cached suggestions (--json: print them, no prompts)
+  gradient session-start        (hook target) surface one suggestion, then rescan
   gradient apply <id|name>...   generate specific suggestions
   gradient explain <id|name>    show the evidence behind a suggestion
   gradient notify               (hook target) desktop ping when Claude needs input
@@ -288,6 +290,14 @@ export async function main(
           },
           projectDir, io.home, log, confirm,
         );
+        return 0;
+      }
+      case "session-start": {
+        await sessionStart(projectDir, {
+          home: io.home,
+          write: log,
+          spawnDetachedFn: spawnDetached,
+        });
         return 0;
       }
       case "review": {

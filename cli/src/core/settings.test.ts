@@ -15,6 +15,16 @@ describe("mergeHookIntoSettings", () => {
     const twice = mergeHookIntoSettings(once, "SessionStart", "gradient scan --detach");
     expect(twice.hooks.SessionStart.length).toBe(1);
   });
+  it("replaces superseded commands without disturbing unrelated hooks", () => {
+    let existing = mergeHookIntoSettings({}, "SessionStart", "gradient scan --detach");
+    existing = mergeHookIntoSettings(existing, "SessionStart", "other-tool startup");
+    const migrated = mergeHookIntoSettings(existing, "SessionStart", "gradient session-start", {
+      replacing: ["gradient scan --detach"],
+    });
+    expect(JSON.stringify(migrated)).not.toContain("gradient scan --detach");
+    expect(JSON.stringify(migrated)).toContain("gradient session-start");
+    expect(JSON.stringify(migrated)).toContain("other-tool startup");
+  });
 });
 
 describe("installHook", () => {

@@ -39,6 +39,15 @@ describe("assertHookRunnable", () => {
   it("exposes recap as a known continuity hook target", () => {
     expect(KNOWN_SUBCOMMANDS.has("recap")).toBe(true);
   });
+  it("treats the exact SessionStart surfacing target as runnable", () => {
+    const hook: Suggestion = {
+      ...good,
+      payload: { type: "hook", event: "SessionStart", subcommand: "session-start", description: "d" },
+    };
+    expect(KNOWN_SUBCOMMANDS.has("session-start")).toBe(true);
+    expect(() => validateSuggestion(hook)).not.toThrow();
+    expect(() => assertHookRunnable(hook)).not.toThrow();
+  });
   it("treats a SessionStart→scan hook as runnable", () => {
     const s: any = { id: "x", name: "n", title: "t", rationale: "r", confidence: "high",
       payload: { type: "hook", event: "SessionStart", subcommand: "scan", description: "d" } };
