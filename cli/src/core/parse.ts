@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
-import type { Assistant, Role, Turn } from "./types.js";
+import type { Assistant, CommandEvent, Role, Turn } from "./types.js";
 
 export const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 export const MAX_PARSED_TURNS_PER_FILE = 20_000;
@@ -98,8 +98,19 @@ function usageTokens(raw: Raw): number {
     sum + (Number.isSafeInteger(value) && (value as number) > 0 ? value as number : 0), 0));
 }
 
-export function parseLines(lines: string[], maxTurns = MAX_PARSED_TURNS_PER_FILE): Turn[] {
-  const out: Turn[] = [];
+export interface ParsedTranscript {
+  turns: Turn[];
+  events: CommandEvent[];
+}
+
+// A user turn whose text opens with a slash-command echo tag (Claude Code's
+// own rendering of a typed `/foo` invocation). Anchored so a genuine prompt
+// that merely mentions the tag stays a turn.
+const COMMAND_TAG_RE = /^\s*<command-name>([^<]+)<\/command-name>/;
+
+export function parseTranscript(lines: string[], maxTurns = MAX_PARSED_TURNS_PER_FILE): ParsedTranscript {
+  const turns: Turn[] = [];
+  const events: CommandEvent[] = [];
   const limit = Math.max(1, Math.min(maxTurns, MAX_PARSED_TURNS_PER_FILE));
   const start = Math.max(0, lines.length - limit * 4);
   for (let index = start; index < lines.length; index++) {
@@ -113,19 +124,38 @@ export function parseLines(lines: string[], maxTurns = MAX_PARSED_TURNS_PER_FILE
     }
     const turn = parseOne(raw);
     if (turn) {
-      out.push(turn);
-      if (out.length > limit) out.shift();
+      const match = turn.text ? COMMAND_TAG_RE.exec(turn.text) : null;
+      if (match) {
+        events.push({
+          ts: turn.ts,
+          sessionId: turn.sessionId,
+          project: turn.project,
+          command: match[1].trim(),
+        });
+        if (events.length > limit) events.shift();
+        continue;
+      }
+      turns.push(turn);
+      if (turns.length > limit) turns.shift();
       continue;
     }
     const tokens = usageTokens(raw);
-    const pending = out[out.length - 1];
+    const pending = turns[turns.length - 1];
     if (pending && tokens > 0) pending.usageTokens = Math.min(MAX_USAGE_TOKENS, (pending.usageTokens ?? 0) + tokens);
   }
-  return out;
+  return { turns, events };
+}
+
+export async function parseTranscriptFile(path: string): Promise<ParsedTranscript> {
+  return parseTranscript((await readTranscriptTail(path)).split(/\r?\n/));
+}
+
+export function parseLines(lines: string[], maxTurns = MAX_PARSED_TURNS_PER_FILE): Turn[] {
+  return parseTranscript(lines, maxTurns).turns;
 }
 
 export async function parseFile(path: string): Promise<Turn[]> {
-  return parseLines((await readTranscriptTail(path)).split(/\r?\n/));
+  return (await parseTranscriptFile(path)).turns;
 }
 
 export interface DialogueTurn {

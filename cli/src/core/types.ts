@@ -26,6 +26,17 @@ export interface TemporalFeatures {
   spanDays: number;
 }
 
+/** A slash-command invocation extracted from a `<command-name>` turn at parse
+ * time (core/parse.ts). Structured replacement for ad-hoc regex scraping in
+ * usage.ts (adoption counting) and insights.ts (compact/model-switch metrics);
+ * never enters clustering. */
+export interface CommandEvent {
+  ts: string;
+  sessionId: string;
+  project: string;
+  command: string;
+}
+
 /** One genuine user prompt after parse + filter. (The mining pipeline consumes
  * only user text; assistant turns are rendered by core/tail.ts for autopilot.) */
 export interface Turn {

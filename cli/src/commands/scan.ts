@@ -1,7 +1,7 @@
-import type { Candidate, Config, Suggestion, Turn } from "../core/types.js";
+import type { Candidate, CommandEvent, Config, Suggestion, Turn } from "../core/types.js";
 import { collect } from "../core/collect.js";
 import { collectCodex } from "../core/collect-codex.js";
-import { parseDialogueFile, parseFile, type DialogueTurn } from "../core/parse.js";
+import { parseDialogueFile, parseTranscriptFile, type DialogueTurn, type ParsedTranscript } from "../core/parse.js";
 import {
   parseCodexDialogueFile,
   parseCodexFile,
@@ -42,7 +42,7 @@ export interface ScanDeps {
   config?: Config;
   collectFn?: (options: ScanOptions) => Promise<string[]>;
   collectCodexFn?: (options: ScanOptions) => Promise<string[]>;
-  parseFn?: (path: string) => Promise<Turn[]>;
+  parseFn?: (path: string) => Promise<ParsedTranscript>;
   parseCodexFn?: (path: string) => Promise<Turn[]>;
   parseDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
   parseCodexDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
@@ -64,7 +64,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
 
   const collectFn = deps.collectFn ?? ((options: ScanOptions) => collect({ ...options, onWarn: log }));
   const collectCodexFn = deps.collectCodexFn ?? ((options: ScanOptions) => collectCodex({ ...options, onWarn: log }));
-  const parseFn = deps.parseFn ?? parseFile;
+  const parseFn = deps.parseFn ?? parseTranscriptFile;
   const projectDir = opts.projectPath ?? process.cwd();
   const claudeFiles = targets.includes("claude-code") ? await collectFn(opts) : [];
   const codexFiles = targets.includes("codex") ? await collectCodexFn(opts) : [];
@@ -88,16 +88,28 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
       ? capByRecency(current, MAX_PROMPTS_HARD_CAP).kept
       : current;
   };
+  // Mirrors pushTurns' bound: command events are tiny per-record but still
+  // an unbounded-history accumulator without a ceiling.
+  const pushEvents = (current: CommandEvent[], additions: CommandEvent[]): CommandEvent[] => {
+    current.push(...scoped(additions));
+    if (current.length <= MAX_PROMPTS_HARD_CAP) return current;
+    const sorted = [...current].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+    return sorted.slice(0, MAX_PROMPTS_HARD_CAP);
+  };
 
   const ignore = compileIgnorePatterns(config.ignorePatterns);
   const answerPairs = [] as ReturnType<typeof extractAnswerPairs>;
   const pairCap = Math.min(ANSWER_MAX_PAIRS, max);
   let turns: Turn[] = [];
+  // Accumulated for later tasks (deterministic hook suggestions from command
+  // evidence); not yet consumed within this pipeline.
+  let events: CommandEvent[] = [];
   const userTurnCounts = new Map<string, number>();
   for (const file of claudeFiles) {
     const parsed = await parseFn(file);
-    userTurnCounts.set(file, parsed.length);
-    turns = pushTurns(turns, parsed);
+    userTurnCounts.set(file, parsed.turns.length + parsed.events.length);
+    turns = pushTurns(turns, parsed.turns);
+    events = pushEvents(events, parsed.events);
   }
 
   const productionCodexSinglePass = !deps.parseCodexFn && !deps.parseCodexDialogueFn;

@@ -3,7 +3,6 @@ import type { Turn, Candidate } from "./types.js";
 // Anchored at the start so a genuine prompt that merely *mentions* one of these
 // wrappers ("why did the task-notification fire twice?") is still mined.
 const INJECTED_PATTERNS: RegExp[] = [
-  /^<command-(name|message|args)/i,
   /<system-reminder>/i,
   /local-command-stdout/i,
   /^Base directory for/i,

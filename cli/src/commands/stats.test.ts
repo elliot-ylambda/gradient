@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { adoptionFromTurns, stats } from "./stats.js";
+import { adoptionFromEvents, stats } from "./stats.js";
 import { addEntry } from "../core/manifest.js";
 import { appendAdoption } from "./recall.js";
 import { suggestionsPath } from "./apply.js";
@@ -86,10 +86,13 @@ describe("stats", () => {
       home,
       now: Date.parse("2026-07-06T00:00:00Z"),
       collectFn: async () => ["transcript"],
-      parseFn: async () => [
-        { ts: "2026-06-01T00:00:00Z", project: "p", role: "user", sessionId: "s0", text: "<command-name>/ship</command-name>" },
-        { ts: "2026-07-03T00:00:00Z", project: "p", role: "user", sessionId: "s1", text: "<command-name>/ship</command-name>" },
-      ],
+      parseFn: async () => ({
+        turns: [],
+        events: [
+          { ts: "2026-06-01T00:00:00Z", project: "p", sessionId: "s0", command: "/ship" },
+          { ts: "2026-07-03T00:00:00Z", project: "p", sessionId: "s1", command: "/ship" },
+        ],
+      }),
     });
     expect(report.adoption).toEqual([expect.objectContaining({
       name: "ship",
@@ -115,7 +118,7 @@ describe("stats", () => {
       home,
       now: Date.parse("2026-05-31T00:00:00Z"),
       collectFn: async () => [],
-      parseFn: async () => [],
+      parseFn: async () => ({ turns: [], events: [] }),
     });
     expect(report.adoption[0]).toMatchObject({
       name: "dead",
@@ -140,10 +143,13 @@ describe("stats", () => {
       collectFn: async () => ["one", "two"],
       parseFn: async () => {
         parses++;
-        return [
-          { ts: "2026-07-01", project: "p", role: "user", sessionId: "s1", text: "first" },
-          { ts: "2026-07-02", project: "p", role: "user", sessionId: "s2", text: "second" },
-        ];
+        return {
+          turns: [
+            { ts: "2026-07-01", project: "p", role: "user", sessionId: "s1", text: "first" },
+            { ts: "2026-07-02", project: "p", role: "user", sessionId: "s2", text: "second" },
+          ],
+          events: [],
+        };
       },
     });
     expect(parses).toBe(1);
@@ -168,9 +174,12 @@ describe("stats", () => {
         text: "<command-name>/ship</command-name>", assistant: "codex",
       }],
     });
-    expect(report.adoption).toEqual([expect.objectContaining({ name: "ship", uses: 1 })]);
+    // Codex parsing is untouched and yields no CommandEvents (real Codex CLI
+    // transcripts carry no `<command-name>` tags), so codex-target usage
+    // can't be counted from transcripts today — 0 uses, not a regression.
+    expect(report.adoption).toEqual([expect.objectContaining({ name: "ship", uses: 0 })]);
 
-    const dual = await adoptionFromTurns(dir, [], { manifest: [
+    const dual = await adoptionFromEvents(dir, [], { manifest: [
       { name: "ship", type: "skill", path: ".claude/skills/ship/SKILL.md", createdAt: "2026-06-15", suggestionId: "ship-id" },
       { name: "ship", type: "skill", target: "codex", path: ".agents/skills/ship/SKILL.md", createdAt: "2026-06-15", suggestionId: "ship-id" },
     ], home });

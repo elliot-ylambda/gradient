@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseLines, parseFile, parseDialogueLines } from "./parse.js";
+import { parseLines, parseFile, parseDialogueLines, parseTranscript, parseTranscriptFile } from "./parse.js";
 
 const userString = JSON.stringify({
   type: "user", isSidechain: false, sessionId: "s1", cwd: "/p/x",
@@ -43,6 +43,13 @@ describe("parseLines", () => {
     const turns = parseLines(["not json", "", userString]);
     expect(turns.length).toBe(1);
   });
+  it("excludes command-tag turns (routed to events by parseTranscript)", () => {
+    const command = JSON.stringify({
+      type: "user", sessionId: "s1", cwd: "/p/x", timestamp: "2026-06-01T00:00:00Z",
+      message: { role: "user", content: "<command-name>/compact</command-name>" },
+    });
+    expect(parseLines([command, userString]).map(t => t.text)).toEqual(["fix the bug"]);
+  });
   it("attributes recorded assistant usage to the preceding user turn, excluding cache reads", () => {
     const usage = JSON.stringify({
       type: "assistant",
@@ -57,6 +64,58 @@ describe("parseLines", () => {
       assistant: "claude-code",
       usageTokens: 15,
     });
+  });
+});
+
+describe("parseTranscript", () => {
+  const commandLine = (command: string) => JSON.stringify({
+    type: "user", sessionId: "s1", cwd: "/p/x", timestamp: "2026-06-01T00:00:00Z",
+    message: { role: "user", content: `<command-name>${command}</command-name>` },
+  });
+
+  it("routes a command-tag turn into events, not turns", () => {
+    const parsed = parseTranscript([commandLine("/compact"), userString]);
+    expect(parsed.turns.map(t => t.text)).toEqual(["fix the bug"]);
+    expect(parsed.events).toEqual([
+      { ts: "2026-06-01T00:00:00Z", sessionId: "s1", project: "x", command: "/compact" },
+    ]);
+  });
+
+  it("keeps a prompt that merely starts with a non-command tag as a turn", () => {
+    const line = JSON.stringify({
+      type: "user", sessionId: "s1", cwd: "/p/x", timestamp: "2026-06-01T00:00:00Z",
+      message: { role: "user", content: "<div>why is this broken?</div>" },
+    });
+    const parsed = parseTranscript([line]);
+    expect(parsed.turns.map(t => t.text)).toEqual(["<div>why is this broken?</div>"]);
+    expect(parsed.events).toEqual([]);
+  });
+
+  it("trims whitespace inside the captured command name", () => {
+    const line = JSON.stringify({
+      type: "user", sessionId: "s1", cwd: "/p/x", timestamp: "2026-06-01T00:00:00Z",
+      message: { role: "user", content: "<command-name> /ship </command-name>" },
+    });
+    expect(parseTranscript([line]).events[0].command).toBe("/ship");
+  });
+});
+
+describe("parseTranscriptFile", () => {
+  it("reads a jsonl file from disk and splits turns from command events", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-parse-tx-"));
+    const file = join(dir, "t.jsonl");
+    const prompt = JSON.stringify({
+      type: "user", sessionId: "s", cwd: "/p/x", timestamp: "2026-06-01T00:00:00Z",
+      message: { role: "user", content: "hello world" },
+    });
+    const command = JSON.stringify({
+      type: "user", sessionId: "s", cwd: "/p/x", timestamp: "2026-06-01T00:01:00Z",
+      message: { role: "user", content: "<command-name>/compact</command-name>" },
+    });
+    await writeFile(file, `${prompt}\n${command}\n`);
+    const parsed = await parseTranscriptFile(file);
+    expect(parsed.turns.map(t => t.text)).toEqual(["hello world"]);
+    expect(parsed.events.map(e => e.command)).toEqual(["/compact"]);
   });
 });
 

@@ -1,8 +1,8 @@
 import { join } from "node:path";
-import type { Config, Turn } from "../core/types.js";
+import type { CommandEvent, Config, Turn } from "../core/types.js";
 import { collect, type CollectOptions } from "../core/collect.js";
 import { collectCodex } from "../core/collect-codex.js";
-import { parseFile } from "../core/parse.js";
+import { parseTranscriptFile, type ParsedTranscript } from "../core/parse.js";
 import { parseCodexFile } from "../core/parse-codex.js";
 import { compileIgnorePatterns } from "../core/filter.js";
 import {
@@ -18,7 +18,7 @@ import {
 import { hookInstalled } from "../core/settings.js";
 import { DEFAULT_USER_SCOPE_DAYS } from "../core/scope.js";
 import { loadConfig, projectKey, resolveTargets } from "../config.js";
-import { adoptionFromTurns } from "./stats.js";
+import { adoptionFromEvents } from "./stats.js";
 import { gradientDir } from "../core/manifest.js";
 import { safeWriteFile } from "../core/safeFs.js";
 
@@ -42,7 +42,7 @@ function addMetrics(total: InsightsMetrics, next: InsightsMetrics): void {
 export interface InsightsDeps {
   collectFn?: (options: CollectOptions) => Promise<string[]>;
   collectCodexFn?: (options: CollectOptions) => Promise<string[]>;
-  parseFn?: (path: string) => Promise<Turn[]>;
+  parseFn?: (path: string) => Promise<ParsedTranscript>;
   parseCodexFn?: (path: string) => Promise<Turn[]>;
   config?: Config;
 }
@@ -55,7 +55,7 @@ export async function insights(
   const targets = resolveTargets(config);
   const collectFn = deps.collectFn ?? collect;
   const collectCodexFn = deps.collectCodexFn ?? collectCodex;
-  const parseFn = deps.parseFn ?? parseFile;
+  const parseFn = deps.parseFn ?? parseTranscriptFile;
   const parseCodexFn = deps.parseCodexFn ?? parseCodexFile;
   const days = config.userScopeDays ?? DEFAULT_USER_SCOPE_DAYS;
   const scope: CollectOptions = opts.user
@@ -75,34 +75,55 @@ export async function insights(
   }
 
   const ignore = compileIgnorePatterns(config.ignorePatterns);
-  const metrics = computeMetrics([], ignore);
+  const metrics = computeMetrics([], [], ignore);
   const analysisTurns: Turn[] = [];
+  const events: CommandEvent[] = [];
   let processedTurns = 0;
   let analysisComplete = true;
   let capped = claudeFiles.length + codexFiles.length > files.length;
   const cutoff = opts.user ? (opts.now ?? Date.now()) - days * 86_400_000 : undefined;
+  const inCutoff = (ts: string): boolean => {
+    if (cutoff === undefined) return true;
+    const timestamp = Date.parse(ts);
+    return Number.isFinite(timestamp) && timestamp >= cutoff;
+  };
+  // Shared INSIGHTS_MAX_ANALYSIS_TURNS budget for both branches below.
+  const pushAnalysis = (turns: Turn[]): void => {
+    if (!analysisComplete) return;
+    const remaining = INSIGHTS_MAX_ANALYSIS_TURNS - analysisTurns.length;
+    if (turns.length <= remaining) analysisTurns.push(...turns);
+    else {
+      analysisTurns.push(...turns.slice(0, Math.max(0, remaining)));
+      analysisComplete = false;
+      capped = true;
+    }
+  };
 
   for (const file of files) {
     if (processedTurns >= INSIGHTS_MAX_TURNS) { capped = true; break; }
-    const raw = file.assistant === "codex" ? await parseCodexFn(file.path) : await parseFn(file.path);
-    const scoped = cutoff === undefined ? raw : raw.filter(turn => {
-      const timestamp = Date.parse(turn.ts);
-      return Number.isFinite(timestamp) && timestamp >= cutoff;
-    });
     const remaining = INSIGHTS_MAX_TURNS - processedTurns;
-    const parsed = scoped.slice(0, remaining);
-    if (scoped.length > parsed.length) capped = true;
-    processedTurns += parsed.length;
-    addMetrics(metrics, computeMetrics(parsed, ignore));
-    if (analysisComplete) {
-      const analysisRemaining = INSIGHTS_MAX_ANALYSIS_TURNS - analysisTurns.length;
-      if (parsed.length <= analysisRemaining) analysisTurns.push(...parsed);
-      else {
-        analysisTurns.push(...parsed.slice(0, Math.max(0, analysisRemaining)));
-        analysisComplete = false;
-        capped = true;
-      }
+
+    if (file.assistant === "codex") {
+      // Codex parsing is untouched — its transcripts carry no command-tag events.
+      const raw = await parseCodexFn(file.path);
+      const scopedTurns = raw.filter(turn => inCutoff(turn.ts));
+      const parsedTurns = scopedTurns.slice(0, remaining);
+      if (scopedTurns.length > parsedTurns.length) capped = true;
+      processedTurns += parsedTurns.length;
+      addMetrics(metrics, computeMetrics(parsedTurns, [], ignore));
+      pushAnalysis(parsedTurns);
+      continue;
     }
+
+    const raw = await parseFn(file.path);
+    const scopedTurns = raw.turns.filter(turn => inCutoff(turn.ts));
+    const scopedEvents = raw.events.filter(event => inCutoff(event.ts));
+    const parsedTurns = scopedTurns.slice(0, remaining);
+    if (scopedTurns.length > parsedTurns.length) capped = true;
+    processedTurns += parsedTurns.length;
+    events.push(...scopedEvents);
+    addMetrics(metrics, computeMetrics(parsedTurns, scopedEvents, ignore));
+    pushAnalysis(parsedTurns);
   }
 
   const costs = buildCostRows(analysisTurns, ignore);
@@ -111,7 +132,7 @@ export async function insights(
   let unusedArtifacts: string[] = [];
   if (!opts.user && analysisComplete && !capped) {
     try {
-      unusedArtifacts = (await adoptionFromTurns(opts.projectDir, analysisTurns, { home: opts.home, now: opts.now }))
+      unusedArtifacts = (await adoptionFromEvents(opts.projectDir, events, { home: opts.home, now: opts.now }))
         .filter(artifact => artifact.suggestRemoval)
         .map(artifact => artifact.name);
     } catch {

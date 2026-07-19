@@ -1,10 +1,10 @@
-import type { ArtifactType, Confidence, Turn } from "../core/types.js";
+import type { ArtifactType, CommandEvent, Confidence } from "../core/types.js";
 import { loadManifest } from "../core/manifest.js";
 import { loadSuggestions } from "./apply.js";
 import { loadConfig, resolveTargets } from "../config.js";
 import { collect } from "../core/collect.js";
 import { collectCodex } from "../core/collect-codex.js";
-import { parseFile } from "../core/parse.js";
+import { parseTranscriptFile } from "../core/parse.js";
 import { parseCodexFile } from "../core/parse-codex.js";
 import { countArtifactUses } from "../core/usage.js";
 import { adoptionPath } from "./recall.js";
@@ -49,7 +49,7 @@ export interface StatsOptions {
   now?: number;
   collectFn?: typeof collect;
   collectCodexFn?: typeof collectCodex;
-  parseFn?: typeof parseFile;
+  parseFn?: typeof parseTranscriptFile;
   parseCodexFn?: typeof parseCodexFile;
   onSkip?: (message: string) => void;
   /** Test/embedding overrides can only lower the hard resource ceilings. */
@@ -60,9 +60,9 @@ export interface StatsOptions {
 export const STATS_MAX_FILES = 2_000;
 export const STATS_MAX_TURNS = 100_000;
 
-export async function adoptionFromTurns(
+export async function adoptionFromEvents(
   projectDir: string,
-  turns: Turn[],
+  events: CommandEvent[],
   opts: { home?: string; now?: number; manifest?: Awaited<ReturnType<typeof loadManifest>> } = {},
 ): Promise<AdoptionRow[]> {
   const manifest = opts.manifest ?? (await loadManifest(projectDir));
@@ -72,7 +72,7 @@ export async function adoptionFromTurns(
     if (!prior || entry.createdAt < prior.createdAt) logical.set(entry.name, entry);
   }
   const since = new Map([...logical.values()].map(entry => [entry.name, entry.createdAt]));
-  const uses = countArtifactUses(turns, since);
+  const uses = countArtifactUses(events, since);
   const retypes = await readRetypes(projectDir, since, opts.home);
   const now = opts.now ?? Date.now();
   return [...logical.values()].map(entry => {
@@ -149,13 +149,13 @@ export async function stats(projectDir: string, opts: StatsOptions = {}): Promis
   const covered = patterns.filter(p => p.covered).length;
   const coveragePct = total === 0 ? 0 : Math.round((covered / total) * 100);
 
-  const turns: Turn[] = [];
+  const events: CommandEvent[] = [];
   let capped = false;
   if (manifest.length > 0) {
     const targets = resolveTargets(config);
     const collectFn = opts.collectFn ?? collect;
     const collectCodexFn = opts.collectCodexFn ?? collectCodex;
-    const parseFn = opts.parseFn ?? parseFile;
+    const parseFn = opts.parseFn ?? parseTranscriptFile;
     const parseCodexFn = opts.parseCodexFn ?? parseCodexFile;
     const collectOptions = { scope: "project" as const, projectPath: projectDir, home: opts.home };
     const claudeFiles = targets.includes("claude-code") ? await collectFn(collectOptions) : [];
@@ -168,16 +168,26 @@ export async function stats(projectDir: string, opts: StatsOptions = {}): Promis
     const maxFiles = Math.max(1, Math.min(opts.maxFiles ?? STATS_MAX_FILES, STATS_MAX_FILES));
     const maxTurns = Math.max(1, Math.min(opts.maxTurns ?? STATS_MAX_TURNS, STATS_MAX_TURNS));
     if (files.length > maxFiles) capped = true;
+    let processed = 0;
     for (const file of files.slice(0, maxFiles)) {
-      if (turns.length >= maxTurns) { capped = true; break; }
-      const parsed = file.assistant === "codex" ? await parseCodexFn(file.path) : await parseFn(file.path);
-      const remaining = maxTurns - turns.length;
-      if (parsed.length > remaining) capped = true;
-      for (const turn of parsed.slice(0, remaining)) turns.push(turn);
+      if (processed >= maxTurns) { capped = true; break; }
+      const remaining = maxTurns - processed;
+      if (file.assistant === "codex") {
+        // Codex parsing is untouched — its transcripts carry no command-tag
+        // events — but its turn volume still counts against the resource cap.
+        const turnCount = (await parseCodexFn(file.path)).length;
+        if (turnCount > remaining) capped = true;
+        processed += Math.min(turnCount, remaining);
+        continue;
+      }
+      const parsed = await parseFn(file.path);
+      if (parsed.turns.length > remaining) capped = true;
+      processed += Math.min(parsed.turns.length, remaining);
+      events.push(...parsed.events);
     }
   }
 
-  const adoption = await adoptionFromTurns(projectDir, turns, {
+  const adoption = await adoptionFromEvents(projectDir, events, {
     home: opts.home,
     now: opts.now,
     manifest,

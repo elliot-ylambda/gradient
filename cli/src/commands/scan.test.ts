@@ -33,7 +33,7 @@ describe("scan", () => {
         config: {},
         backend: null,
         collectFn: async () => files,
-        parseFn: async () => [],
+        parseFn: async () => ({ turns: [], events: [] }),
         log: message => logs.push(message),
       },
     );
@@ -76,7 +76,7 @@ describe("scan", () => {
     const backend = { name: "f", available: async () => true, complete: async () => JSON.stringify({ suggestions: [] }) };
     await scan(
       { scope: "all", projectPath: process.cwd(), home },
-      { backend, collectFn: async () => ["f"], parseFn: async () => turns, log: (m) => logs.push(m) },
+      { backend, collectFn: async () => ["f"], parseFn: async () => ({ turns, events: [] }), log: (m) => logs.push(m) },
     );
     expect(logs.some(l => l.includes("top 24"))).toBe(true);
   });
@@ -89,7 +89,7 @@ describe("scan", () => {
       const logs: string[] = [];
       await scan(
         { scope, projectPath: process.cwd(), home },
-        { backend: null, collectFn: async () => ["f"], parseFn: async () => big, log: (m) => logs.push(m) },
+        { backend: null, collectFn: async () => ["f"], parseFn: async () => ({ turns: big, events: [] }), log: (m) => logs.push(m) },
       );
       return logs;
     };
@@ -112,10 +112,13 @@ describe("scan", () => {
       {
         backend,
         collectFn: async () => ["recently-touched.jsonl"],
-        parseFn: async () => [
-          { ts: "2025-01-01T00:00:00Z", project: "p", role: "user", text: "OLD-CONFIDENTIAL-PROMPT", sessionId: "old" },
-          ...Array.from({ length: 3 }, (_, i) => ({ ts: `2026-07-0${7 + i}T00:00:00Z`, project: "p", role: "user" as const, text: "recent repeat", sessionId: `s${i}` })),
-        ],
+        parseFn: async () => ({
+          turns: [
+            { ts: "2025-01-01T00:00:00Z", project: "p", role: "user", text: "OLD-CONFIDENTIAL-PROMPT", sessionId: "old" },
+            ...Array.from({ length: 3 }, (_, i) => ({ ts: `2026-07-0${7 + i}T00:00:00Z`, project: "p", role: "user" as const, text: "recent repeat", sessionId: `s${i}` })),
+          ],
+          events: [],
+        }),
       },
     );
     expect(seen.join("\n")).not.toContain("OLD-CONFIDENTIAL-PROMPT");
@@ -140,11 +143,14 @@ describe("scan", () => {
       {
         backend: fakeBackend,
         collectFn: async () => ["fake.jsonl"],
-        parseFn: async () => [
-          { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s1" },
-          { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s2" },
-          { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s3" },
-        ],
+        parseFn: async () => ({
+          turns: [
+            { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s1" },
+            { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s2" },
+            { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s3" },
+          ],
+          events: [],
+        }),
       },
     );
     expect(out[0].name).toBe("ship");
@@ -163,7 +169,7 @@ describe("scan", () => {
       {
         backend: null,
         collectFn: async () => [husk],
-        parseFn: async () => [],
+        parseFn: async () => ({ turns: [], events: [] }),
         gitLogFn: async () => "https://claude.ai/code/session_01GONE\n",
         log: (m) => logs.push(m),
       },
@@ -191,11 +197,13 @@ describe("scan", () => {
       {
         backend: fakeBackend,
         collectFn: async () => ["fake.jsonl"],
-        parseFn: async () =>
-          Array.from({ length: 3 }, (_, i) => ({
+        parseFn: async () => ({
+          turns: Array.from({ length: 3 }, (_, i) => ({
             ts: "t", project: "x", role: "user" as const,
             text: "continue until actually done", sessionId: `s${i}`,
           })),
+          events: [],
+        }),
       },
     );
     await expect(readFile(playbookPath(home), "utf8")).rejects.toThrow();
@@ -213,7 +221,7 @@ describe("scan", () => {
     const logs: string[] = [];
     const out = await scan(
       { scope: "project", projectPath: dir },
-      { backend: null, collectFn: async () => ["f"], parseFn: async () => turns, log: m => logs.push(m), config: {} },
+      { backend: null, collectFn: async () => ["f"], parseFn: async () => ({ turns, events: [] }), log: m => logs.push(m), config: {} },
     );
     expect(out).toHaveLength(0);
     expect(logs.join("\n")).toContain("excluded 1 machine-template pattern(s)");
@@ -230,7 +238,7 @@ describe("scan", () => {
       {
         backend: null,
         collectFn: async () => ["f"],
-        parseFn: async () => turns,
+        parseFn: async () => ({ turns, events: [] }),
         config: { ignorePatterns: ["^site injector:"] },
       },
     );
@@ -263,7 +271,7 @@ describe("scan", () => {
       {
         backend,
         collectFn: async () => ["f"],
-        parseFn: async () => turns,
+        parseFn: async () => ({ turns, events: [] }),
         parseDialogueFn: async () => [],
         log: message => logs.push(message),
       },
@@ -304,7 +312,7 @@ describe("scan", () => {
       {
         backend,
         collectFn: async () => ["f"],
-        parseFn: async () => [],
+        parseFn: async () => ({ turns: [], events: [] }),
         parseDialogueFn: async () => dialogue,
         log: message => logs.push(message),
       },
@@ -329,7 +337,7 @@ describe("scan", () => {
           return JSON.stringify({ suggestions: [] });
         } },
         collectFn: async () => ["a", "b"],
-        parseFn: async () => [],
+        parseFn: async () => ({ turns: [], events: [] }),
         parseDialogueFn: async () => {
           dialogueReads++;
           return [
@@ -368,7 +376,7 @@ describe("scan", () => {
       {
         backend,
         collectFn: async () => ["f"],
-        parseFn: async () => turns,
+        parseFn: async () => ({ turns, events: [] }),
         parseDialogueFn: async () => [],
         log: message => logs.push(message),
       },
@@ -387,7 +395,7 @@ describe("scan", () => {
     const logs: string[] = [];
     const out = await scan(
       { scope: "project", projectPath: dir, home },
-      { backend: null, collectFn: async () => ["f"], parseFn: async () => seqTurns, log: m => logs.push(m) },
+      { backend: null, collectFn: async () => ["f"], parseFn: async () => ({ turns: seqTurns, events: [] }), log: m => logs.push(m) },
     );
     expect(logs.join("\n")).toContain("sequences: 1 recurring chain(s)");
     // Degraded path: the sequence candidate surfaces as a high-confidence command suggestion.
@@ -421,7 +429,7 @@ describe("scan", () => {
         backend: null,
         collectFn: async () => ["claude.jsonl"],
         collectCodexFn: async () => ["codex.jsonl"],
-        parseFn: async () => claudeTurns,
+        parseFn: async () => ({ turns: claudeTurns, events: [] }),
         parseCodexFn: async () => codexTurns,
         parseDialogueFn: async () => [],
         parseCodexDialogueFn: async () => [],
@@ -435,5 +443,27 @@ describe("scan", () => {
       sessions: 4,
       assistants: ["claude-code", "codex"],
     });
+  });
+
+  it("routes <command-name> turns to events via the real parseFn, keeping them out of mining", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-cmdevt-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const file = join(projectDir, "session.jsonl");
+    const compact = (ts: string) => JSON.stringify({
+      type: "user", sessionId: "s1", cwd: "/p/x", timestamp: ts,
+      message: { role: "user", content: "<command-name>/compact</command-name>" },
+    });
+    await writeFile(file, [
+      compact("2026-07-01T00:00:00Z"),
+      compact("2026-07-02T00:00:00Z"),
+      compact("2026-07-03T00:00:00Z"),
+    ].join("\n") + "\n");
+    const logs: string[] = [];
+    const out = await scan(
+      { scope: "project", projectPath: projectDir, home },
+      { backend: null, collectFn: async () => [file], log: message => logs.push(message) },
+    );
+    expect(out).toEqual([]);
+    expect(logs.some(l => l.includes("prompts: 0 after filtering"))).toBe(true);
   });
 });
