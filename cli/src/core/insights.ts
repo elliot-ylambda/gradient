@@ -1,11 +1,10 @@
-import type { Turn, AutopilotMode } from "./types.js";
+import type { Turn, CommandEvent, AutopilotMode } from "./types.js";
 import { classifyPrompt } from "./filter.js";
 import { extractPasteKey, PASTE_MIN_COUNT } from "./paste.js";
 import { cleanupStale, listStateFiles, loadState } from "./state.js";
 import type { InstructionTally } from "./audit.js";
 
 const NUDGE_RE = /^(continue|go on|keep going|next|what'?s next|proceed|yes|y|ok|okay|do it|go|sure|yep|good|great|perfect|lgtm|looks good|approved?|ship it|sounds good)[.!?]*$/i;
-const TAG_RE = /<command-name>\/?([\w:-]+)<\/command-name>/i;
 
 export function isNudgeText(text: string): boolean {
   return NUDGE_RE.test(text.trim());
@@ -28,7 +27,7 @@ export interface ToolActivityMetrics {
   postEditRituals: number;
 }
 
-export function computeMetrics(turns: Turn[], ignore: RegExp[] = []): InsightsMetrics {
+export function computeMetrics(turns: Turn[], events: CommandEvent[] = [], ignore: RegExp[] = []): InsightsMetrics {
   const metrics: InsightsMetrics = {
     prompts: 0,
     nudges: 0,
@@ -41,19 +40,18 @@ export function computeMetrics(turns: Turn[], ignore: RegExp[] = []): InsightsMe
     errorPastes: 0,
   };
 
+  for (const event of events) {
+    const command = event.command.replace(/^\//, "").toLowerCase();
+    if (command === "compact") metrics.compacts++;
+    else if (command === "model") metrics.modelSwitches++;
+    else if (command === "effort") metrics.effortSwitches++;
+  }
+
   for (const turn of turns) {
     if (turn.role !== "user" || !turn.text) continue;
     const text = turn.text.trim();
     if (text.startsWith("[Request interrupted")) {
       metrics.interrupts++;
-      continue;
-    }
-
-    const command = TAG_RE.exec(text)?.[1]?.toLowerCase();
-    if (command) {
-      if (command === "compact") metrics.compacts++;
-      else if (command === "model") metrics.modelSwitches++;
-      else if (command === "effort") metrics.effortSwitches++;
       continue;
     }
 

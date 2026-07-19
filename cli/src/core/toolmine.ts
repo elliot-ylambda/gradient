@@ -19,16 +19,19 @@ interface Group {
   count: number;
   sessionIds: Set<string>;
   examples: string[];
+  occurrences: { ts: string; sessionId: string }[];
 }
 
-function grow(groups: Map<string, Group>, key: string, sessionId: string, example?: string): void {
+function grow(groups: Map<string, Group>, key: string, sessionId: string, ts: string, example?: string): void {
   const group = groups.get(key) ?? {
     count: 0,
     sessionIds: new Set<string>(),
     examples: [],
+    occurrences: [],
   };
   group.count++;
   group.sessionIds.add(sessionId);
+  group.occurrences.push({ ts, sessionId });
   if (example && group.examples.length < 3 && !group.examples.includes(example)) {
     group.examples.push(example);
   }
@@ -43,6 +46,8 @@ function toCandidate(kind: "toolfail" | "ritual", signature: string, group: Grou
     count: group.count,
     sessions: group.sessionIds.size,
     sessionIds: [...group.sessionIds].sort(),
+    occurrences: group.occurrences,
+    memberSignatures: [signature],
     confidence: "inferred",
   };
 }
@@ -65,7 +70,7 @@ export function failureLoops(events: ToolEvent[]): Candidate[] {
     if (event.kind !== "bash" || !event.isError || !event.command) continue;
     const key = commandHead(event.command);
     if (!key) continue;
-    grow(groups, key, event.sessionId, event.errorHead);
+    grow(groups, key, event.sessionId, event.ts, event.errorHead);
   }
   return rankedCandidates(groups, "toolfail", group =>
     group.count >= TOOLMINE.FAIL_MIN_COUNT &&
@@ -95,7 +100,7 @@ export function rituals(events: ToolEvent[]): Candidate[] {
         const key = commandHead(event.command);
         if (!key || seenInWindow.has(key)) continue;
         seenInWindow.add(key);
-        grow(groups, key, sessionId, key);
+        grow(groups, key, sessionId, event.ts, key);
       }
     }
   }

@@ -1,13 +1,14 @@
 import { homedir } from "node:os";
-import type { Candidate, Config, Suggestion, ToolEvent, Turn } from "../core/types.js";
+import type { Candidate, CommandEvent, Config, Suggestion, ToolEvent, Turn } from "../core/types.js";
 import { collect } from "../core/collect.js";
 import { collectCodex } from "../core/collect-codex.js";
 import {
   parseDialogueFile,
-  parseFile,
   parseAssistantFollowedUserFile,
   parseToolEventsFile,
+  parseTranscriptFile,
   type DialogueTurn,
+  type ParsedTranscript,
 } from "../core/parse.js";
 import {
   parseCodexDialogueFile,
@@ -18,6 +19,9 @@ import { compileIgnorePatterns, filterPrompts, hasTemplateFloodSupport, isTempla
 import { boundedPromptLimit, capByRecency, MAX_PROMPTS_HARD_CAP } from "../core/cap.js";
 import { DEFAULT_DETECT_WINDOW, DEFAULT_MAX_PROMPTS } from "../core/scope.js";
 import { cluster, normalize } from "../core/cluster.js";
+import { annotateTemporal } from "../core/temporal.js";
+import { hookFromEvents, markLoops } from "../core/classify.js";
+import { markCorrections } from "../core/corrections.js";
 import { mineSequences, SEQ_MAX_BIGRAMS } from "../core/sequence.js";
 import { boundedDetectLimit, detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
@@ -52,7 +56,7 @@ export interface ScanDeps {
   config?: Config;
   collectFn?: (options: ScanOptions) => Promise<string[]>;
   collectCodexFn?: (options: ScanOptions) => Promise<string[]>;
-  parseFn?: (path: string) => Promise<Turn[]>;
+  parseFn?: (path: string) => Promise<ParsedTranscript | Turn[]>;
   parseToolEventsFn?: (path: string) => Promise<{ events: ToolEvent[]; dropped: number }>;
   parseCorrectionContextFn?: (path: string) => Promise<Turn[]>;
   parseCodexFn?: (path: string) => Promise<Turn[]>;
@@ -76,7 +80,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
 
   const collectFn = deps.collectFn ?? ((options: ScanOptions) => collect({ ...options, onWarn: log }));
   const collectCodexFn = deps.collectCodexFn ?? ((options: ScanOptions) => collectCodex({ ...options, onWarn: log }));
-  const parseFn = deps.parseFn ?? parseFile;
+  const parseFn = deps.parseFn ?? parseTranscriptFile;
   const projectDir = opts.projectPath ?? process.cwd();
   const claudeFiles = targets.includes("claude-code") ? await collectFn(opts) : [];
   const codexFiles = targets.includes("codex") ? await collectCodexFn(opts) : [];
@@ -100,6 +104,14 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
       ? capByRecency(current, MAX_PROMPTS_HARD_CAP).kept
       : current;
   };
+  // Mirrors pushTurns' bound: command events are tiny per-record but still
+  // an unbounded-history accumulator without a ceiling.
+  const pushEvents = (current: CommandEvent[], additions: CommandEvent[]): CommandEvent[] => {
+    current.push(...scoped(additions));
+    if (current.length <= MAX_PROMPTS_HARD_CAP) return current;
+    const sorted = [...current].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+    return sorted.slice(0, MAX_PROMPTS_HARD_CAP);
+  };
 
   const ignore = compileIgnorePatterns(config.ignorePatterns);
   const answerPairs = [] as ReturnType<typeof extractAnswerPairs>;
@@ -114,14 +126,21 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   let toolEvents: ToolEvent[] = [];
   let toolEventsDropped = 0;
   let confirmedCorrections: Turn[] = [];
+  // Command events stay separate from minable prompt text and feed adoption,
+  // insights, and deterministic checkpoint-hook detection.
+  let events: CommandEvent[] = [];
   const parseToolEventsFn = deps.parseToolEventsFn ?? (deps.parseFn ? undefined : parseToolEventsFile);
   const parseCorrectionContextFn = deps.parseCorrectionContextFn ??
     (deps.parseFn ? undefined : parseAssistantFollowedUserFile);
   const userTurnCounts = new Map<string, number>();
   for (const file of claudeFiles) {
-    const parsed = await parseFn(file);
-    userTurnCounts.set(file, parsed.length);
-    turns = pushTurns(turns, parsed);
+    const parsedValue = await parseFn(file);
+    const parsed: ParsedTranscript = Array.isArray(parsedValue)
+      ? { turns: parsedValue, events: [] }
+      : parsedValue;
+    userTurnCounts.set(file, parsed.turns.length + parsed.events.length);
+    turns = pushTurns(turns, parsed.turns);
+    events = pushEvents(events, parsed.events);
     if (config.mineToolEvents !== false && parseToolEventsFn) {
       const parsedEvents = await parseToolEventsFn(file);
       toolEventsDropped += parsedEvents.dropped;
@@ -258,6 +277,8 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     count: chain.count,
     sessions: chain.sessions,
     sessionIds: chain.sessionIds,
+    occurrences: [],
+    memberSignatures: [],
     confidence: "high",
     assistants: [...new Set(chain.sessionIds.map(sessionId => assistantBySession.get(sessionId) ?? "claude-code"))],
   }));
@@ -278,6 +299,19 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     }
   }
   const allCandidates = [...nonSequenceCandidates, ...sequenceCandidates, ...toolCandidates, ...auditCandidates];
+  // Runs are computed over the full kept stream, not clusterInput: a paste turn
+  // sitting between two cluster members must break the run like any non-member.
+  annotateTemporal(kept, allCandidates);
+  // Deterministic reclassification from temporal evidence alone — no LLM
+  // involved; must run before detect so a marked loop reaches both the
+  // degrade path and the model's view of candidate kind.
+  markLoops(allCandidates);
+  // Deterministic reclassification of unprompted user pushback ("no, use
+  // pnpm", "don't add comments") into kind "correction" — also no LLM
+  // involved. Runs after markLoops so a candidate already reclassified as a
+  // loop is left untouched (loops win ties by order); only kind-"unknown"
+  // candidates are eligible.
+  if (opts.scope === "project") markCorrections(allCandidates);
   log(`mining → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);
 
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });
@@ -294,6 +328,31 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     } catch (error) {
       log(`skipping invalid suggestion: ${(error as Error).message}`);
     }
+  }
+
+  // Deterministic checkpoint-hook proposal from raw /compact command evidence
+  // — independent of the LLM/backend, so it works in degraded mode too.
+  try {
+    const hookSuggestion = hookFromEvents(events);
+    // Dedupe by semantic hook type, not id: an LLM-sourced PreCompact hook
+    // derives its id from whatever text candidates the model referenced, so
+    // it never matches the event-derived id (same convention as the
+    // Notification-hook append below).
+    const hasCheckpointHook = valid.some(suggestion =>
+      suggestion.payload.type === "hook" &&
+      suggestion.payload.event === "PreCompact" &&
+      suggestion.payload.subcommand === "checkpoint",
+    );
+    if (hookSuggestion && !hasCheckpointHook) {
+      validateSuggestion(hookSuggestion);
+      valid.push(hookSuggestion);
+      log(
+        `compact: ${hookSuggestion.evidence.count} /compact invocation(s) across ` +
+        `${hookSuggestion.evidence.sessions} sessions — checkpoint hook suggested`,
+      );
+    }
+  } catch (error) {
+    log(`compact hook check failed: ${(error as Error).message}`);
   }
 
   // Attention notifications are Claude-specific lifecycle hooks. Mine only

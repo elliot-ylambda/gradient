@@ -64,4 +64,30 @@ describe("cluster", () => {
     ];
     expect(cluster(turns)[0].assistants).toEqual(["claude-code", "codex"]);
   });
+  it("records one occurrence per turn with ts and sessionId", () => {
+    const turns = [
+      { ts: "2026-06-01T10:00:00Z", project: "p", role: "user" as const, text: "continue", sessionId: "s1" },
+      { ts: "2026-06-01T10:05:00Z", project: "p", role: "user" as const, text: "continue", sessionId: "s1" },
+      { ts: "2026-06-02T09:00:00Z", project: "p", role: "user" as const, text: "continue", sessionId: "s2" },
+    ];
+    const top = cluster(turns, { minCount: 3 })[0];
+    expect(top.occurrences).toEqual([
+      { ts: "2026-06-01T10:00:00Z", sessionId: "s1" },
+      { ts: "2026-06-01T10:05:00Z", sessionId: "s1" },
+      { ts: "2026-06-02T09:00:00Z", sessionId: "s2" },
+    ]);
+    expect(top.memberSignatures).toEqual(["continue"]);
+  });
+  it("unions occurrences and memberSignatures across a fuzzy merge", () => {
+    const turns = [
+      u("push and create a pull request", "s1"),
+      u("push and create a pull request then", "s2"),
+      u("push and create the pull request", "s3"),
+    ];
+    const cands = cluster(turns, { minCount: 3, simThreshold: 0.5 });
+    const merged = cands.find(c => c.count >= 3 && c.confidence === "inferred")!;
+    expect(merged.occurrences.length).toBe(3);
+    expect(merged.memberSignatures.length).toBeGreaterThanOrEqual(2);
+    expect(merged.memberSignatures).toContain("push and create a pull request");
+  });
 });

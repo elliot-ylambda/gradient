@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
-import type { Assistant, Candidate, Clarify, Confidence, Suggestion } from "./types.js";
+import type { Assistant, Candidate, Clarify, Confidence, Suggestion, SuggestionPayload } from "./types.js";
 import { redact, sanitizeName } from "./security.js";
+import { candidateLeverage, estMinutesSavedPerMonth } from "./leverage.js";
+import { spanDays } from "./temporal.js";
+import { normalize, similarity } from "./cluster.js";
 import type { LLMBackend } from "../llm/backend.js";
 
 const ALLOWED_CONFIDENCE = new Set<Confidence>(["high", "inferred", "flagged"]);
@@ -114,6 +117,53 @@ function evidenceAssistants(candidates: Candidate[]): Assistant[] {
     .sort((a, b) => a === b ? 0 : a === "claude-code" ? -1 : 1);
 }
 
+function meanLength(strings: string[]): number {
+  return strings.length ? strings.reduce((sum, s) => sum + s.length, 0) / strings.length : 0;
+}
+
+/** Redacted union of matched candidates' memberSignatures (fallback to the
+ * candidate's own signature when it has none — non-cluster producers like
+ * paste/answer/sequence leave memberSignatures empty). This is the stable
+ * basis for both `Suggestion.id` (via idFor) and `Suggestion.sourceSignatures`:
+ * unlike candidateRef, it never folds in rank index or sessionIds, so it
+ * doesn't change when the corpus grows or candidates are scanned in a
+ * different order. */
+function sourceSignaturesFor(matched: Candidate[]): string[] {
+  return matched.flatMap(c => (c.memberSignatures.length ? c.memberSignatures : [c.signature]).map(sig => bounded(sig)));
+}
+
+/** Stable suggestion id: hashes the sorted, deduped signature union plus the
+ * payload type. Deliberately excludes name/rationale/sourceIds — renaming a
+ * suggestion or reordering the candidates that produced it never changes its id. */
+export function idFor(sigs: string[], payloadType: string): string {
+  return hashId(`${[...new Set(sigs)].sort().join("\u0000")}\u0000${payloadType}`);
+}
+
+/** Descending by estimated minutes saved per month; a missing estimate (suggestions
+ * cached before this field existed) sorts as if it were zero. */
+export function byLeverage(a: Suggestion, b: Suggestion): number {
+  return (b.evidence.estMinutesSavedPerMonth ?? 0) - (a.evidence.estMinutesSavedPerMonth ?? 0);
+}
+
+function evidenceFor(matched: Candidate[], payloadType: SuggestionPayload["type"]): Suggestion["evidence"] {
+  const count = matched.reduce((n, c) => n + c.count, 0);
+  const sessions = new Set(matched.flatMap(c => c.sessionIds)).size;
+  const assistants = evidenceAssistants(matched);
+  const highestCount = [...matched].sort((a, b) => b.count - a.count)[0];
+  return {
+    count,
+    sessions,
+    ...(assistants.length ? { assistants } : {}),
+    estMinutesSavedPerMonth: estMinutesSavedPerMonth({
+      count,
+      chars: meanLength(matched.flatMap(c => c.examples)),
+      spanDays: spanDays(matched.flatMap(c => c.occurrences)),
+      kind: payloadType,
+    }),
+    ...(highestCount.temporal ? { temporal: highestCount.temporal } : {}),
+  };
+}
+
 function isLocallyMechanical(candidates: Candidate[], instruction: string, modelFlag: unknown): boolean {
   return modelFlag === true &&
     candidates.every(candidate => candidate.kind === "unknown") &&
@@ -157,18 +207,16 @@ export function candidateToCommand(c: Candidate): Suggestion {
   const words = `${c.kind === "paste" ? "troubleshoot " : ""}${trigger}`.split(" ").slice(0, 3).join(" ");
   const commandName = sanitizeName(words);
   const instruction = safeExamples[0] ?? safeSignature;
+  const sourceSignatures = sourceSignaturesFor([c]);
   return {
-    id: hashId(`${c.kind}\u0000${c.signature}`),
+    id: idFor(sourceSignatures, "command"),
     name: commandName,
     title: deterministicTitle(c),
     rationale: `Observed ${c.count}× across ${c.sessions} sessions; review is required before installation.`,
-    evidence: {
-      count: c.count,
-      sessions: c.sessions,
-      ...(c.assistants?.length ? { assistants: c.assistants } : {}),
-    },
+    evidence: evidenceFor([c], "command"),
     confidence: c.confidence,
     examples: safeExamples,
+    sourceSignatures,
     payload: {
       type: "command",
       commandName,
@@ -182,12 +230,44 @@ export function candidateToCommand(c: Candidate): Suggestion {
   };
 }
 
+/** Locally reconstructed loop suggestion — no LLM involved. The instruction is
+ * rebuilt from the candidate the same way candidateToCommand rebuilds a
+ * command body: raw examples/signatures are never trusted as authored text.
+ * A candidate whose instruction reads as consequential never becomes an
+ * unattended loop; it falls back to the same guarded command a non-loop
+ * candidate would get. */
+export function candidateToLoop(c: Candidate): Suggestion {
+  const safeSignature = bounded(c.signature);
+  const safeExamples = c.examples.map(example => bounded(example, 2_000)).slice(0, 5);
+  const instruction = safeExamples[0] ?? safeSignature;
+  if (CONSEQUENTIAL_ACTION.test(instruction)) return candidateToCommand(c);
+
+  const name = sanitizeName(instruction.split(" ").slice(0, 3).join(" "));
+  const sourceSignatures = sourceSignaturesFor([c]);
+  return {
+    id: idFor(sourceSignatures, "loop"),
+    name,
+    title: deterministicTitle(c),
+    rationale: `Observed ${c.count}× across ${c.sessions} sessions; review is required before installation.`,
+    evidence: evidenceFor([c], "loop"),
+    confidence: c.confidence,
+    examples: safeExamples,
+    sourceSignatures,
+    payload: {
+      type: "loop",
+      instruction: `${AUTHORIZATION_GUARD} Reminder: ${instruction}`.slice(0, 2_000),
+      ...(c.cadence ? { cadence: bounded(c.cadence, 100) } : {}),
+    },
+  };
+}
+
 function degradeToCommands(cands: Candidate[]): Suggestion[] {
   return cands
     .filter(c =>
       c.kind !== "answer" && c.kind !== "toolfail" && c.kind !== "ritual" &&
-      c.kind !== "instruction" && c.confidence === "high")
-    .map(candidateToCommand);
+      c.kind !== "instruction" && c.kind !== "correction" && c.confidence === "high")
+    .map(c => (c.kind === "loop" ? candidateToLoop(c) : candidateToCommand(c)))
+    .sort(byLeverage);
 }
 
 export function boundedDetectLimit(value: number | undefined, fallback = 12): number {
@@ -204,6 +284,7 @@ export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt:
     "For ordinary prompt candidates, the only hook is event PreCompact with subcommand checkpoint. " +
     "A 'paste' cluster must remain an advisory command: observation is not permission to rerun anything. " +
     "An 'answer' cluster must be a low-impact preference rule; it never removes confirmation for consequential actions. " +
+    "A 'correction' cluster must become a low-impact preference rule that never removes confirmation for consequential actions. " +
     "A 'sequence' cluster must remain an advisory checklist rendered locally as a numbered list; its first step never authorizes later steps. " +
     "Candidates with kind 'toolfail' are commands that repeatedly failed inside sessions. Produce a command describing a fix-it workflow or a rule-like instruction; NEVER produce a hook for these. " +
     "Candidates with kind 'ritual' are commands repeatedly run right after file edits. Default to a hook with event PostToolUse, matcher Edit|Write|NotebookEdit, and the observed command; use a command instead when it is plainly long-running, and never hook a consequential command. " +
@@ -250,13 +331,28 @@ function ruleParts(signature: string): { answer: string; question: string } | nu
   return answer && question ? { answer, question } : null;
 }
 
+const RULE_AUTHORIZATION_TAIL =
+  "This preference is not authorization: ask again before commands, file or state changes, " +
+  "external communication, production or publishing actions, deletion, spending, credential use, or data disclosure.";
+
 function ruleText(signature: string): string | null {
   const parts = ruleParts(signature);
   if (!parts) return null;
   return (
     `For low-impact formatting, style, or tool-preference questions similar to ${JSON.stringify(parts.question)}, ` +
-    `prefer ${JSON.stringify(parts.answer)}. This preference is not authorization: ask again before commands, file or state changes, ` +
-    "external communication, production or publishing actions, deletion, spending, credential use, or data disclosure."
+    `prefer ${JSON.stringify(parts.answer)}. ${RULE_AUTHORIZATION_TAIL}`
+  ).slice(0, 2_000);
+}
+
+/** Correction candidates have no `answer ← question` split for ruleText's
+ * signature parsing (they're unprompted pushback, not answers to a question),
+ * so their local rule text is a fixed template quoting the redacted signature
+ * instead, plus the same authorization tail every other rule payload gets. */
+function correctionRuleText(signature: string): string {
+  const safe = bounded(signature, 2_000);
+  return (
+    `Repeated correction observed: ${JSON.stringify(safe)}. Follow this preference for low-impact choices. ` +
+    RULE_AUTHORIZATION_TAIL
   ).slice(0, 2_000);
 }
 
@@ -318,14 +414,106 @@ function instructionHookCommand(candidate: Candidate): string | null {
 function kindsAreCompatible(kinds: Set<Candidate["kind"]>, payloadType: string): boolean {
   const special = [...kinds].filter(kind =>
     kind === "answer" || kind === "paste" || kind === "sequence" || kind === "toolfail" ||
-    kind === "ritual" || kind === "instruction");
+    kind === "ritual" || kind === "instruction" || kind === "correction" || kind === "loop");
   if (special.length > 0 && kinds.size !== 1) return false;
-  if (kinds.has("answer")) return payloadType === "rule";
+  if (kinds.has("answer") || kinds.has("correction")) return payloadType === "rule";
   if (kinds.has("paste") || kinds.has("sequence")) return payloadType === "command";
   if (kinds.has("toolfail")) return payloadType === "command" || payloadType === "rule";
   if (kinds.has("ritual")) return payloadType === "command" || payloadType === "hook";
   if (kinds.has("instruction")) return payloadType === "rule" || payloadType === "hook";
+  if (kinds.has("loop")) return payloadType === "loop";
   return payloadType === "command" || payloadType === "loop" || payloadType === "hook";
+}
+
+const NEAR_DUPLICATE_THRESHOLD = 0.6;
+
+/** The part of each payload that actually varies between habits, deliberately
+ * excluding shared boilerplate (AUTHORIZATION_GUARD / RULE_AUTHORIZATION_TAIL)
+ * that every command/loop/rule body carries — comparing full bodies would
+ * make near-unrelated suggestions look identical. */
+function mergeDistinctiveText(payload: SuggestionPayload): string {
+  if (payload.type === "command") {
+    return payload.triggers?.length ? payload.triggers.join(" ") : payload.commandName;
+  }
+  if (payload.type === "loop") {
+    return payload.instruction.startsWith(AUTHORIZATION_GUARD)
+      ? payload.instruction.slice(AUTHORIZATION_GUARD.length)
+      : payload.instruction;
+  }
+  if (payload.type === "rule") {
+    const text = payload.text.endsWith(RULE_AUTHORIZATION_TAIL)
+      ? payload.text.slice(0, payload.text.length - RULE_AUTHORIZATION_TAIL.length)
+      : payload.text;
+    return `${payload.ruleName} ${text}`;
+  }
+  return payload.description;
+}
+
+/** Two independent lexical signals, either sufficient: the model naming two
+ * clusters alike, or the underlying trigger/instruction text overlapping.
+ * Concatenating them into one string dilutes both — a 0.77-similar trigger
+ * pair drops below threshold once two unrelated names are prepended. */
+function isNearDuplicate(a: Suggestion, b: Suggestion): boolean {
+  if (a.payload.type !== b.payload.type) return false;
+  return similarity(normalize(a.name), normalize(b.name)) >= NEAR_DUPLICATE_THRESHOLD ||
+    similarity(normalize(mergeDistinctiveText(a.payload)), normalize(mergeDistinctiveText(b.payload))) >= NEAR_DUPLICATE_THRESHOLD;
+}
+
+const CONFIDENCE_CAUTION: Record<Confidence, number> = { high: 0, inferred: 1, flagged: 2 };
+
+/** Deterministic backstop for the LLM's `sourceIds` grouping: the model is
+ * asked to merge synonymous clusters, but nothing guarantees it will (the
+ * dogfood case — "lgtm" and "looks good" returned as two separate command
+ * suggestions for one habit). Hosts are considered in leverage order; a
+ * suggestion folds into the first host of the same payload type that
+ * isNearDuplicate judges lexically equivalent (either the names or the
+ * distinctive payload text at trigram similarity ≥ 0.6). A merge that can't
+ * re-resolve every unioned sourceSignature back to a candidate (e.g. a
+ * signature outside this detect() window) leaves the host untouched and
+ * simply drops the duplicate rather than fabricate evidence.
+ *
+ * Honest boundary: trigram similarity catches LEXICAL near-duplicates —
+ * overlapping triggers ("push and create a/the pull request") or the model
+ * naming two clusters alike ("lgtm-approve"/"looks-good-approve"). True
+ * synonyms with dissimilar names AND triggers ("lgtm" vs "looks good" under
+ * unrelated names) are not trigram-detectable; merging those remains the
+ * model's prompt-instructed job, and this pass is the net under it. */
+export function mergeNearDuplicates(suggestions: Suggestion[], bySignature: Map<string, Candidate>): Suggestion[] {
+  const hosts: Suggestion[] = [];
+  for (const suggestion of [...suggestions].sort(byLeverage)) {
+    const hostIndex = hosts.findIndex(host => isNearDuplicate(host, suggestion));
+    if (hostIndex === -1) {
+      hosts.push(suggestion);
+      continue;
+    }
+
+    const host = hosts[hostIndex];
+    const unionSignatures = [...new Set([...(host.sourceSignatures ?? []), ...(suggestion.sourceSignatures ?? [])])];
+    const matched = unionSignatures.map(sig => bySignature.get(sig));
+    if (!matched.every((c): c is Candidate => c !== undefined)) continue; // unresolvable union: drop duplicate, host unchanged
+
+    const unionExamples = [...new Set([...(host.examples ?? []), ...(suggestion.examples ?? [])])].slice(0, 5);
+    const evidence = evidenceFor(matched, host.payload.type);
+    // Ambiguity survives the merge: confidence is the more cautious of the
+    // pair, and a duplicate's clarify is adopted when the host has none —
+    // folding a flagged suggestion into a confident host must not silently
+    // discard the disambiguation the flag existed to force.
+    const confidence = CONFIDENCE_CAUTION[suggestion.confidence] > CONFIDENCE_CAUTION[host.confidence]
+      ? suggestion.confidence
+      : host.confidence;
+    const clarify = host.clarify ?? suggestion.clarify;
+    hosts[hostIndex] = {
+      ...host,
+      evidence,
+      id: idFor(unionSignatures, host.payload.type),
+      sourceSignatures: unionSignatures,
+      examples: unionExamples,
+      rationale: `Observed ${evidence.count}× across ${evidence.sessions} distinct sessions; generated content is reconstructed locally.`,
+      confidence,
+      ...(clarify ? { clarify } : {}),
+    };
+  }
+  return hosts;
 }
 
 export async function detect(
@@ -334,7 +522,7 @@ export async function detect(
   opts: { limit?: number; onCap?: (dropped: number) => void; timeoutMs?: number } = {},
 ): Promise<Suggestion[]> {
   const limit = boundedDetectLimit(opts.limit);
-  const ranked = [...cands].sort((a, b) => b.count - a.count);
+  const ranked = [...cands].sort((a, b) => candidateLeverage(b) - candidateLeverage(a) || b.count - a.count);
   const top = ranked.slice(0, limit);
   if (ranked.length > limit) opts.onCap?.(ranked.length - limit);
 
@@ -374,8 +562,7 @@ export async function detect(
       const kinds = new Set(matched.map(candidate => candidate.kind));
       if (!kindsAreCompatible(kinds, payload.type)) continue;
 
-      const count = matched.reduce((n, c) => n + c.count, 0);
-      const sessions = new Set(matched.flatMap(c => c.sessionIds)).size;
+      const sourceSignatures = sourceSignaturesFor(matched);
       const examples = matched.flatMap(c => c.examples).map(example => bounded(example, 2_000)).slice(0, 5);
       const triggers = matched.map(c => bounded(c.signature)).filter(Boolean).slice(0, 20);
       const primary = matched[0];
@@ -455,7 +642,9 @@ export async function detect(
           };
         }
       } else if (payload.type === "rule") {
-        const text = primary.kind === "toolfail"
+        const text = primary.kind === "correction"
+          ? correctionRuleText(primary.signature)
+          : primary.kind === "toolfail"
           ? toolFailureRuleText(primary)
           : primary.kind === "instruction"
             ? instructionRuleText(primary)
@@ -488,33 +677,53 @@ export async function detect(
             ? `Make written instruction effective: ${boundedOneLine(instructionContext(primary)?.text ?? name, 120)}`
           : `Observed low-impact preference: ${ruleParts(primary.signature)?.answer ?? name}`
         : deterministicTitle(primary);
-      const assistants = evidenceAssistants(matched);
+      const evidence = evidenceFor(matched, suggestionPayload.type);
       const rationale = primary.kind === "instruction"
         ? primary.hint?.startsWith("correction violating instruction")
-          ? `The written instruction was corrected ${count}× across ${sessions} distinct sessions; generated content is reconstructed locally.`
+          ? `The written instruction was corrected ${evidence.count}× across ${evidence.sessions} distinct sessions; generated content is reconstructed locally.`
           : primary.hint === "repeated correction with no matching instruction"
-            ? `A missing instruction was corrected ${count}× across ${sessions} distinct sessions; generated content is reconstructed locally.`
-            : `The written instruction was restated ${count}× across ${sessions} distinct sessions; generated content is reconstructed locally.`
-        : `Observed ${count}× across ${sessions} distinct sessions; generated content is reconstructed locally.`;
+            ? `A missing instruction was corrected ${evidence.count}× across ${evidence.sessions} distinct sessions; generated content is reconstructed locally.`
+            : `The written instruction was restated ${evidence.count}× across ${evidence.sessions} distinct sessions; generated content is reconstructed locally.`
+        : `Observed ${evidence.count}× across ${evidence.sessions} distinct sessions; generated content is reconstructed locally.`;
       out.push({
-        id: hashId(`${ids.join("\u0000")}\u0000${suggestionPayload.type}`),
+        id: idFor(sourceSignatures, suggestionPayload.type),
         name,
         title: bounded(title, 500),
         rationale,
-        evidence: {
-          count,
-          sessions,
-          ...(assistants.length ? { assistants } : {}),
-        },
+        evidence,
         confidence: finalConfidence,
         ...(clarify ? { clarify } : {}),
         examples,
+        sourceSignatures,
         payload: suggestionPayload,
       });
       ids.forEach(id => claimed.add(id));
       names.add(name);
     }
-    return out;
+
+    // Deterministic evidence must not be lost when the model ignores a
+    // pre-marked loop candidate: it may still merge or override it (in which
+    // case it's already claimed above), but anything left unclaimed is
+    // appended locally, exactly as the degrade path would have emitted it.
+    for (const [id, candidate] of byId) {
+      if (candidate.kind !== "loop" || claimed.has(id)) continue;
+      const suggestion = candidateToLoop(candidate);
+      if (names.has(suggestion.name)) continue;
+      out.push(suggestion);
+      claimed.add(id);
+      names.add(suggestion.name);
+    }
+
+    // Every top-candidate memberSignature (host + absorbed near-duplicates)
+    // maps back to its owning candidate, so a post-merge can re-resolve a
+    // unioned sourceSignatures set and recompute honest evidence for it.
+    const bySignature = new Map<string, Candidate>();
+    for (const candidate of top) {
+      for (const sig of candidate.memberSignatures.length ? candidate.memberSignatures : [candidate.signature]) {
+        bySignature.set(bounded(sig), candidate);
+      }
+    }
+    return mergeNearDuplicates(out, bySignature).sort(byLeverage);
   } catch {
     // Backend failure or invalid output degrades only to locally reconstructed,
     // high-confidence advisory commands.

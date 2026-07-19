@@ -17,9 +17,29 @@ export interface Clarify {
   chosen?: string;
 }
 
-/** One genuine user prompt after parse + filter. Tool activity is mined
- * separately via parseToolEvents (ToolEvent below); assistant text is rendered
- * by core/tail.ts for autopilot. */
+/** Local-only temporal evidence per cluster (core/temporal.ts). */
+export interface TemporalFeatures {
+  maxRunLength: number;      // longest streak of consecutive user prompts in one session, all in this cluster
+  runSessions: number;       // sessions containing a run of length ≥ 2
+  medianGapMinutes: number;  // median gap between successive occurrences
+  distinctDays: number;
+  spanDays: number;
+}
+
+/** A slash-command invocation extracted from a `<command-name>` turn at parse
+ * time (core/parse.ts). Structured replacement for ad-hoc regex scraping in
+ * usage.ts (adoption counting) and insights.ts (compact/model-switch metrics);
+ * never enters clustering. */
+export interface CommandEvent {
+  ts: string;
+  sessionId: string;
+  project: string;
+  command: string;
+}
+
+/** One genuine user prompt after parse + filter. (The mining pipeline consumes
+ * only user text; tool and command activity is mined separately; assistant
+ * turns are rendered by core/tail.ts for autopilot.) */
 export interface Turn {
   ts: string;
   project: string;
@@ -47,16 +67,26 @@ export interface ToolEvent {
 
 /** Pre-LLM grouping produced by cluster.ts (no model involved). */
 export interface Candidate {
-  kind: ArtifactType | "unknown" | "paste" | "answer" | "sequence" | "toolfail" | "ritual" | "instruction";
+  kind: ArtifactType | "unknown" | "paste" | "answer" | "sequence" | "correction" | "toolfail" | "ritual" | "instruction";
   signature: string;     // normalized key the cluster grouped on
   examples: string[];    // representative raw prompts
   count: number;
   sessions: number;
   sessionIds: string[];  // distinct session ids (for exact union when clusters merge)
+  /** One entry per occurrence; unioned when clusters merge (bucket order after a
+   * fuzzy merge, not chronological — consumers re-sort by timestamp). */
+  occurrences: { ts: string; sessionId: string }[];
+  /** Host signature plus every absorbed near-duplicate signature (for turn→cluster
+   * membership). Non-cluster producers (paste/answer/sequence) leave it empty. */
+  memberSignatures: string[];
   confidence: Confidence;
   assistants?: Assistant[];
   /** Redacted routing context for specialized detect candidates. */
   hint?: string;
+  temporal?: TemporalFeatures;
+  /** Set by classify.ts's markLoops when temporal.distinctDays crosses the
+   * schedule floor; a human-readable cadence ("daily" / "most weekdays"). */
+  cadence?: string;
 }
 
 /** Semantic content of a suggestion; emit/* formats it into an artifact. */
@@ -72,10 +102,22 @@ export interface Suggestion {
   name: string;
   title: string;
   rationale: string;
-  evidence: { count: number; sessions: number; assistants?: Assistant[] };
+  evidence: {
+    count: number;
+    sessions: number;
+    assistants?: Assistant[];
+    /** Optional: absent on pre-existing caches/fixtures written before this field existed. */
+    estMinutesSavedPerMonth?: number;
+    /** Optional: temporal evidence of the highest-count source candidate, when annotated. */
+    temporal?: TemporalFeatures;
+  };
   confidence: Confidence;
   clarify?: Clarify;
   examples?: string[];   // representative redacted prompts, for `explain`
+  /** Redacted union of source candidates' memberSignatures (fallback [signature] when
+   * empty). Optional: absent on pre-existing caches/fixtures written before this field
+   * existed. Stable across corpus growth — the basis for this suggestion's id. */
+  sourceSignatures?: string[];
   payload: SuggestionPayload;
 }
 

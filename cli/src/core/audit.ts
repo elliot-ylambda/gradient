@@ -215,6 +215,8 @@ export function audit(
       count: hits.length,
       sessions: sessionIds.length,
       sessionIds,
+      occurrences: hits.map(hit => ({ ts: hit.ts, sessionId: hit.sessionId })),
+      memberSignatures: [instruction.normalized],
       confidence: "inferred",
       ...(assistants(hits) ? { assistants: assistants(hits) } : {}),
       hint: `restated instruction (${instruction.source}): "${instruction.text}"`,

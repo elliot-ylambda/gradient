@@ -314,7 +314,7 @@ describe("scan", () => {
         config: {},
         backend: null,
         collectFn: async () => files,
-        parseFn: async () => [],
+        parseFn: async () => ({ turns: [], events: [] }),
         log: message => logs.push(message),
       },
     );
@@ -347,6 +347,120 @@ describe("scan", () => {
     expect(suggestions).toEqual([]);
   });
 
+  // Regression: a "continue"-style cluster with runs (maxRunLength 4, runSessions 3)
+  // becomes a loop suggestion with zero LLM involvement — markLoops must run on the
+  // real cluster/temporal output inside scan(), and the degrade path (backend: null)
+  // must turn the marked candidate into a loop suggestion.
+  it("marks a 'continue'-style cluster with runs as a loop suggestion in degraded (no-LLM) mode", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const at = (sessionId: string, times: string[]) =>
+      times.map(ts => ({ ts, project: "p", role: "user" as const, text: "continue", sessionId }));
+    const turns = [
+      ...at("s1", ["2026-06-01T10:00:00Z", "2026-06-01T10:05:00Z", "2026-06-01T10:10:00Z", "2026-06-01T10:15:00Z"]),
+      ...at("s2", ["2026-06-02T09:00:00Z", "2026-06-02T09:05:00Z"]),
+      ...at("s3", ["2026-06-03T09:00:00Z", "2026-06-03T09:05:00Z"]),
+    ];
+    const suggestions = await scan(
+      { scope: "all", projectPath: process.cwd(), home },
+      { backend: null, collectFn: async () => ["f"], parseFn: async () => ({ turns, events: [] }) },
+    );
+    const loopSuggestion = suggestions.find(s => s.payload.type === "loop");
+    expect(loopSuggestion).toBeDefined();
+  });
+
+  // Regression: a "don't add comments" correction cluster (4x, 3 sessions) is
+  // reclassified as kind "correction" by markCorrections inside scan() — the
+  // LLM sees kind "correction" on the wire and, naming it a rule, gets back a
+  // correction-shaped rule suggestion (never a plain command).
+  it("mines a 'don't add comments' correction cluster into a rule suggestion via scan()", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const at = (sessionId: string, times: string[]) =>
+      times.map(ts => ({ ts, project: "p", role: "user" as const, text: "don't add comments", sessionId }));
+    const turns = [
+      ...at("s1", ["2026-06-01T10:00:00Z"]),
+      ...at("s2", ["2026-06-02T10:00:00Z"]),
+      ...at("s3", ["2026-06-03T10:00:00Z", "2026-06-03T11:00:00Z"]),
+    ];
+    const backend = {
+      name: "f",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => {
+        const [first] = JSON.parse(prompt);
+        expect(first.kind).toBe("correction");
+        return JSON.stringify({ suggestions: [{
+          sourceIds: [first.id], name: "no-comments", confidence: "inferred",
+          payload: { type: "rule", ruleName: "no-comments" },
+        }] });
+      },
+    };
+    const suggestions = await scan(
+      { scope: "project", projectPath: process.cwd(), home },
+      { backend, collectFn: async () => ["f"], parseFn: async () => ({ turns, events: [] }) },
+    );
+    const rule = suggestions.find(s => s.payload.type === "rule");
+    expect(rule).toBeDefined();
+    if (rule?.payload.type === "rule") {
+      expect(rule.payload.text).toContain("Repeated correction observed");
+      expect(rule.payload.target).toBe("project");
+    }
+  });
+
+  // Regression: 12 /compact events across 4 sessions produce the PreCompact hook
+  // suggestion in degraded (backend null) mode — hookFromEvents must be appended
+  // post-detect even when there's no LLM at all.
+  it("suggests the PreCompact checkpoint hook from /compact command events in degraded mode", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const events = ["s1", "s1", "s1", "s2", "s2", "s2", "s3", "s3", "s3", "s4", "s4", "s4"].map(sessionId => ({
+      ts: "2026-07-01T00:00:00Z", project: "p", sessionId, command: "/compact",
+    }));
+    const logs: string[] = [];
+    const suggestions = await scan(
+      { scope: "all", projectPath: process.cwd(), home },
+      {
+        backend: null,
+        collectFn: async () => ["f"],
+        parseFn: async () => ({ turns: [], events }),
+        log: message => logs.push(message),
+      },
+    );
+    const hookSuggestion = suggestions.find(s => s.payload.type === "hook" && s.payload.event === "PreCompact");
+    expect(hookSuggestion).toBeDefined();
+    expect(hookSuggestion?.payload).toMatchObject({ event: "PreCompact", subcommand: "checkpoint" });
+    const cached = JSON.parse(await readFile(suggestionsPath(process.cwd(), home), "utf8"));
+    expect(cached.some((s: { id: string }) => s.id === hookSuggestion?.id)).toBe(true);
+  });
+
+  // Regression: an LLM-sourced PreCompact hook carries a text-candidate-derived
+  // id that never equals the event-derived id — dedup must key on the semantic
+  // hook type or the user sees the same checkpoint hook twice.
+  it("emits exactly one checkpoint hook when the llm and /compact evidence both propose it", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const events = ["s1", "s1", "s1", "s2", "s2", "s2", "s3", "s3", "s3", "s4", "s4", "s4"].map(sessionId => ({
+      ts: "2026-07-01T00:00:00Z", project: "p", sessionId, command: "/compact",
+    }));
+    const turns = ["s1", "s2", "s3"].map(sessionId => ({
+      ts: "2026-07-01T00:00:00Z", project: "p", role: "user" as const,
+      text: "we keep losing context after compaction", sessionId,
+    }));
+    const backend = {
+      name: "f",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => {
+        const [first] = JSON.parse(prompt);
+        return JSON.stringify({ suggestions: [{
+          sourceIds: [first.id], name: "checkpoint-before-compact", confidence: "high",
+          payload: { type: "hook", event: "PreCompact", subcommand: "checkpoint" },
+        }] });
+      },
+    };
+    const suggestions = await scan(
+      { scope: "all", projectPath: process.cwd(), home },
+      { backend, collectFn: async () => ["f"], parseFn: async () => ({ turns, events }), log: () => {} },
+    );
+    const hooks = suggestions.filter(s => s.payload.type === "hook" && s.payload.event === "PreCompact");
+    expect(hooks).toHaveLength(1);
+  });
+
   it("sends up to DEFAULT_DETECT_WINDOW candidates to the llm", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const logs: string[] = [];
@@ -357,7 +471,7 @@ describe("scan", () => {
     const backend = { name: "f", available: async () => true, complete: async () => JSON.stringify({ suggestions: [] }) };
     await scan(
       { scope: "all", projectPath: process.cwd(), home },
-      { backend, collectFn: async () => ["f"], parseFn: async () => turns, log: (m) => logs.push(m) },
+      { backend, collectFn: async () => ["f"], parseFn: async () => ({ turns, events: [] }), log: (m) => logs.push(m) },
     );
     expect(logs.some(l => l.includes("top 24"))).toBe(true);
   });
@@ -370,7 +484,7 @@ describe("scan", () => {
       const logs: string[] = [];
       await scan(
         { scope, projectPath: process.cwd(), home },
-        { backend: null, collectFn: async () => ["f"], parseFn: async () => big, log: (m) => logs.push(m) },
+        { backend: null, collectFn: async () => ["f"], parseFn: async () => ({ turns: big, events: [] }), log: (m) => logs.push(m) },
       );
       return logs;
     };
@@ -393,10 +507,13 @@ describe("scan", () => {
       {
         backend,
         collectFn: async () => ["recently-touched.jsonl"],
-        parseFn: async () => [
-          { ts: "2025-01-01T00:00:00Z", project: "p", role: "user", text: "OLD-CONFIDENTIAL-PROMPT", sessionId: "old" },
-          ...Array.from({ length: 3 }, (_, i) => ({ ts: `2026-07-0${7 + i}T00:00:00Z`, project: "p", role: "user" as const, text: "recent repeat", sessionId: `s${i}` })),
-        ],
+        parseFn: async () => ({
+          turns: [
+            { ts: "2025-01-01T00:00:00Z", project: "p", role: "user", text: "OLD-CONFIDENTIAL-PROMPT", sessionId: "old" },
+            ...Array.from({ length: 3 }, (_, i) => ({ ts: `2026-07-0${7 + i}T00:00:00Z`, project: "p", role: "user" as const, text: "recent repeat", sessionId: `s${i}` })),
+          ],
+          events: [],
+        }),
       },
     );
     expect(seen.join("\n")).not.toContain("OLD-CONFIDENTIAL-PROMPT");
@@ -421,11 +538,14 @@ describe("scan", () => {
       {
         backend: fakeBackend,
         collectFn: async () => ["fake.jsonl"],
-        parseFn: async () => [
-          { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s1" },
-          { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s2" },
-          { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s3" },
-        ],
+        parseFn: async () => ({
+          turns: [
+            { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s1" },
+            { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s2" },
+            { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s3" },
+          ],
+          events: [],
+        }),
       },
     );
     expect(out[0].name).toBe("ship");
@@ -444,7 +564,7 @@ describe("scan", () => {
       {
         backend: null,
         collectFn: async () => [husk],
-        parseFn: async () => [],
+        parseFn: async () => ({ turns: [], events: [] }),
         gitLogFn: async () => "https://claude.ai/code/session_01GONE\n",
         log: (m) => logs.push(m),
       },
@@ -472,11 +592,13 @@ describe("scan", () => {
       {
         backend: fakeBackend,
         collectFn: async () => ["fake.jsonl"],
-        parseFn: async () =>
-          Array.from({ length: 3 }, (_, i) => ({
+        parseFn: async () => ({
+          turns: Array.from({ length: 3 }, (_, i) => ({
             ts: "t", project: "x", role: "user" as const,
             text: "continue until actually done", sessionId: `s${i}`,
           })),
+          events: [],
+        }),
       },
     );
     await expect(readFile(playbookPath(home), "utf8")).rejects.toThrow();
@@ -494,7 +616,7 @@ describe("scan", () => {
     const logs: string[] = [];
     const out = await scan(
       { scope: "project", projectPath: dir },
-      { backend: null, collectFn: async () => ["f"], parseFn: async () => turns, log: m => logs.push(m), config: {} },
+      { backend: null, collectFn: async () => ["f"], parseFn: async () => ({ turns, events: [] }), log: m => logs.push(m), config: {} },
     );
     expect(out).toHaveLength(0);
     expect(logs.join("\n")).toContain("excluded 1 machine-template pattern(s)");
@@ -511,7 +633,7 @@ describe("scan", () => {
       {
         backend: null,
         collectFn: async () => ["f"],
-        parseFn: async () => turns,
+        parseFn: async () => ({ turns, events: [] }),
         config: { ignorePatterns: ["^site injector:"] },
       },
     );
@@ -544,7 +666,7 @@ describe("scan", () => {
       {
         backend,
         collectFn: async () => ["f"],
-        parseFn: async () => turns,
+        parseFn: async () => ({ turns, events: [] }),
         parseDialogueFn: async () => [],
         log: message => logs.push(message),
       },
@@ -585,7 +707,7 @@ describe("scan", () => {
       {
         backend,
         collectFn: async () => ["f"],
-        parseFn: async () => [],
+        parseFn: async () => ({ turns: [], events: [] }),
         parseDialogueFn: async () => dialogue,
         log: message => logs.push(message),
       },
@@ -610,7 +732,7 @@ describe("scan", () => {
           return JSON.stringify({ suggestions: [] });
         } },
         collectFn: async () => ["a", "b"],
-        parseFn: async () => [],
+        parseFn: async () => ({ turns: [], events: [] }),
         parseDialogueFn: async () => {
           dialogueReads++;
           return [
@@ -649,7 +771,7 @@ describe("scan", () => {
       {
         backend,
         collectFn: async () => ["f"],
-        parseFn: async () => turns,
+        parseFn: async () => ({ turns, events: [] }),
         parseDialogueFn: async () => [],
         log: message => logs.push(message),
       },
@@ -668,7 +790,7 @@ describe("scan", () => {
     const logs: string[] = [];
     const out = await scan(
       { scope: "project", projectPath: dir, home },
-      { backend: null, collectFn: async () => ["f"], parseFn: async () => seqTurns, log: m => logs.push(m) },
+      { backend: null, collectFn: async () => ["f"], parseFn: async () => ({ turns: seqTurns, events: [] }), log: m => logs.push(m) },
     );
     expect(logs.join("\n")).toContain("sequences: 1 recurring chain(s)");
     // Degraded path: the sequence candidate surfaces as a high-confidence command suggestion.
@@ -702,7 +824,7 @@ describe("scan", () => {
         backend: null,
         collectFn: async () => ["claude.jsonl"],
         collectCodexFn: async () => ["codex.jsonl"],
-        parseFn: async () => claudeTurns,
+        parseFn: async () => ({ turns: claudeTurns, events: [] }),
         parseCodexFn: async () => codexTurns,
         parseDialogueFn: async () => [],
         parseCodexDialogueFn: async () => [],
@@ -716,5 +838,27 @@ describe("scan", () => {
       sessions: 4,
       assistants: ["claude-code", "codex"],
     });
+  });
+
+  it("routes <command-name> turns to events via the real parseFn, keeping them out of mining", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-cmdevt-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const file = join(projectDir, "session.jsonl");
+    const compact = (ts: string) => JSON.stringify({
+      type: "user", sessionId: "s1", cwd: "/p/x", timestamp: ts,
+      message: { role: "user", content: "<command-name>/compact</command-name>" },
+    });
+    await writeFile(file, [
+      compact("2026-07-01T00:00:00Z"),
+      compact("2026-07-02T00:00:00Z"),
+      compact("2026-07-03T00:00:00Z"),
+    ].join("\n") + "\n");
+    const logs: string[] = [];
+    const out = await scan(
+      { scope: "project", projectPath: projectDir, home },
+      { backend: null, collectFn: async () => [file], log: message => logs.push(message) },
+    );
+    expect(out).toEqual([]);
+    expect(logs.some(l => l.includes("prompts: 0 after filtering"))).toBe(true);
   });
 });

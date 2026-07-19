@@ -18,7 +18,6 @@ const u = (text: string): Turn => ({
 describe("isInjected", () => {
   it("flags skill-loader and hook scaffolding", () => {
     expect(isInjected("Base directory for this skill: /x")).toBe(true);
-    expect(isInjected("<command-name>/compact</command-name>")).toBe(true);
     expect(isInjected("<system-reminder>do x</system-reminder>")).toBe(true);
     expect(isInjected("Caveat: The messages below were generated")).toBe(true);
     expect(isInjected("[Request interrupted by user]")).toBe(true);
@@ -28,6 +27,9 @@ describe("isInjected", () => {
   });
   it("keeps genuine prompts", () => {
     expect(isInjected("push and create a pull request")).toBe(false);
+  });
+  it("no longer flags command-tag turns here — parseTranscript routes them to events before filter runs", () => {
+    expect(isInjected("<command-name>/compact</command-name>")).toBe(false);
   });
   it("keeps genuine prompts that start with a non-injected tag (JSX/HTML/XML)", () => {
     expect(isInjected("<div>why is this broken?</div>")).toBe(false);
@@ -113,7 +115,6 @@ describe("classifyPrompt", () => {
     expect(classifyPrompt("fix the login bug")).toBe("human");
   });
   it("keeps existing injected patterns as injected", () => {
-    expect(classifyPrompt("<command-name>/compact</command-name>")).toBe("injected");
     expect(classifyPrompt("Caveat: The messages below were generated")).toBe("injected");
   });
   it("classifies continuation summaries", () => {
@@ -148,7 +149,7 @@ describe("classifyPrompts / filterPrompts", () => {
 
 const cand = (over: Partial<Candidate>): Candidate => ({
   kind: "unknown", signature: "x".repeat(300), examples: [], count: 30,
-  sessions: 30, sessionIds: [], confidence: "high", ...over,
+  sessions: 30, sessionIds: [], occurrences: [], memberSignatures: [], confidence: "high", ...over,
 });
 
 describe("isTemplateFlood", () => {
