@@ -5,15 +5,17 @@
 Only the latest published release receives security fixes. The current
 supported release is `0.4.0`. Upgrade to `0.4.0` or newer: `0.1.0` has known
 isolation and installed-entrypoint defects; the
-unpublished `0.2.x`/`0.3.0` development line lacks the complete cross-target
+older `0.2.x`/`0.3.0` releases lack the complete cross-target
 filesystem, process-isolation, approval, clarification, attention-mining, and
 notification hardening present in `0.3.1`.
 
 ## Reporting a vulnerability
 
-Please do not open a public issue for an undisclosed vulnerability. Email
-`contact@ylambda.com` with the affected version, a synthetic reproduction, the
-impact you believe is possible, and whether you want public credit.
+Please do not open a public issue for an undisclosed vulnerability. Use
+[GitHub private vulnerability reporting](https://github.com/elliot-ylambda/gradient/security/advisories/new)
+or email `contact@ylambda.com` with the affected version, a synthetic
+reproduction, the impact you believe is possible, and whether you want public
+credit.
 
 Do not include real credentials, private transcripts, or customer data.
 
