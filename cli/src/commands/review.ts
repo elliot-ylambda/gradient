@@ -1,13 +1,14 @@
 import { createInterface } from "node:readline/promises";
 import type { Assistant, Suggestion } from "../core/types.js";
 import { applySuggestion, type ApplyResult } from "../core/apply.js";
-import { isNudge } from "../core/playbook.js";
+import { isNudge, loadProjectPlaybook, loadPlaybookPin, savePlaybookPin, pinState, type PinState } from "../core/playbook.js";
 import { loadSuggestions, saveSuggestions, syncApprovedPlaybook } from "./apply.js";
 import { loadConfig, resolveCheapModel, resolveTargets } from "../config.js";
 import { refreshRecallIndex } from "./recall.js";
 import { emit, type EmitTarget } from "../core/emit/index.js";
 import { clarifiedWorkflowBody } from "../core/detect.js";
 import { stripUnsafeControls } from "../core/security.js";
+import { proseDiff } from "../core/playbook-splice.js";
 
 export type Prompter = (
   suggestion: Suggestion,
@@ -15,6 +16,10 @@ export type Prompter = (
   total: number,
   preview: string,
 ) => Promise<"approve" | "skip" | "quit">;
+
+/** Consent prompt for the committed gradient.md's prose. Approve pins the
+ * exact bytes; the judge sees nothing until then. */
+export type PlaybookPrompter = (diff: string, state: "unpinned" | "changed") => Promise<"approve" | "skip">;
 
 /** Returns an option label, or null to leave the suggestion unresolved. */
 export type Clarifier = (suggestion: Suggestion) => Promise<string | null>;
@@ -80,8 +85,21 @@ export function suggestionPreview(
 export async function review(
   projectDir: string,
   prompt: Prompter,
-  opts: { home?: string; onSkip?: (message: string) => void; clarifier?: Clarifier } = {},
+  opts: { home?: string; onSkip?: (message: string) => void; clarifier?: Clarifier; playbookPrompter?: PlaybookPrompter } = {},
 ): Promise<ApplyResult[]> {
+  const project = await loadProjectPlaybook(projectDir);
+  if (project && opts.playbookPrompter) {
+    const pin = await loadPlaybookPin(projectDir, opts.home);
+    const state = pinState(project, pin);
+    if (state === "unpinned" || state === "changed") {
+      const diff = state === "unpinned"
+        ? project.prose.split("\n").filter(l => l.trim() !== "").map(l => `+ ${l}`).join("\n")
+        : proseDiff(pin!.prose, project.prose);
+      if (await opts.playbookPrompter(stripUnsafeControls(diff), state) === "approve") {
+        await savePlaybookPin(projectDir, project.prose, opts.home);
+      }
+    }
+  }
   const suggestions = await loadSuggestions(projectDir, opts);
   const config = await loadConfig(opts.home);
   const emitTarget = config.emitTarget ?? "skill";
@@ -147,6 +165,19 @@ export function readlineClarifier(): Clarifier {
   };
 }
 
+export function readlinePlaybookPrompter(): PlaybookPrompter {
+  return async (diff, state) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    process.stdout.write(state === "unpinned"
+      ? "\nThis repo's gradient.md is not yet approved as judge context for you:\n"
+      : "\nThis repo's gradient.md changed since you approved it:\n");
+    process.stdout.write(`${diff}\n`);
+    const answer = (await rl.question("  approve it for your autopilot judge? [a]pprove [s]kip › ")).trim().toLowerCase();
+    rl.close();
+    return answer === "a" ? "approve" : "skip";
+  };
+}
+
 export function readlinePrompter(
   _opts: { targets?: Assistant[]; cheapModel?: string } = {},
 ): Prompter {
@@ -171,9 +202,13 @@ export function readlinePrompter(
 
 /** Non-interactive listing for tooling (the plugin's review skill). */
 export async function reviewJson(projectDir: string, home?: string): Promise<string> {
+  let projectPlaybook: PinState = "none";
   try {
-    return JSON.stringify(await loadSuggestions(projectDir, { home }), null, 2);
+    projectPlaybook = pinState(await loadProjectPlaybook(projectDir), await loadPlaybookPin(projectDir, home));
+  } catch { /* fail closed: reported as none */ }
+  try {
+    return JSON.stringify({ projectPlaybook, suggestions: await loadSuggestions(projectDir, { home }) }, null, 2);
   } catch {
-    return "[]";
+    return JSON.stringify({ projectPlaybook, suggestions: [] }, null, 2);
   }
 }
