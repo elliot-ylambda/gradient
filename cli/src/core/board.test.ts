@@ -6,9 +6,11 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
   boardStateDir,
+  collectRepoState,
   discoverClaudeSessions,
   discoverCodexSessions,
   extractEditedFiles,
+  landedLine,
   locateRepo,
   resolveBoardRoot,
 } from "./board.js";
@@ -192,5 +194,35 @@ describe("discoverCodexSessions", () => {
       agent: "codex", sessionId: "cx-live", branch: "cx",
       worktree: join(".worktrees", "cx"), liveness: "live", editing: [],
     });
+  });
+});
+
+describe("landedLine", () => {
+  it("condenses GitHub merge subjects, keeping multi-segment branch names", () => {
+    expect(landedLine("Merge pull request #16 from elliot-ylambda/spec/plugin"))
+      .toBe("PR #16 spec/plugin");
+    expect(landedLine("fix: a plain commit")).toBe("fix: a plain commit");
+  });
+});
+
+describe("collectRepoState", () => {
+  it("reports landed subjects and behind counts from a worktree", async () => {
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-repo-")));
+    await initRepo(repo);
+    const worktree = join(repo, ".worktrees", "feature");
+    await execFileP("git", ["worktree", "add", "-q", worktree, "-b", "feature"], { cwd: repo });
+    await writeFile(join(repo, "new.txt"), "y\n");
+    await execFileP("git", ["add", "."], { cwd: repo });
+    await execFileP("git", ["commit", "-q", "-m", "feat: land something"], { cwd: repo });
+
+    const state = await collectRepoState(repo, worktree);
+    expect(state).toMatchObject({ defaultBranch: "main", ahead: 0, behind: 1 });
+    expect(state?.landed).toContain("feat: land something");
+    expect(state?.mainTip).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("returns null outside a git repository", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "gradient-board-plain-"));
+    expect(await collectRepoState(dir, dir)).toBeNull();
   });
 });

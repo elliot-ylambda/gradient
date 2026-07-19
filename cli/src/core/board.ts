@@ -246,3 +246,48 @@ export async function discoverCodexSessions(
   }
   return sessions;
 }
+
+const LANDED_CAP = 5;
+
+export interface RepoState {
+  defaultBranch: string;
+  mainTip: string;
+  landed: string[];
+  ahead: number;
+  behind: number;
+}
+
+/** `Merge pull request #16 from owner/spec/plugin` → `PR #16 spec/plugin`. */
+export function landedLine(subject: string): string {
+  const merge = /^Merge pull request #(\d+) from [^/\s]+\/(\S+)/.exec(subject);
+  if (merge) return `PR #${merge[1]} ${redact(merge[2]).slice(0, 80)}`;
+  return redact(subject).slice(0, 100);
+}
+
+export async function collectRepoState(
+  boardRoot: string,
+  sessionCwd: string,
+): Promise<RepoState | null> {
+  const defaultBranch =
+    (await git(["rev-parse", "--verify", "--quiet", "main"], boardRoot)) !== null ? "main"
+      : (await git(["rev-parse", "--verify", "--quiet", "master"], boardRoot)) !== null ? "master"
+        : null;
+  if (!defaultBranch) return null;
+  const mainTip = (await git(["rev-parse", defaultBranch], boardRoot)) ?? "";
+  const log = await git(
+    ["log", defaultBranch, "--first-parent", "--since=24.hours", "--pretty=format:%s"],
+    boardRoot,
+  );
+  const landed = (log ? log.split("\n") : [])
+    .filter(subject => subject.length > 0)
+    .map(landedLine)
+    .slice(0, LANDED_CAP);
+  const counts = await git(
+    ["rev-list", "--left-right", "--count", `${defaultBranch}...HEAD`],
+    sessionCwd,
+  );
+  const parsed = counts ? counts.split(/\s+/).map(part => Number.parseInt(part, 10)) : [0, 0];
+  const behind = Number.isFinite(parsed[0]) ? parsed[0] : 0;
+  const ahead = Number.isFinite(parsed[1]) ? parsed[1] : 0;
+  return { defaultBranch, mainTip, landed, ahead, behind };
+}
