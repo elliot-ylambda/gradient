@@ -166,3 +166,12 @@ export function readlinePrompter(
     return "skip";
   };
 }
+
+/** Non-interactive listing for tooling (the plugin's review skill). */
+export async function reviewJson(projectDir: string, home?: string): Promise<string> {
+  try {
+    return JSON.stringify(await loadSuggestions(projectDir, { home }), null, 2);
+  } catch {
+    return "[]";
+  }
+}

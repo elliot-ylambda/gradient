@@ -33,14 +33,18 @@ the same things everyone does in Claude Code:
 
 ```
 gradient/
-  cli/    →  the gradient CLI (TypeScript / npx)
-  docs/   →  design spec and implementation plan
-  skills/ →  reusable skills for Claude Code + Codex
+  cli/               →  the gradient CLI (TypeScript / npx)
+  plugin/            →  the Claude Code plugin — bundled CLI + skills; see plugin/README.md
+  .claude-plugin/    →  marketplace manifest so this repo doubles as a plugin marketplace
+  docs/              →  design spec and implementation plan
+  skills/            →  reusable skills for Claude Code + Codex
 ```
 
 | Dir | What it is |
 |-----|------------|
 | [`cli/`](cli/) | The `gradient` CLI. Its local-first `scan` pipeline finds repeated workflows and emits approved artifacts. See [`cli/README.md`](cli/README.md). |
+| [`plugin/`](plugin/) | The Claude Code plugin — bundled CLI + skills; see [`plugin/README.md`](plugin/README.md). |
+| [`.claude-plugin/`](.claude-plugin/) | Marketplace manifest so this repo doubles as a plugin marketplace. |
 | [`docs/`](docs/) | Design spec and implementation plan. |
 | [`skills/`](skills/) | Open-standard skills that work in Claude Code and Codex. |
 
@@ -56,7 +60,14 @@ npx skills add elliot-ylambda/gradient --skill vibe-security-check -g -a claude-
 
 See the [skills catalog](skills/) for usage and the full audit checklist.
 
-## Quickstart (CLI)
+## Quickstart
+
+**Plugin (recommended):** in Claude Code run
+`/plugin marketplace add ylambda/gradient` then `/plugin install gradient`,
+and use `/gradient:scan` → `/gradient:review`. Installing runs nothing —
+every automation stays opt-in.
+
+**CLI (npx):**
 
 ```bash
 npx gradient.md init --target both # install the gradient skill for Claude Code + Codex

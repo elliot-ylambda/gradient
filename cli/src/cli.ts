@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
+import { pathToFileURL } from "node:url";
 import { basename, relative } from "node:path";
 import { scan } from "./commands/scan.js";
-import { review, readlineClarifier, readlinePrompter } from "./commands/review.js";
+import { review, readlineClarifier, readlinePrompter, reviewJson } from "./commands/review.js";
 import { applyByIds } from "./commands/apply.js";
 import { list } from "./commands/list.js";
 import { remove } from "./commands/remove.js";
@@ -39,7 +40,7 @@ Usage:
   gradient scan --user          cross-project patterns, last 7 days (no preference rules)
   gradient scan --all           cross-project patterns, no time limit (no preference rules)
     [--since 7d] [--limit N] [--max-prompts N] [--no-review]
-  gradient review               approve cached suggestions
+  gradient review [--json]      approve cached suggestions (--json: print them, no prompts)
   gradient apply <id|name>...   generate specific suggestions
   gradient explain <id|name>    show the evidence behind a suggestion
   gradient notify               (hook target) desktop ping when Claude needs input
@@ -80,6 +81,7 @@ export function parseCliArgs(argv: string[]): {
       "no-review": { type: "boolean" },
       "no-scan": { type: "boolean" },
       detach: { type: "boolean" },
+      json: { type: "boolean" },
       "dry-run": { type: "boolean" },
       html: { type: "boolean" },
       "with-hooks": { type: "boolean" },
@@ -287,6 +289,10 @@ export async function main(
         return 0;
       }
       case "review": {
+        if (flags.json) {
+          log(await reviewJson(projectDir, io.home));
+          return 0;
+        }
         await runReview(projectDir, io.home, log, confirm);
         return 0;
       }
@@ -601,6 +607,6 @@ async function readStdinJson(): Promise<Record<string, unknown>> {
 }
 
 // Entry point when run as a binary.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2)).then((code) => process.exit(code));
 }

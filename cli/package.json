@@ -41,6 +41,7 @@
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/bin.js',0o755)\"",
+    "build:plugin": "node scripts/build-plugin.mjs",
     "smoke:bin": "node scripts/smoke-bin.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -51,6 +52,7 @@
     "@anthropic-ai/sdk": "^0.111.0"
   },
   "devDependencies": {
+    "esbuild": "0.28.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10",
     "@types/node": "^20.16.0"
