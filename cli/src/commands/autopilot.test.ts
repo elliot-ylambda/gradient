@@ -9,6 +9,7 @@ import { saveState, freshState } from "../core/state.js";
 import { playbookPath } from "../core/playbook.js";
 
 const tmp = () => mkdtemp(join(tmpdir(), "grad-ap-"));
+const tmpHome = tmp;
 
 describe("setAutopilotMode", () => {
   it("nudge: writes config and installs the Stop hook with a 60s timeout", async () => {
@@ -116,5 +117,18 @@ describe("autopilotStatus project layer", () => {
     expect(s.effectiveMode).toBe("off");
     expect(s.projectMalformed).toBe(true);
     expect(s.projectPlaybookExists).toBe(true);
+  });
+
+  it("status reports the project playbook pin state", async () => {
+    const home = await tmpHome();
+    const proj = await mkdtemp(join(tmpdir(), "grad-ap-pin-"));
+    expect((await autopilotStatus(proj, { home })).projectPlaybookPin).toBe("none");
+    await writeFile(join(proj, "gradient.md"), "## Rules\n- r\n");
+    expect((await autopilotStatus(proj, { home })).projectPlaybookPin).toBe("unpinned");
+    const { savePlaybookPin, parseProjectPlaybook } = await import("../core/playbook.js");
+    await savePlaybookPin(proj, parseProjectPlaybook("## Rules\n- r\n").prose, home);
+    expect((await autopilotStatus(proj, { home })).projectPlaybookPin).toBe("pinned");
+    await writeFile(join(proj, "gradient.md"), "## Rules\n- edited\n");
+    expect((await autopilotStatus(proj, { home })).projectPlaybookPin).toBe("changed");
   });
 });

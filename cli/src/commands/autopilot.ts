@@ -2,7 +2,7 @@ import { access } from "node:fs/promises";
 import { boundedAutopilotBudget, loadConfig, saveConfig, projectKey } from "../config.js";
 import { installHook, removeHook, hookInstalled } from "../core/settings.js";
 import { latestState } from "../core/state.js";
-import { playbookPath, projectPlaybookPath, loadProjectPlaybook, clampMode } from "../core/playbook.js";
+import { playbookPath, projectPlaybookPath, loadProjectPlaybook, clampMode, loadPlaybookPin, pinState, type PinState } from "../core/playbook.js";
 import type { AutopilotLogEntry, AutopilotMode } from "../core/types.js";
 
 export type { AutopilotMode }; // single source of truth: core/types.ts
@@ -61,6 +61,7 @@ export interface AutopilotStatus {
   playbookExists: boolean;
   projectPlaybookPath: string;
   projectPlaybookExists: boolean;
+  projectPlaybookPin: PinState;
   projectMalformed: boolean;
   hookInstalled: boolean;
   recent: AutopilotLogEntry[];
@@ -108,6 +109,7 @@ export async function autopilotStatus(
     playbookExists,
     projectPlaybookPath: projectPlaybookPath(projectDir),
     projectPlaybookExists: project !== null,
+    projectPlaybookPin: pinState(project, await loadPlaybookPin(projectDir, opts.home)),
     projectMalformed,
     hookInstalled: await hookInstalled(projectDir, "Stop", RESPOND_HOOK_COMMAND),
     recent: latest?.state.log.slice(-STATUS_RECENT) ?? [],

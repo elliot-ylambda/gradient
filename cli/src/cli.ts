@@ -564,6 +564,7 @@ export async function main(
             ? s.projectPlaybookPath + (s.projectMalformed ? c.coral(" (malformed — autopilot off here)") : "")
             : c.dim("none in this repo")}`,
         );
+        log(`${c.muted("project gradient.md pin:")} ${s.projectPlaybookExists ? s.projectPlaybookPin : "none"}`);
         log(`${c.muted("stop hook here:")} ${s.hookInstalled ? c.ok("installed") : "not installed"}`);
         for (const e of s.recent) {
           log(`  ${c.dim(e.ts)} ${e.action === "continue" ? c.ok("continued") : c.muted("stood down")}  ${c.dim(e.why)}`);
