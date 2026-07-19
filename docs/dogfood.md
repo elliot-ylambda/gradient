@@ -23,8 +23,9 @@ npm run dogfood -- --output ../artifacts/dogfood
 ```
 
 The command builds and packs `gradient.md`, installs the tarball into a fresh
-consumer, and invokes its executable with an isolated `GRADIENT_HOME`. It needs
-no credentials, network access, Docker, Claude Code, Codex, or real transcript.
+consumer with an empty task-local npm cache and the lockfile-pinned production
+graph, and invokes its executable with an isolated `GRADIENT_HOME`. It needs no
+credentials, network access, Docker, Claude Code, Codex, or real transcript.
 It writes:
 
 - `artifacts/dogfood/report.json` — machine-readable provenance, assertions,

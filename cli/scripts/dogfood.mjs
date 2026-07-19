@@ -8,6 +8,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rm,
@@ -245,6 +246,28 @@ async function writeJson(path, value, mode = 0o600) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, { mode });
 }
 
+async function lockedProductionDependencies() {
+  const lock = await readJson(join(cliDir, "package-lock.json"));
+  if (lock.lockfileVersion !== 3 || !lock.packages || typeof lock.packages !== "object") {
+    throw new Error("package-lock.json must use lockfileVersion 3 with a packages map");
+  }
+  const nodeModulesRoot = resolve(cliDir, "node_modules");
+  const dependencies = [];
+  for (const [lockPath, metadata] of Object.entries(lock.packages)) {
+    if (!lockPath.startsWith("node_modules/") || metadata?.dev === true) continue;
+    const sourcePath = resolve(cliDir, lockPath);
+    if (!sourcePath.startsWith(`${nodeModulesRoot}/`)) {
+      throw new Error(`locked production dependency escapes node_modules: ${lockPath}`);
+    }
+    const sourceMetadata = await lstat(sourcePath);
+    if (!sourceMetadata.isDirectory() || sourceMetadata.isSymbolicLink()) {
+      throw new Error(`locked production dependency is not an installed directory: ${lockPath}`);
+    }
+    dependencies.push({ lockPath, sourcePath });
+  }
+  return dependencies.sort((left, right) => left.lockPath.localeCompare(right.lockPath));
+}
+
 async function waitFor(predicate, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -285,6 +308,7 @@ async function main() {
     home: join(sandbox, "gradient-home"),
     project: join(sandbox, "project"),
     fakeBin: join(sandbox, "fake-bin"),
+    npmCache: join(sandbox, "empty-npm-cache"),
     cliBin: "",
     pluginBin: join(repoRoot, "plugin", "bin", "gradient.mjs"),
     package: { name: "gradient.md", version: "unknown", tarballSha256: "unknown", tarball: "" },
@@ -404,6 +428,7 @@ async function main() {
     await scenario("package", "Pack and install the release artifact", "distribution", async ({ assertion, equal }) => {
       await mkdir(state.packDir, { recursive: true });
       await mkdir(state.consumer, { recursive: true });
+      await mkdir(state.npmCache, { recursive: true });
       await writeJson(join(state.consumer, "package.json"), { private: true, name: "gradient-dogfood-consumer", version: "1.0.0" }, 0o644);
 
       const git = await command("git rev-parse HEAD", "git", ["rev-parse", "HEAD"], { cwd: repoRoot, env: process.env });
@@ -425,17 +450,29 @@ async function main() {
       assertion(packedPaths.has("dist/bin.js"), "tarball contains the executable");
       assertion(packedPaths.has("src/skill/SKILL.md"), "tarball contains the bundled Gradient skill");
 
+      const productionDependencies = await lockedProductionDependencies();
+      assertion(productionDependencies.length > 0, "locked production dependency graph is available locally");
+      equal(await readdir(state.npmCache), [], "consumer npm cache starts empty");
       const installed = await command(
-        "npm install --offline --ignore-scripts --no-audit --no-fund <tarball>",
+        "npm install --cache <empty-cache> --offline --install-links --ignore-scripts --no-audit --no-fund --no-save <tarball> <locked-production-graph>",
         "npm",
-        ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", state.package.tarball],
+        [
+          "install", "--cache", state.npmCache, "--offline", "--install-links",
+          "--ignore-scripts", "--no-audit", "--no-fund", "--no-save",
+          state.package.tarball,
+          ...productionDependencies.map(dependency => dependency.sourcePath),
+        ],
         { cwd: state.consumer, env: npmEnv, timeoutMs: 180_000 },
       );
-      equal(installed.exitCode, 0, "fresh consumer installs the local tarball offline");
+      equal(installed.exitCode, 0, "fresh consumer installs the local tarball offline with an empty cache");
       state.cliBin = join(state.consumer, "node_modules", "gradient.md", "dist", "bin.js");
       const metadata = await stat(state.cliBin);
       assertion((metadata.mode & 0o111) !== 0, "installed CLI is executable");
       assertion(await pathExists(join(state.consumer, "node_modules", "gradient.md", "src", "skill", "SKILL.md")), "installed package exposes its skill source");
+      for (const dependency of productionDependencies) {
+        const installedPath = join(state.consumer, dependency.lockPath);
+        assertion((await lstat(installedPath)).isDirectory(), `${dependency.lockPath} is copied into the disposable consumer`);
+      }
     });
 
     await scenario("fixtures", "Create an isolated project, home, histories, and local backends", "isolation", async ({ assertion, equal }) => {
