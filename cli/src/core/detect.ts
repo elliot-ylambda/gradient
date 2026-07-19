@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
-import type { Assistant, Candidate, Clarify, Confidence, Suggestion } from "./types.js";
+import type { Assistant, Candidate, Clarify, Confidence, Suggestion, SuggestionPayload } from "./types.js";
 import { redact, sanitizeName } from "./security.js";
+import { candidateLeverage, estMinutesSavedPerMonth } from "./leverage.js";
+import { spanDays } from "./temporal.js";
 import type { LLMBackend } from "../llm/backend.js";
 
 const ALLOWED_CONFIDENCE = new Set<Confidence>(["high", "inferred", "flagged"]);
@@ -81,6 +83,53 @@ function evidenceAssistants(candidates: Candidate[]): Assistant[] {
     .sort((a, b) => a === b ? 0 : a === "claude-code" ? -1 : 1);
 }
 
+function meanLength(strings: string[]): number {
+  return strings.length ? strings.reduce((sum, s) => sum + s.length, 0) / strings.length : 0;
+}
+
+/** Redacted union of matched candidates' memberSignatures (fallback to the
+ * candidate's own signature when it has none — non-cluster producers like
+ * paste/answer/sequence leave memberSignatures empty). This is the stable
+ * basis for both `Suggestion.id` (via idFor) and `Suggestion.sourceSignatures`:
+ * unlike candidateRef, it never folds in rank index or sessionIds, so it
+ * doesn't change when the corpus grows or candidates are scanned in a
+ * different order. */
+function sourceSignaturesFor(matched: Candidate[]): string[] {
+  return matched.flatMap(c => (c.memberSignatures.length ? c.memberSignatures : [c.signature]).map(sig => bounded(sig)));
+}
+
+/** Stable suggestion id: hashes the sorted, deduped signature union plus the
+ * payload type. Deliberately excludes name/rationale/sourceIds — renaming a
+ * suggestion or reordering the candidates that produced it never changes its id. */
+export function idFor(sigs: string[], payloadType: string): string {
+  return hashId(`${[...new Set(sigs)].sort().join("\u0000")}\u0000${payloadType}`);
+}
+
+/** Descending by estimated minutes saved per month; a missing estimate (suggestions
+ * cached before this field existed) sorts as if it were zero. */
+export function byLeverage(a: Suggestion, b: Suggestion): number {
+  return (b.evidence.estMinutesSavedPerMonth ?? 0) - (a.evidence.estMinutesSavedPerMonth ?? 0);
+}
+
+function evidenceFor(matched: Candidate[], payloadType: SuggestionPayload["type"]): Suggestion["evidence"] {
+  const count = matched.reduce((n, c) => n + c.count, 0);
+  const sessions = new Set(matched.flatMap(c => c.sessionIds)).size;
+  const assistants = evidenceAssistants(matched);
+  const highestCount = [...matched].sort((a, b) => b.count - a.count)[0];
+  return {
+    count,
+    sessions,
+    ...(assistants.length ? { assistants } : {}),
+    estMinutesSavedPerMonth: estMinutesSavedPerMonth({
+      count,
+      chars: meanLength(matched.flatMap(c => c.examples)),
+      spanDays: spanDays(matched.flatMap(c => c.occurrences)),
+      kind: payloadType,
+    }),
+    ...(highestCount.temporal ? { temporal: highestCount.temporal } : {}),
+  };
+}
+
 function isLocallyMechanical(candidates: Candidate[], instruction: string, modelFlag: unknown): boolean {
   return modelFlag === true &&
     candidates.every(candidate => candidate.kind === "unknown") &&
@@ -124,18 +173,16 @@ export function candidateToCommand(c: Candidate): Suggestion {
   const words = `${c.kind === "paste" ? "troubleshoot " : ""}${trigger}`.split(" ").slice(0, 3).join(" ");
   const commandName = sanitizeName(words);
   const instruction = safeExamples[0] ?? safeSignature;
+  const sourceSignatures = sourceSignaturesFor([c]);
   return {
-    id: hashId(`${c.kind}\u0000${c.signature}`),
+    id: idFor(sourceSignatures, "command"),
     name: commandName,
     title: deterministicTitle(c),
     rationale: `Observed ${c.count}× across ${c.sessions} sessions; review is required before installation.`,
-    evidence: {
-      count: c.count,
-      sessions: c.sessions,
-      ...(c.assistants?.length ? { assistants: c.assistants } : {}),
-    },
+    evidence: evidenceFor([c], "command"),
     confidence: c.confidence,
     examples: safeExamples,
+    sourceSignatures,
     payload: {
       type: "command",
       commandName,
@@ -152,7 +199,8 @@ export function candidateToCommand(c: Candidate): Suggestion {
 function degradeToCommands(cands: Candidate[]): Suggestion[] {
   return cands
     .filter(c => c.kind !== "answer" && c.confidence === "high")
-    .map(candidateToCommand);
+    .map(candidateToCommand)
+    .sort(byLeverage);
 }
 
 export function boundedDetectLimit(value: number | undefined, fallback = 12): number {
@@ -233,7 +281,7 @@ export async function detect(
   opts: { limit?: number; onCap?: (dropped: number) => void; timeoutMs?: number } = {},
 ): Promise<Suggestion[]> {
   const limit = boundedDetectLimit(opts.limit);
-  const ranked = [...cands].sort((a, b) => b.count - a.count);
+  const ranked = [...cands].sort((a, b) => candidateLeverage(b) - candidateLeverage(a) || b.count - a.count);
   const top = ranked.slice(0, limit);
   if (ranked.length > limit) opts.onCap?.(ranked.length - limit);
 
@@ -273,8 +321,7 @@ export async function detect(
       const kinds = new Set(matched.map(candidate => candidate.kind));
       if (!kindsAreCompatible(kinds, payload.type)) continue;
 
-      const count = matched.reduce((n, c) => n + c.count, 0);
-      const sessions = new Set(matched.flatMap(c => c.sessionIds)).size;
+      const sourceSignatures = sourceSignaturesFor(matched);
       const examples = matched.flatMap(c => c.examples).map(example => bounded(example, 2_000)).slice(0, 5);
       const triggers = matched.map(c => bounded(c.signature)).filter(Boolean).slice(0, 20);
       const primary = matched[0];
@@ -340,26 +387,23 @@ export async function detect(
       const title = suggestionPayload.type === "rule"
         ? `Observed low-impact preference: ${ruleParts(primary.signature)?.answer ?? name}`
         : deterministicTitle(primary);
-      const assistants = evidenceAssistants(matched);
+      const evidence = evidenceFor(matched, suggestionPayload.type);
       out.push({
-        id: hashId(`${ids.join("\u0000")}\u0000${suggestionPayload.type}`),
+        id: idFor(sourceSignatures, suggestionPayload.type),
         name,
         title: bounded(title, 500),
-        rationale: `Observed ${count}× across ${sessions} distinct sessions; generated content is reconstructed locally.`,
-        evidence: {
-          count,
-          sessions,
-          ...(assistants.length ? { assistants } : {}),
-        },
+        rationale: `Observed ${evidence.count}× across ${evidence.sessions} distinct sessions; generated content is reconstructed locally.`,
+        evidence,
         confidence: finalConfidence,
         ...(clarify ? { clarify } : {}),
         examples,
+        sourceSignatures,
         payload: suggestionPayload,
       });
       ids.forEach(id => claimed.add(id));
       names.add(name);
     }
-    return out;
+    return out.sort(byLeverage);
   } catch {
     // Backend failure or invalid output degrades only to locally reconstructed,
     // high-confidence advisory commands.

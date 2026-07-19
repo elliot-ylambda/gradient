@@ -84,10 +84,22 @@ export interface Suggestion {
   name: string;
   title: string;
   rationale: string;
-  evidence: { count: number; sessions: number; assistants?: Assistant[] };
+  evidence: {
+    count: number;
+    sessions: number;
+    assistants?: Assistant[];
+    /** Optional: absent on pre-existing caches/fixtures written before this field existed. */
+    estMinutesSavedPerMonth?: number;
+    /** Optional: temporal evidence of the highest-count source candidate, when annotated. */
+    temporal?: TemporalFeatures;
+  };
   confidence: Confidence;
   clarify?: Clarify;
   examples?: string[];   // representative redacted prompts, for `explain`
+  /** Redacted union of source candidates' memberSignatures (fallback [signature] when
+   * empty). Optional: absent on pre-existing caches/fixtures written before this field
+   * existed. Stable across corpus growth — the basis for this suggestion's id. */
+  sourceSignatures?: string[];
   payload: SuggestionPayload;
 }
 

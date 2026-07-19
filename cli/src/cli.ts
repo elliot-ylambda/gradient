@@ -181,8 +181,11 @@ async function runScanFlow(
     { log, config },
   );
   for (const s of out) {
+    const leverage = s.evidence.estMinutesSavedPerMonth
+      ? ` ${c.dim(`≈${s.evidence.estMinutesSavedPerMonth}m/mo`)}`
+      : "";
     log(
-      `  ${confidenceChip(s.confidence)} ${c.bold(terminalSafeLine(s.name))}  ${c.muted(terminalSafeLine(s.title))}  ${c.dim(`(seen ${s.evidence.count}×)`)}`,
+      `  ${confidenceChip(s.confidence)} ${c.bold(terminalSafeLine(s.name))}  ${c.muted(terminalSafeLine(s.title))}  ${c.dim(`(seen ${s.evidence.count}×)`)}${leverage}`,
     );
     if (isNudge(s)) {
       log(`      ${c.dim("tip: this is what autopilot automates →")} ${c.violet("gradient autopilot nudge")}`);

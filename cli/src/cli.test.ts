@@ -14,7 +14,9 @@ import { bundleCommand } from "./commands/bundle.js";
 import { notify } from "./commands/notify.js";
 import { saveSuggestions } from "./commands/apply.js";
 import { clarifiedWorkflowBody } from "./core/detect.js";
+import { scan } from "./commands/scan.js";
 
+vi.mock("./commands/scan.js", () => ({ scan: vi.fn(async () => []) }));
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
 vi.mock("./commands/migrate.js", () => ({
   migrate: vi.fn(async () => ({ migrated: ["ship"], skipped: ["ghost"] })),
@@ -249,6 +251,32 @@ describe("main", () => {
     expect(forwardedArgs).not.toContain("--detach");
     expect(forwardedArgs).toContain("scan");
     expect(forwardedArgs).toContain("--all");
+  });
+
+  it("shows an estimated minutes-saved-per-month next to each scan suggestion when known", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-cli-home-"));
+    vi.mocked(scan).mockResolvedValueOnce([{
+      id: "a", name: "ship", title: "Ship things", rationale: "r", confidence: "high",
+      evidence: { count: 5, sessions: 3, estMinutesSavedPerMonth: 20 },
+      payload: { type: "command", commandName: "ship", body: "b" },
+    }]);
+    const logs: string[] = [];
+    const code = await main(["scan", "--no-review"], { home, log: m => logs.push(m) });
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("≈20m/mo");
+  });
+
+  it("omits the minutes-saved suffix for a suggestion cached before the estimate existed", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-cli-home-"));
+    vi.mocked(scan).mockResolvedValueOnce([{
+      id: "a", name: "ship", title: "Ship things", rationale: "r", confidence: "high",
+      evidence: { count: 5, sessions: 3 },
+      payload: { type: "command", commandName: "ship", body: "b" },
+    }]);
+    const logs: string[] = [];
+    const code = await main(["scan", "--no-review"], { home, log: m => logs.push(m) });
+    expect(code).toBe(0);
+    expect(logs.join("\n")).not.toContain("m/mo");
   });
 });
 

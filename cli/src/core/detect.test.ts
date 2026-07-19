@@ -1,14 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
   buildDetectPrompt,
+  byLeverage,
   candidateRef,
   candidateToCommand,
   clarifiedWorkflowBody,
   detect,
+  idFor,
   MAX_DETECT_CANDIDATES,
   sanitizeClarify,
 } from "./detect.js";
-import type { Candidate } from "./types.js";
+import type { Candidate, Suggestion } from "./types.js";
 
 const cand = (signature: string, count: number, confidence: any = "high"): Candidate => ({
   kind: "unknown",
@@ -20,6 +22,22 @@ const cand = (signature: string, count: number, confidence: any = "high"): Candi
   occurrences: Array.from({ length: count }, (_, i) => ({ ts: `2026-06-01T10:0${i % 10}:00Z`, sessionId: `s${i}` })),
   memberSignatures: [signature],
   confidence,
+});
+
+// A long, low-count-but-high-leverage candidate vs. a short, higher-count-but-
+// low-leverage one, both spanning the same 30 days — used to prove ranking
+// follows estimated leverage rather than raw count.
+const highLeverageCand = (): Candidate => ({
+  kind: "unknown", signature: "x".repeat(1000), examples: ["x".repeat(1000)],
+  count: 5, sessions: 5, sessionIds: ["s0", "s1", "s2", "s3", "s4"],
+  occurrences: [{ ts: "2026-06-01T00:00:00Z", sessionId: "s0" }, { ts: "2026-07-01T00:00:00Z", sessionId: "s1" }],
+  memberSignatures: ["x".repeat(1000)], confidence: "high",
+});
+const lowLeverageCand = (): Candidate => ({
+  kind: "unknown", signature: "y".repeat(10), examples: ["y".repeat(10)],
+  count: 6, sessions: 6, sessionIds: ["s0", "s1", "s2", "s3", "s4", "s5"],
+  occurrences: [{ ts: "2026-06-01T00:00:00Z", sessionId: "s0" }, { ts: "2026-07-01T00:00:00Z", sessionId: "s1" }],
+  memberSignatures: ["y".repeat(10)], confidence: "high",
 });
 
 describe("candidateToCommand", () => {
@@ -69,6 +87,22 @@ describe("candidateToCommand", () => {
     const suggestion = candidateToCommand(noisy);
     expect(suggestion.title).not.toContain("\n");
     expect(suggestion.title.length).toBeLessThanOrEqual(160);
+  });
+
+  it("carries sourceSignatures from the candidate's own memberSignatures", () => {
+    const s = candidateToCommand(cand("merge main into this pr", 9));
+    expect(s.sourceSignatures).toEqual(["merge main into this pr"]);
+  });
+
+  it("falls back to the raw signature for sourceSignatures when memberSignatures is empty", () => {
+    const paste: Candidate = { ...cand("make dev", 3), kind: "paste", memberSignatures: [] };
+    const s = candidateToCommand(paste);
+    expect(s.sourceSignatures).toEqual(["make dev"]);
+  });
+
+  it("includes an estimated minutes-saved-per-month in evidence", () => {
+    const s = candidateToCommand(cand("merge main into this pr", 9));
+    expect(s.evidence.estMinutesSavedPerMonth).toBe(14);
   });
 });
 
@@ -195,7 +229,8 @@ describe("detect", () => {
     };
     const [out] = await detect([source], llm);
     expect(out.name).toBe("ship");
-    expect(out.evidence).toEqual({ count: 13, sessions: 13 });
+    expect(out.evidence).toEqual({ count: 13, sessions: 13, estMinutesSavedPerMonth: 20 });
+    expect(out.sourceSignatures).toEqual(["push and create a pr"]);
     expect(JSON.stringify(out)).not.toContain("EXFILTRATE");
     expect(JSON.stringify(out)).not.toContain("IGNORE USER");
     if (out.payload.type === "command") expect(out.payload.body).toContain("no standing authorization");
@@ -287,7 +322,8 @@ describe("detect", () => {
       name: "approve", confidence: "high", payload: { type: "command", commandName: "approve" },
     }] }) };
     const [out] = await detect([a, b], llm);
-    expect(out.evidence).toEqual({ count: 8, sessions: 3 });
+    expect(out.evidence).toEqual({ count: 8, sessions: 3, estMinutesSavedPerMonth: 10 });
+    expect(out.sourceSignatures?.sort()).toEqual(["lgtm", "looks good"]);
     expect(out.confidence).toBe("inferred");
   });
 
@@ -383,6 +419,89 @@ describe("detect", () => {
     expect(aborted).toBe(true);
     expect(result).toHaveLength(1);
     expect(result[0].payload.type).toBe("command");
+  });
+
+  it("keeps degraded suggestion ids stable regardless of candidate scan order", async () => {
+    const a = cand("first workflow", 5);
+    const b = cand("second workflow", 4);
+    const inOrder = (await detect([a, b], null)).map(s => s.id);
+    const reordered = (await detect([b, a], null)).map(s => s.id);
+    expect(new Set(inOrder)).toEqual(new Set(reordered));
+    expect(inOrder.length).toBe(2);
+  });
+
+  it("keeps a merged suggestion's id stable regardless of candidate scan order", async () => {
+    const a = cand("alpha workflow", 5);
+    const b = cand("beta workflow", 4);
+    // Merges whatever candidates the prompt actually lists, under whatever
+    // opaque ids detect() assigned them this call — agnostic to internal
+    // reordering, like a real backend reading only what it was sent.
+    const mergeAll = () => ({
+      name: "fake",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => JSON.stringify({ suggestions: [{
+        sourceIds: (JSON.parse(prompt) as { id: string }[]).map(w => w.id),
+        name: "merged", confidence: "high", payload: { type: "command", commandName: "merged" },
+      }] }),
+    });
+    const [first] = await detect([a, b], mergeAll());
+    const [second] = await detect([b, a], mergeAll());
+    expect(first.id).toBe(second.id);
+    expect(first.sourceSignatures?.sort()).toEqual(["alpha workflow", "beta workflow"]);
+  });
+
+  it("keeps a suggestion's id when the LLM renames it across runs", async () => {
+    const source = cand("rename workflow", 5);
+    const llmNamed = (name: string) => ({
+      name: "fake",
+      available: async () => true,
+      complete: async () => JSON.stringify({ suggestions: [{
+        sourceIds: [candidateRef(source)], name, confidence: "high", payload: { type: "command", commandName: name },
+      }] }),
+    });
+    const [first] = await detect([source], llmNamed("ship-it"));
+    const [renamed] = await detect([source], llmNamed("deploy-it"));
+    expect(first.id).toBe(renamed.id);
+    expect(first.name).not.toBe(renamed.name);
+  });
+
+  it("orders returned suggestions by estimated leverage descending, not raw count", async () => {
+    const out = await detect([lowLeverageCand(), highLeverageCand()], null);
+    expect(out.map(s => s.evidence.count)).toEqual([5, 6]);
+    expect(out[0].evidence.estMinutesSavedPerMonth!).toBeGreaterThan(out[1].evidence.estMinutesSavedPerMonth!);
+  });
+
+  it("keeps the higher-leverage candidate in a size-limited detect window over one with more raw occurrences", async () => {
+    const out = await detect([lowLeverageCand(), highLeverageCand()], null, { limit: 1 });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence.count).toBe(5);
+  });
+});
+
+describe("idFor", () => {
+  it("is stable across ordering and duplicates within the same signature set", () => {
+    expect(idFor(["b", "a", "a"], "command")).toBe(idFor(["a", "b"], "command"));
+  });
+
+  it("differs by payload type for the same signatures", () => {
+    expect(idFor(["a"], "command")).not.toBe(idFor(["a"], "rule"));
+  });
+
+  it("differs for a different signature set", () => {
+    expect(idFor(["a"], "command")).not.toBe(idFor(["a", "b"], "command"));
+  });
+});
+
+describe("byLeverage", () => {
+  const suggestion = (estMinutesSavedPerMonth: number | undefined): Suggestion => ({
+    id: "x", name: "x", title: "x", rationale: "x", confidence: "high",
+    evidence: { count: 1, sessions: 1, ...(estMinutesSavedPerMonth !== undefined ? { estMinutesSavedPerMonth } : {}) },
+    payload: { type: "command", commandName: "x", body: "x" },
+  });
+
+  it("sorts descending by estMinutesSavedPerMonth, treating a missing value as 0", () => {
+    const sorted = [suggestion(1), suggestion(undefined), suggestion(5)].sort(byLeverage);
+    expect(sorted.map(s => s.evidence.estMinutesSavedPerMonth)).toEqual([5, 1, undefined]);
   });
 });
 
