@@ -1,7 +1,7 @@
 # gradient — v1 Analysis Engine: Design
 
 **Date:** 2026-06-29
-**Status:** Approved (brainstorming complete; implementation plan pending)
+**Status:** Implemented and released
 **Scope:** First shippable sub-project of the `gradient` product.
 
 ---

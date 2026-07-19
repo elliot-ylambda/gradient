@@ -1,10 +1,11 @@
-import type { Turn, AutopilotMode } from "./types.js";
+import type { Turn, CommandEvent, AutopilotMode } from "./types.js";
 import { classifyPrompt } from "./filter.js";
 import { extractPasteKey, PASTE_MIN_COUNT } from "./paste.js";
 import { cleanupStale, listStateFiles, loadState } from "./state.js";
+import type { InstructionTally } from "./audit.js";
+import { commandKey } from "./command.js";
 
 const NUDGE_RE = /^(continue|go on|keep going|next|what'?s next|proceed|yes|y|ok|okay|do it|go|sure|yep|good|great|perfect|lgtm|looks good|approved?|ship it|sounds good)[.!?]*$/i;
-const TAG_RE = /<command-name>\/?([\w:-]+)<\/command-name>/i;
 
 export function isNudgeText(text: string): boolean {
   return NUDGE_RE.test(text.trim());
@@ -22,7 +23,12 @@ export interface InsightsMetrics {
   errorPastes: number;
 }
 
-export function computeMetrics(turns: Turn[], ignore: RegExp[] = []): InsightsMetrics {
+export interface ToolActivityMetrics {
+  failureLoops: number;
+  postEditRituals: number;
+}
+
+export function computeMetrics(turns: Turn[], events: CommandEvent[] = [], ignore: RegExp[] = []): InsightsMetrics {
   const metrics: InsightsMetrics = {
     prompts: 0,
     nudges: 0,
@@ -35,19 +41,18 @@ export function computeMetrics(turns: Turn[], ignore: RegExp[] = []): InsightsMe
     errorPastes: 0,
   };
 
+  for (const event of events) {
+    const command = commandKey(event.command);
+    if (command === "compact") metrics.compacts++;
+    else if (command === "model") metrics.modelSwitches++;
+    else if (command === "effort") metrics.effortSwitches++;
+  }
+
   for (const turn of turns) {
     if (turn.role !== "user" || !turn.text) continue;
     const text = turn.text.trim();
     if (text.startsWith("[Request interrupted")) {
       metrics.interrupts++;
-      continue;
-    }
-
-    const command = TAG_RE.exec(text)?.[1]?.toLowerCase();
-    if (command) {
-      if (command === "compact") metrics.compacts++;
-      else if (command === "model") metrics.modelSwitches++;
-      else if (command === "effort") metrics.effortSwitches++;
       continue;
     }
 
@@ -232,12 +237,20 @@ export function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+export function instructionEffectivenessLine(tally: InstructionTally): string {
+  const text = tally.text.length > 60 ? `${tally.text.slice(0, 59)}…` : tally.text;
+  const lastSeen = /^\d{4}-\d{2}-\d{2}/.test(tally.lastSeen) ? tally.lastSeen.slice(0, 10) : "unknown";
+  return `"${text}" · restated ${tally.restatements}× · violated ${tally.violations}× · last seen ${lastSeen}`;
+}
+
 export function renderInsightsHtml(report: {
   label: string;
   avoided: number;
   metrics: InsightsMetrics;
   recommendations: Recommendation[];
   costs?: CostRow[];
+  instructionEffectiveness?: InstructionTally[];
+  toolActivity?: ToolActivityMetrics;
 }): string {
   const metrics = report.metrics;
   const rows: Array<[string, number]> = [
@@ -249,6 +262,10 @@ export function renderInsightsHtml(report: {
     ["error pastes", metrics.errorPastes],
     ["model switches", metrics.modelSwitches],
     ["effort switches", metrics.effortSwitches],
+    ...(report.toolActivity ? [
+      ["in-session failure loops", report.toolActivity.failureLoops] as [string, number],
+      ["post-edit rituals", report.toolActivity.postEditRituals] as [string, number],
+    ] : []),
   ];
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>gradient insights</title>
 <style>
@@ -264,6 +281,9 @@ export function renderInsightsHtml(report: {
 <dl>${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${value}</dd>`).join("")}</dl>
 ${report.costs?.length ? `<h1>cost of unautomated habits</h1>
 <ul>${report.costs.map(cost => `<li>${escapeHtml(cost.line)}</li>`).join("")}</ul>` : ""}
+${report.instructionEffectiveness?.length ? `<h1>Instruction effectiveness</h1>
+<ul>${report.instructionEffectiveness.map(tally => `<li>${escapeHtml(instructionEffectivenessLine(tally))}</li>`).join("")}</ul>
+<p>These instructions aren't holding — run <code>gradient review</code> to convert them.</p>` : ""}
 <h1>next</h1>
 <ul>${report.recommendations.map(recommendation => `<li>${escapeHtml(recommendation.line)}</li>`).join("")}</ul>
 </body></html>\n`;

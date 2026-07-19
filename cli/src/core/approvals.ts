@@ -34,6 +34,17 @@ export function artifactContentHash(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
+/** Stable bytes used to bind a pathless hook manifest entry to the private
+ * approval ledger. This prevents a repository-authored manifest from claiming
+ * and later removing an arbitrary command in the user's shared settings. */
+export function hookApprovalContent(hook: NonNullable<ManifestEntry["hook"]>): string {
+  return JSON.stringify({
+    event: hook.event,
+    ...(hook.matcher !== undefined ? { matcher: hook.matcher } : {}),
+    command: hook.command,
+  });
+}
+
 function validateApproval(value: unknown, index: number): ArtifactApproval {
   const record = value as Record<string, unknown>;
   if (!record || typeof record !== "object") throw new Error(`approval entry ${index} is not an object`);
@@ -103,7 +114,7 @@ export async function recordArtifactApproval(
   content: string,
   home?: string,
 ): Promise<void> {
-  if (!entry.path) throw new Error("cannot approve a pathless artifact for export");
+  if (!entry.path && !entry.hook) throw new Error("cannot approve a pathless artifact for export");
   const userHome = home ?? homedir();
   const approvals = (await loadArtifactApprovals(projectDir, userHome))
     .filter(existing => existing.name !== entry.name || existing.target !== manifestTarget(entry));

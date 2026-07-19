@@ -1,6 +1,4 @@
-#!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { pathToFileURL } from "node:url";
 import { basename, relative } from "node:path";
 import { scan } from "./commands/scan.js";
 import { review, readlineClarifier, readlinePlaybookPrompter, readlinePrompter, reviewJson } from "./commands/review.js";
@@ -30,10 +28,15 @@ import { notify } from "./commands/notify.js";
 import type { Assistant } from "./core/types.js";
 import { stripUnsafeControls } from "./core/security.js";
 import { readlineConfirm, type Confirm } from "./core/confirm.js";
+import { instructionEffectivenessLine } from "./core/insights.js";
+import { sessionStart } from "./commands/sessionStart.js";
+import { mirror } from "./commands/mirror.js";
 
 const HELP = `gradient — turn repeated Claude Code and Codex workflows into artifacts
 
 Usage:
+  gradient                      show the top pending suggestions (interactive terminals)
+  gradient help                 show this help
   gradient init [--target claude-code|codex|both]
                                 configure + install the skill, then offer a first scan
   gradient init --session-scan  also run a scan at the start of each session
@@ -42,6 +45,7 @@ Usage:
   gradient scan --all           cross-project patterns, no time limit (no preference rules)
     [--since 7d] [--limit N] [--max-prompts N] [--no-review]
   gradient review [--json]      approve cached suggestions (--json: print them, no prompts)
+  gradient session-start        (hook target) surface one suggestion, then rescan
   gradient apply <id|name>...   generate specific suggestions
   gradient explain <id|name>    show the evidence behind a suggestion
   gradient notify               (hook target) desktop ping when Claude needs input
@@ -135,7 +139,7 @@ async function runReview(
   const applied = await review(projectDir, readlinePrompter({
     targets: resolveTargets(config),
     cheapModel: resolveCheapModel(config),
-  }), { home, onSkip: log, clarifier: readlineClarifier(), playbookPrompter });
+  }), { home, onSkip: log, onExplain: log, clarifier: readlineClarifier(), playbookPrompter });
   log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
   for (const a of applied) {
     for (const write of a.writes) {
@@ -187,8 +191,11 @@ async function runScanFlow(
     { log, config },
   );
   for (const s of out) {
+    const leverage = s.evidence.estMinutesSavedPerMonth
+      ? ` ${c.dim(`≈${s.evidence.estMinutesSavedPerMonth}m/mo`)}`
+      : "";
     log(
-      `  ${confidenceChip(s.confidence)} ${c.bold(terminalSafeLine(s.name))}  ${c.muted(terminalSafeLine(s.title))}  ${c.dim(`(seen ${s.evidence.count}×)`)}`,
+      `  ${confidenceChip(s.confidence)} ${c.bold(terminalSafeLine(s.name))}  ${c.muted(terminalSafeLine(s.title))}  ${c.dim(`(seen ${s.evidence.count}×)`)}${leverage}`,
     );
     if (isNudge(s)) {
       log(`      ${c.dim("tip: this is what autopilot automates →")} ${c.violet("gradient autopilot nudge")}`);
@@ -212,6 +219,7 @@ export async function main(
     readStdin?: () => Promise<Record<string, unknown>>;
     home?: string;
     confirm?: Confirm;
+    isTTY?: boolean;
   } = {},
 ): Promise<number> {
   const log = io.log ?? ((s: string) => process.stdout.write(s + "\n"));
@@ -219,6 +227,10 @@ export async function main(
   const confirm = io.confirm ?? readlineConfirm();
 
   if (argv.length === 0) {
+    if (io.isTTY ?? process.stdout.isTTY === true) {
+      await mirror(process.cwd(), { home: io.home, write: log });
+      return 0;
+    }
     log(`${banner(VERSION)}\n\n${HELP}`);
     return 0;
   }
@@ -232,6 +244,10 @@ export async function main(
     return 0;
   }
   if (argv[0] === "--help" || argv[0] === "-h") {
+    log(`${banner(VERSION)}\n\n${HELP}`);
+    return 0;
+  }
+  if (argv[0] === "help") {
     log(`${banner(VERSION)}\n\n${HELP}`);
     return 0;
   }
@@ -292,6 +308,14 @@ export async function main(
         );
         return 0;
       }
+      case "session-start": {
+        await sessionStart(projectDir, {
+          home: io.home,
+          write: log,
+          spawnDetachedFn: spawnDetached,
+        });
+        return 0;
+      }
       case "review": {
         if (flags.json) {
           log(await reviewJson(projectDir, io.home));
@@ -323,7 +347,18 @@ export async function main(
         const sources = s.evidence.assistants?.length === 2
           ? " · sources: Claude Code + Codex"
           : "";
-        log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions${sources}`));
+        const leverage = s.evidence.estMinutesSavedPerMonth !== undefined
+          ? ` · estimated ≈${s.evidence.estMinutesSavedPerMonth}m/month`
+          : "";
+        log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions${sources}${leverage}`));
+        const temporal = s.evidence.temporal;
+        if (temporal) {
+          log(c.dim(
+            `temporal: longest run ${temporal.maxRunLength} · recurring-run sessions ${temporal.runSessions}` +
+            ` · median gap ${temporal.medianGapMinutes}m · ${temporal.distinctDays} active day(s)` +
+            ` across ${temporal.spanDays} day(s)`,
+          ));
+        }
         for (const ex of s.examples ?? []) log(`  ${c.muted("·")} ${c.muted(terminalSafeLine(ex))}`);
         if (s.clarify) {
           log(c.dim(`clarify: ${terminalSafeLine(s.clarify.question)}`));
@@ -409,7 +444,8 @@ export async function main(
         if (r.capped) log(c.dim("stats input cap reached; adoption covers the bounded recent corpus"));
         log(c.dim(`session-start scan: ${r.sessionScanEnabled ? "on" : "off"}`));
         for (const p of r.patterns) {
-          log(`  ${confidenceChip(p.confidence)} ${c.bold(p.name)}  ${c.dim(`(seen ${p.count}× · ${p.sessions} sessions)`)}  ${p.covered ? c.ok("✓ automated") : c.muted("—")}`);
+          const leverage = p.estMinutesSavedPerMonth !== undefined ? ` · ≈${p.estMinutesSavedPerMonth}m/mo` : "";
+          log(`  ${confidenceChip(p.confidence)} ${c.bold(p.name)}  ${c.dim(`(seen ${p.count}× · ${p.sessions} sessions${leverage})`)}  ${p.covered ? c.ok("✓ automated") : c.muted("—")}`);
         }
         if (r.adoption.length > 0) {
           log(c.dim("\nadoption:"));
@@ -420,7 +456,7 @@ export async function main(
               : "";
             log(
               `  ${c.bold(artifact.name)}  ` +
-              c.dim(`${artifact.uses} use(s) · last ${lastUsed} · ${artifact.retypesCaught} retype(s) caught`) +
+              c.dim(`${artifact.uses} use(s) · ≈${artifact.realizedMinutesSaved}m saved · last ${lastUsed} · ${artifact.retypesCaught} retype(s) caught`) +
               removal,
             );
           }
@@ -436,9 +472,20 @@ export async function main(
         log(`  ${c.bold("prompts")} ${metrics.prompts}   ${c.bold("nudges")} ${metrics.nudges}   ${c.bold("interrupts")} ${metrics.interrupts}`);
         log(`  ${c.bold("context deaths")} ${metrics.continuations}   ${c.bold("compacts")} ${metrics.compacts}   ${c.bold("error pastes")} ${metrics.errorPastes}`);
         log(`  ${c.bold("model switches")} ${metrics.modelSwitches}   ${c.bold("effort switches")} ${metrics.effortSwitches}`);
+        log(
+          `  ${c.bold("in-session failure loops")} ${report.toolActivity.failureLoops}   ` +
+          `${c.bold("post-edit rituals")} ${report.toolActivity.postEditRituals}`,
+        );
         if ((report.costs ?? []).length > 0) {
           log(`\n${c.bold("cost of unautomated habits")}`);
           for (const cost of report.costs ?? []) log(`  ${c.violet("→")} ${cost.line}`);
+        }
+        if (report.instructionEffectiveness?.length) {
+          log(`\n${c.bold("Instruction effectiveness")}`);
+          for (const tally of report.instructionEffectiveness) {
+            log(`  ${c.violet("→")} ${instructionEffectivenessLine(tally)}`);
+          }
+          log(`  ${c.violet("→")} these instructions aren't holding — run gradient review to convert them`);
         }
         log("");
         for (const recommendation of report.recommendations) log(`  ${c.violet("→")} ${recommendation.line}`);
@@ -609,9 +656,4 @@ async function readStdinJson(): Promise<Record<string, unknown>> {
   } catch {
     return {};
   }
-}
-
-// Entry point when run as a binary.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2)).then((code) => process.exit(code));
 }

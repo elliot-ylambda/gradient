@@ -1,5 +1,8 @@
 # gradient v2 Phase B — Recall & Adoption Loop — Implementation Plan
 
+**Status:** Complete. Unchecked boxes below preserve the original test-first
+execution recipe.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A `UserPromptSubmit` hook (`gradient recall`) that matches typed prompts against installed artifacts (gradient-generated **and** hand-written) and injects a one-line hint, plus adoption tracking in `gradient stats` (uses, last-used, retypes caught, unused-artifact nudges). Spec: `docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md` §4.

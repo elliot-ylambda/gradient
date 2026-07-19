@@ -18,7 +18,6 @@ const u = (text: string): Turn => ({
 describe("isInjected", () => {
   it("flags skill-loader and hook scaffolding", () => {
     expect(isInjected("Base directory for this skill: /x")).toBe(true);
-    expect(isInjected("<command-name>/compact</command-name>")).toBe(true);
     expect(isInjected("<system-reminder>do x</system-reminder>")).toBe(true);
     expect(isInjected("Caveat: The messages below were generated")).toBe(true);
     expect(isInjected("[Request interrupted by user]")).toBe(true);
@@ -28,6 +27,13 @@ describe("isInjected", () => {
   });
   it("keeps genuine prompts", () => {
     expect(isInjected("push and create a pull request")).toBe(false);
+  });
+  it("no longer flags command-tag turns here — parseTranscript routes them to events before filter runs", () => {
+    expect(isInjected("<command-name>/compact</command-name>")).toBe(false);
+  });
+  it("keeps command message/args wrapper fragments out as a defensive fallback", () => {
+    expect(isInjected("<command-message>compact</command-message>")).toBe(true);
+    expect(isInjected("<command-args>--force</command-args>")).toBe(true);
   });
   it("keeps genuine prompts that start with a non-injected tag (JSX/HTML/XML)", () => {
     expect(isInjected("<div>why is this broken?</div>")).toBe(false);
@@ -59,6 +65,13 @@ describe("isInjected", () => {
   it("drops prompts that are only pasted-image placeholders", () => {
     expect(isInjected("[Image: source: /users/x/.claude/image-cache/abc/1.png]")).toBe(true);
     expect(isInjected("[Image #1: source: /tmp/a.png] [Image #2: source: /tmp/b.png]")).toBe(true);
+  });
+  it("handles long or malformed image-placeholder sequences in linear time", () => {
+    const valid = Array.from({ length: 5_000 }, (_, index) =>
+      `[Image #${index}: source: /tmp/${index}.png]`).join(" ");
+    const malformed = `[Image #${"00][Image #".repeat(5_000)}`;
+    expect(isInjected(valid)).toBe(true);
+    expect(isInjected(malformed)).toBe(false);
   });
   it("keeps prompts that add intent to a pasted image", () => {
     expect(isInjected("[Image: source: /tmp/shot.png] why is the footer broken here?")).toBe(false);
@@ -113,7 +126,6 @@ describe("classifyPrompt", () => {
     expect(classifyPrompt("fix the login bug")).toBe("human");
   });
   it("keeps existing injected patterns as injected", () => {
-    expect(classifyPrompt("<command-name>/compact</command-name>")).toBe("injected");
     expect(classifyPrompt("Caveat: The messages below were generated")).toBe("injected");
   });
   it("classifies continuation summaries", () => {
@@ -129,8 +141,11 @@ describe("classifyPrompt", () => {
   it("compileIgnorePatterns skips invalid regexes", () => {
     expect(compileIgnorePatterns(["[unclosed", "^ok$"])).toHaveLength(1);
   });
-  it("rejects backtracking-prone user regexes and caps their count", () => {
-    expect(compileIgnorePatterns(["^(a+)+$", "(?:a|aa)+$", "^safe.*prefix$"])).toHaveLength(1);
+  it("rejects backtracking-capable regex syntax and caps pattern count", () => {
+    // These examples are themselves linear. They exercise the same forbidden
+    // grouping, alternation, and general-quantifier syntax without checking a
+    // deliberately catastrophic expression into the test suite.
+    expect(compileIgnorePatterns(["^a+$", "^(?:a|b)$", "^safe.*prefix$"])).toHaveLength(1);
     expect(compileIgnorePatterns(Array.from({ length: 30 }, (_, i) => `^safe-${i}$`))).toHaveLength(20);
   });
 });
@@ -148,7 +163,7 @@ describe("classifyPrompts / filterPrompts", () => {
 
 const cand = (over: Partial<Candidate>): Candidate => ({
   kind: "unknown", signature: "x".repeat(300), examples: [], count: 30,
-  sessions: 30, sessionIds: [], confidence: "high", ...over,
+  sessions: 30, sessionIds: [], occurrences: [], memberSignatures: [], confidence: "high", ...over,
 });
 
 describe("isTemplateFlood", () => {

@@ -8,7 +8,12 @@ import { validateSuggestion } from "./validate.js";
 
 const chain = (over: Partial<ChainFinding> = {}): ChainFinding => ({
   steps: ["run the tests", "run make build"], count: 4, sessions: 3,
-  sessionIds: ["s1", "s2", "s3"], examples: [], ...over,
+  sessionIds: ["s1", "s2", "s3"],
+  occurrences: [
+    { ts: "2026-07-01T00:00:00Z", sessionId: "s1" },
+    { ts: "2026-07-08T00:00:00Z", sessionId: "s2" },
+  ],
+  examples: [], ...over,
 });
 
 const assistants = new Map([["s1", "claude-code"], ["s2", "codex"], ["s3", "claude-code"]] as const);
@@ -21,11 +26,22 @@ describe("chainWorkflowSuggestion", () => {
     expect(s!.payload).toMatchObject({ type: "project-playbook", section: "workflows" });
     expect((s!.payload as { text: string }).text).toContain('After "run the tests"');
     expect(s!.evidence.assistants).toEqual(["claude-code", "codex"]);
+    expect(s!.evidence.estMinutesSavedPerMonth).toBeGreaterThanOrEqual(0);
+    expect(s!.sourceSignatures).toEqual(["run make build", "run the tests"]);
   });
 
   it("returns null below the evidence thresholds", () => {
     expect(chainWorkflowSuggestion(chain({ count: 2 }), assistants)).toBeNull();
     expect(chainWorkflowSuggestion(chain({ sessions: 1, sessionIds: ["s1"] }), assistants)).toBeNull();
+  });
+
+  it("redacts source signatures and payload text before validation", () => {
+    const s = chainWorkflowSuggestion(chain({
+      steps: ["use api_key=supersecret123", "run make build"],
+    }), assistants);
+    expect(s?.sourceSignatures).toContain("use [REDACTED]");
+    expect((s?.payload as { text: string }).text).not.toContain("supersecret123");
+    expect(() => validateSuggestion(s)).not.toThrow();
   });
 });
 

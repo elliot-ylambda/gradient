@@ -14,6 +14,7 @@ export interface ChainFinding {
   count: number;
   sessions: number;
   sessionIds: string[];
+  occurrences: { ts: string; sessionId: string }[];
   examples: string[][];   // ≤3 raw prompt tuples, one prompt per step
 }
 
@@ -21,6 +22,7 @@ interface NgramStat {
   steps: string[];
   count: number;
   sessions: Set<string>;
+  occurrences: { ts: string; sessionId: string }[];
   examples: string[][];
 }
 
@@ -40,14 +42,14 @@ export function mineSequences(
   let capped = false;
   for (const [sid, arr] of bySession) {
     arr.sort((a, b) => a.ts.localeCompare(b.ts));
-    let segment: Array<{ sig: string; text: string }> = [];
+    let segment: Array<{ sig: string; text: string; ts: string }> = [];
     for (const t of arr) {
       const text = t.text!;
       if (NUDGE_PROMPT_RE.test(text.trim())) continue;      // transparent (spec Decision 2)
       const sig = assign(text);
       if (sig === null) { segment = []; continue; }          // unclustered → chain breaker
       if (segment.at(-1)?.sig === sig) continue;              // A→A is not a workflow edge
-      segment.push({ sig, text: text.slice(0, 2_000) });
+      segment.push({ sig, text: text.slice(0, 2_000), ts: t.ts });
       if (segment.length > 3) segment = segment.slice(-3);
 
       for (const size of [2, 3]) {
@@ -58,11 +60,12 @@ export function mineSequences(
         let stat = ngrams.get(key);
         if (!stat) {
           if (ngrams.size >= SEQ_MAX_BIGRAMS) { capped = true; continue; }
-          stat = { steps, count: 0, sessions: new Set(), examples: [] };
+          stat = { steps, count: 0, sessions: new Set(), occurrences: [], examples: [] };
           ngrams.set(key, stat);
         }
         stat.count++;
         stat.sessions.add(sid);
+        stat.occurrences.push({ ts: occurrence[occurrence.length - 1].ts, sessionId: sid });
         if (stat.examples.length < 3) stat.examples.push(occurrence.map(item => item.text));
       }
     }
@@ -83,7 +86,8 @@ export function mineSequences(
     steps: stat.steps,
     count: stat.count,
     sessions: stat.sessions.size,
-    sessionIds: [...stat.sessions],
+    sessionIds: [...stat.sessions].sort(),
+    occurrences: stat.occurrences,
     examples: stat.examples,
   }));
   return { chains: chains.sort((a, b) => b.count - a.count || b.steps.length - a.steps.length), capped };

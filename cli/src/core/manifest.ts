@@ -83,14 +83,22 @@ function validateEntry(projectDir: string, value: unknown, index: number): Manif
   }
   if (entry.hook !== undefined) {
     const hook = entry.hook as Record<string, unknown>;
-    // A forged hook record must never be able to un-merge someone else's
-    // settings entry: only gradient-owned commands are removable.
+    let matcherIsValid = hook?.matcher === undefined;
+    if (typeof hook?.matcher === "string" && hook.matcher.length <= 500 &&
+      !/[\r\n\t]/.test(hook.matcher) && stripUnsafeControls(hook.matcher) === hook.matcher) {
+      try {
+        new RegExp(hook.matcher);
+        matcherIsValid = true;
+      } catch {
+        matcherIsValid = false;
+      }
+    }
     if (
       entry.type !== "hook" || !hook || typeof hook !== "object" || Array.isArray(hook) ||
       typeof hook.event !== "string" || !/^[A-Za-z]{1,50}$/.test(hook.event) ||
-      typeof hook.command !== "string" || hook.command.length > 200 ||
-      !hook.command.startsWith("gradient ") ||
-      stripUnsafeControls(hook.command) !== hook.command
+      typeof hook.command !== "string" || hook.command.trim().length === 0 || hook.command.length > 200 ||
+      /[\r\n]/.test(hook.command) || stripUnsafeControls(hook.command) !== hook.command ||
+      !matcherIsValid
     ) {
       throw new Error(`manifest entry ${index} has an invalid hook record`);
     }

@@ -7,7 +7,7 @@ import {
   buildCostRows,
   renderInsightsHtml,
 } from "./insights.js";
-import type { Turn } from "./types.js";
+import type { CommandEvent, Turn } from "./types.js";
 import { saveState, stateDir } from "./state.js";
 import { mkdtemp, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -33,20 +33,25 @@ describe("isNudgeText", () => {
   );
 });
 
+const event = (command: string): CommandEvent => ({
+  ts: "2026-07-01T00:00:00Z",
+  project: "p",
+  sessionId: "s",
+  command,
+});
+
 describe("computeMetrics", () => {
-  it("counts each metric from a mixed transcript", () => {
+  it("counts each metric from a mixed transcript, command events supplied separately", () => {
     const turns = [
       t("continue"),
       t("fix the login bug"),
       t("[Request interrupted by user]"),
       t("This session is being continued from a previous conversation."),
-      t("<command-name>/compact</command-name>"),
-      t("<command-name>/model</command-name> opus"),
-      t("<command-name>/effort</command-name>"),
       t("<task-notification>x</task-notification>"),
       t(`make dev\n${"error: boom\n".repeat(40)}`),
     ];
-    expect(computeMetrics(turns)).toEqual({
+    const events = [event("/compact"), event("/model"), event("/effort")];
+    expect(computeMetrics(turns, events)).toEqual({
       prompts: 3,
       nudges: 1,
       interrupts: 1,
@@ -60,7 +65,7 @@ describe("computeMetrics", () => {
   });
 
   it("honors configured injected-prompt patterns", () => {
-    expect(computeMetrics([t("site injector: continue")], [/^site injector:/i]).prompts).toBe(0);
+    expect(computeMetrics([t("site injector: continue")], [], [/^site injector:/i]).prompts).toBe(0);
   });
 });
 
@@ -170,6 +175,7 @@ describe("renderInsightsHtml", () => {
     },
     recommendations: [{ metric: "nudges", line: "try <gradient autopilot nudge> & friends" }],
     costs: [{ metric: "nudges" as const, tokens: 123, prompts: 3, line: "≈123 tokens · 3 nudges" }],
+    toolActivity: { failureLoops: 2, postEditRituals: 1 },
   };
 
   it("is self-contained and escapes dynamic content", () => {
@@ -181,5 +187,7 @@ describe("renderInsightsHtml", () => {
     expect(html).toContain("project scope");
     expect(html).toContain("cost of unautomated habits");
     expect(html).toContain("≈123 tokens");
+    expect(html).toContain("in-session failure loops");
+    expect(html).toContain("post-edit rituals");
   });
 });

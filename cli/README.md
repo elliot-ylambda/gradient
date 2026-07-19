@@ -3,13 +3,14 @@
 The local-first `gradient` command-line tool.
 
 ```bash
-npx gradient.md init --target both # configure Claude Code + Codex (existing CLI auth)
-npx gradient.md scan      # mine bounded prompt, paste, answer, and sequence candidates
-npx gradient.md review    # approve the ones you want; gradient writes the artifacts
+npx gradient.md init --target both --session-scan # configure + surface one suggestion next session
+npx gradient.md           # interactive mirror of the top pending suggestions
+npx gradient.md scan      # mine bounded prompt and tool-activity candidates
+npx gradient.md review    # approve, explain, or persistently dismiss suggestions
 npx gradient.md list      # see what it generated · npx gradient.md remove <name> to undo
 npx gradient.md migrate   # convert older generated commands into skills
 npx gradient.md recall on # hint when prompts match installed artifacts
-npx gradient.md stats     # coverage and artifact adoption
+npx gradient.md stats     # estimated leverage and realized minutes saved
 npx gradient.md insights  # local behavior report and recommended actions
 npx gradient.md continuity on # preserve context across compact/resume
 npx gradient.md bundle team-kit # package approved artifacts as a plugin
@@ -18,24 +19,38 @@ npx gradient.md bundle team-kit # package approved artifacts as a plugin
 ## How it works
 
 1. Reads enabled local histories: Claude Code (`~/.claude/projects/**/*.jsonl`)
-   and Codex (`~/.codex/sessions/**/*.jsonl`). Spawned subagent logs are excluded.
+   and Codex (`~/.codex/sessions/**/*.jsonl`). Spawned subagent logs are
+   excluded. The Claude pass also pairs Bash calls with their results and notes
+   Edit/Write/NotebookEdit events using bounded reads.
 2. Clusters repeated prompts, failing-command pastes, recurring sequences, and
-   conservative low-impact Q→A preferences locally (no LLM). Pasted bodies and
-   command arguments are discarded; cross-project scans skip Q→A rules. It
-   also measures long Claude question→answer waits with bounded local reads.
+   conservative low-impact Q→A preferences locally (no LLM). It separately
+   detects commands that fail across sessions and commands repeatedly run after
+   edits. Project scans also audit `CLAUDE.md`, `CLAUDE.local.md`, and
+   `.claude/rules/*.md` read-only for instructions you keep restating or
+   correcting after assistant activity. Tool candidates retain only bounded
+   command heads and redacted first error lines—never successful output or file
+   contents. Pasted bodies and command arguments are discarded; cross-project
+   scans skip Q→A rules. It also measures long Claude question→answer waits with
+   bounded local reads.
 3. Sends only the top candidates to an LLM (`claude` by default, isolated
    `codex exec --ephemeral` for a Codex-only target, with an Anthropic API-key
    fallback) to name and type them.
-4. You inspect the exact rendered artifact and approve; it writes
+4. You inspect the exact rendered artifact and approve, explain, or dismiss it;
+   skips persist in the human-editable `.gradient/dismissed.json` and resurface
+   only when a later scan adds genuinely new source evidence. Approval writes
    `.claude/skills/<name>/SKILL.md`, portable Codex skills under
    `.agents/skills/<name>/SKILL.md`, and project rules under `.claude/rules/`,
-   prints `/loop` instructions, or proposes local hook settings
-   that call allowlisted `gradient` subcommands.
+   prints `/loop` instructions, or installs explicitly reviewed local hook
+   settings that call allowlisted `gradient` subcommands.
 
 Paste and sequence findings are advisory: prior behavior is never treated as
 authorization to rerun a command or execute later workflow steps. Preference
 rules require repeated support across sessions, are limited to low-impact
 format/style/tool choices, and preserve confirmation for consequential actions.
+Recurring failures remain advisory rules or skills. A detected post-edit ritual
+can become a `PostToolUse` hook only after `review` shows the exact command and
+the user approves its automatic execution. Set `"mineToolEvents": false` in
+`~/.config/gradient/config.json` to disable tool-event extraction entirely.
 
 Skills are the default because Claude Code can invoke them from their mined
 trigger descriptions. Set `emitTarget` to `"command"` in the gradient config
@@ -44,17 +59,31 @@ conversion of manifest-tracked commands; `gradient migrate` performs it without
 touching hand-written files. Commands created before the hardened private
 approval ledger are skipped; re-scan, review, and apply those workflows first.
 
+Starting in 0.6, suggestion ids derive from source evidence instead of an
+LLM-chosen name. After upgrading, run `gradient scan` and `gradient review`. If
+an already-applied artifact appears again, re-apply the reviewed suggestion and
+remove the old manifest entry with `gradient remove <name>`. Gradient never
+rewrites or deletes existing artifacts as part of this migration.
+
 Configure `"targets": ["claude-code", "codex"]` to fan approved skills out to
 both assistants. The default remains `["claude-code"]`. Mechanical Claude Code
 skills use `"cheapSkillModel": "haiku"` by default; set it to `""` to disable
 model frontmatter. Codex output stays portable and contains only the Agent
 Skills `name` and `description` metadata.
 
+`gradient init --session-scan` installs a fail-open `SessionStart` hook. It
+prints at most one high-leverage cached suggestion, then launches a detached
+bounded scan; startup never waits on the scan. Interactive bare `gradient`
+shows up to three pending suggestions from a fresh cache (and rescans recent
+user-scope history when the cache is stale). Explicit `gradient help` and
+non-interactive bare invocations remain script-safe help output.
+
 `gradient recall on` installs an LLM-free `UserPromptSubmit` hook in
 `.claude/settings.local.json`. Its private user-cache index covers project and
 user-level commands and skills; its adoption log stores
 only artifact names and match scores, never prompt text. `gradient stats` shows
-uses, last use, retypes caught, and stale-artifact removal suggestions.
+uses, realized minutes saved, last use, retypes caught, and stale-artifact
+removal suggestions.
 
 `scan` writes a private per-project user cache, but it does not install Claude
 artifacts or update the autopilot playbook. Approved artifacts are tracked in

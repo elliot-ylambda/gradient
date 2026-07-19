@@ -94,6 +94,9 @@ function validateConfig(value: unknown): Config {
   if (config.scanOnSessionStart !== undefined && typeof config.scanOnSessionStart !== "boolean") {
     throw new Error("config scanOnSessionStart must be a boolean");
   }
+  if (config.mineToolEvents !== undefined && typeof config.mineToolEvents !== "boolean") {
+    throw new Error("config mineToolEvents must be a boolean");
+  }
   if (config.autopilot !== undefined && !AUTOPILOT_MODES.has(config.autopilot)) {
     throw new Error("config autopilot must be off, nudge, or full");
   }

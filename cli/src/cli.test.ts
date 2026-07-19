@@ -14,8 +14,14 @@ import { bundleCommand } from "./commands/bundle.js";
 import { notify } from "./commands/notify.js";
 import { saveSuggestions } from "./commands/apply.js";
 import { clarifiedWorkflowBody } from "./core/detect.js";
+import { scan } from "./commands/scan.js";
+import { sessionStart } from "./commands/sessionStart.js";
+import { mirror } from "./commands/mirror.js";
 
+vi.mock("./commands/scan.js", () => ({ scan: vi.fn(async () => []) }));
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
+vi.mock("./commands/sessionStart.js", () => ({ sessionStart: vi.fn(async () => {}) }));
+vi.mock("./commands/mirror.js", () => ({ mirror: vi.fn(async () => {}) }));
 vi.mock("./commands/migrate.js", () => ({
   migrate: vi.fn(async () => ({ migrated: ["ship"], skipped: ["ghost"] })),
 }));
@@ -38,6 +44,7 @@ vi.mock("./commands/stats.js", () => ({
       uses: 0,
       lastUsed: undefined,
       retypesCaught: 0,
+      realizedMinutesSaved: 0,
       suggestRemoval: true,
     }],
   })),
@@ -57,8 +64,17 @@ vi.mock("./commands/insights.js", () => ({
       effortSwitches: 2,
       errorPastes: 5,
     },
+    toolActivity: { failureLoops: 2, postEditRituals: 1 },
     recommendations: [{ metric: "nudges", line: "try: gradient autopilot nudge" }],
     costs: [{ metric: "nudges", tokens: 120, prompts: 11, line: "≈120 tokens · 11 nudge prompts" }],
+    instructionEffectiveness: [{
+      file: "CLAUDE.md",
+      source: "project",
+      text: "Always use pnpm",
+      restatements: 3,
+      violations: 1,
+      lastSeen: "2026-07-01T00:00:00Z",
+    }],
   })),
   writeInsightsHtml: vi.fn(async () => "/repo/.gradient/insights.html"),
 }));
@@ -167,11 +183,27 @@ describe("--version / --help", () => {
 });
 
 describe("main", () => {
-  it("returns 0 and prints help for no command", async () => {
+  it("returns 0 and prints help for a non-interactive bare invocation", async () => {
     const logs: string[] = [];
-    const code = await main([], { log: (m) => logs.push(m) });
+    const code = await main([], { isTTY: false, log: (m) => logs.push(m) });
     expect(code).toBe(0);
-    expect(logs.join("\n")).toContain("gradient");
+    expect(logs.join("\n")).toContain("Usage:");
+  });
+
+  it("runs the mirror for an interactive bare invocation", async () => {
+    vi.mocked(mirror).mockClear();
+    expect(await main([], { isTTY: true, home: "/home", log: () => {} })).toBe(0);
+    expect(vi.mocked(mirror)).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      home: "/home", write: expect.any(Function),
+    }));
+  });
+
+  it("explicit help always prints usage even on an interactive terminal", async () => {
+    vi.mocked(mirror).mockClear();
+    const logs: string[] = [];
+    expect(await main(["help"], { isTTY: true, log: line => logs.push(line) })).toBe(0);
+    expect(logs.join("\n")).toContain("Usage:");
+    expect(vi.mocked(mirror)).not.toHaveBeenCalled();
   });
 
   it("renders clarification options and the chosen provenance in explain", async () => {
@@ -182,7 +214,18 @@ describe("main", () => {
       name: "lgtm",
       title: "LGTM approval",
       rationale: "Ambiguous intent",
-      evidence: { count: 5, sessions: 3 },
+      evidence: {
+        count: 5,
+        sessions: 3,
+        estMinutesSavedPerMonth: 17,
+        temporal: {
+          maxRunLength: 4,
+          runSessions: 2,
+          medianGapMinutes: 30,
+          distinctDays: 5,
+          spanDays: 7,
+        },
+      },
       confidence: "high",
       payload: {
         type: "command",
@@ -210,6 +253,9 @@ describe("main", () => {
     expect(output).toContain("clarify: Acknowledge or merge?");
     expect(output).toContain("✓ Approve and merge");
     expect(output).toContain("· Acknowledge only");
+    expect(output).toContain("estimated ≈17m/month");
+    expect(output).toContain("temporal: longest run 4");
+    expect(output).toContain("5 active day(s) across 7 day(s)");
   });
 
   it("returns 2 for an unknown command", async () => {
@@ -228,7 +274,7 @@ describe("main", () => {
 
   it("lists migrate in help and dispatches dry runs", async () => {
     const help: string[] = [];
-    await main([], { log: message => help.push(message) });
+    await main(["help"], { log: message => help.push(message) });
     expect(help.join("\n")).toContain("gradient migrate [--dry-run]");
 
     vi.mocked(migrate).mockClear();
@@ -250,12 +296,49 @@ describe("main", () => {
     expect(forwardedArgs).toContain("scan");
     expect(forwardedArgs).toContain("--all");
   });
+
+  it("dispatches the session-start hook target with fail-open dependencies", async () => {
+    vi.mocked(sessionStart).mockClear();
+    const logs: string[] = [];
+    expect(await main(["session-start"], { home: "/home", log: line => logs.push(line) })).toBe(0);
+    expect(vi.mocked(sessionStart)).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      home: "/home",
+      write: expect.any(Function),
+      spawnDetachedFn: spawnDetached,
+    }));
+  });
+
+  it("shows an estimated minutes-saved-per-month next to each scan suggestion when known", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-cli-home-"));
+    vi.mocked(scan).mockResolvedValueOnce([{
+      id: "a", name: "ship", title: "Ship things", rationale: "r", confidence: "high",
+      evidence: { count: 5, sessions: 3, estMinutesSavedPerMonth: 20 },
+      payload: { type: "command", commandName: "ship", body: "b" },
+    }]);
+    const logs: string[] = [];
+    const code = await main(["scan", "--no-review"], { home, log: m => logs.push(m) });
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("≈20m/mo");
+  });
+
+  it("omits the minutes-saved suffix for a suggestion cached before the estimate existed", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-cli-home-"));
+    vi.mocked(scan).mockResolvedValueOnce([{
+      id: "a", name: "ship", title: "Ship things", rationale: "r", confidence: "high",
+      evidence: { count: 5, sessions: 3 },
+      payload: { type: "command", commandName: "ship", body: "b" },
+    }]);
+    const logs: string[] = [];
+    const code = await main(["scan", "--no-review"], { home, log: m => logs.push(m) });
+    expect(code).toBe(0);
+    expect(logs.join("\n")).not.toContain("m/mo");
+  });
 });
 
 describe("autopilot dispatch", () => {
   it("help text lists autopilot", async () => {
     const lines: string[] = [];
-    await main([], { log: s => lines.push(s) });
+    await main(["help"], { log: s => lines.push(s) });
     expect(lines.join("\n")).toContain("gradient autopilot <off|nudge>");
   });
 
@@ -281,7 +364,7 @@ describe("respond dispatch", () => {
 describe("notify dispatch", () => {
   it("lists the hook target, drains stdin, stays silent, and exits zero", async () => {
     const help: string[] = [];
-    await main([], { log: line => help.push(line) });
+    await main(["help"], { log: line => help.push(line) });
     expect(help.join("\n")).toContain("gradient notify");
 
     vi.mocked(notify).mockClear();
@@ -304,7 +387,7 @@ describe("notify dispatch", () => {
 describe("recall dispatch", () => {
   it("lists the recall manager in help", async () => {
     const lines: string[] = [];
-    await main([], { log: line => lines.push(line) });
+    await main(["help"], { log: line => lines.push(line) });
     expect(lines.join("\n")).toContain("gradient recall <on|off|status>");
   });
 
@@ -359,7 +442,7 @@ describe("stats adoption rendering", () => {
     expect(await main(["stats"], { log: line => lines.push(line) })).toBe(0);
     const output = lines.join("\n");
     expect(output).toContain("adoption:");
-    expect(output).toContain("0 use(s) · last never · 0 retype(s) caught");
+    expect(output).toContain("0 use(s) · ≈0m saved · last never · 0 retype(s) caught");
     expect(output).toContain("gradient remove dead");
   });
 });
@@ -367,7 +450,7 @@ describe("stats adoption rendering", () => {
 describe("insights dispatch", () => {
   it("lists and renders the local behavior report", async () => {
     const help: string[] = [];
-    await main([], { log: line => help.push(line) });
+    await main(["help"], { log: line => help.push(line) });
     expect(help.join("\n")).toContain("gradient insights [--user] [--html]");
 
     vi.mocked(insights).mockClear();
@@ -376,6 +459,10 @@ describe("insights dispatch", () => {
     expect(vi.mocked(insights)).toHaveBeenCalledWith({ projectDir: expect.any(String), user: true });
     expect(lines.join("\n")).toContain("prompts");
     expect(lines.join("\n")).toContain("gradient autopilot nudge");
+    expect(lines.join("\n")).toContain("Instruction effectiveness");
+    expect(lines.join("\n")).toContain("Always use pnpm");
+    expect(lines.join("\n")).toContain("in-session failure loops");
+    expect(lines.join("\n")).toContain("post-edit rituals");
   });
 
   it("writes and reports the self-contained HTML view when requested", async () => {
@@ -390,7 +477,7 @@ describe("insights dispatch", () => {
 describe("continuity dispatch", () => {
   it("lists the manager and dispatches on, off, and status", async () => {
     const help: string[] = [];
-    await main([], { log: line => help.push(line) });
+    await main(["help"], { log: line => help.push(line) });
     expect(help.join("\n")).toContain("gradient continuity <on|off|status>");
 
     vi.mocked(setContinuity).mockClear();
@@ -426,7 +513,7 @@ describe("bundle dispatch", () => {
     expect(missing.join("\n")).toContain("bundle needs a name");
 
     const help: string[] = [];
-    await main([], { log: line => help.push(line) });
+    await main(["help"], { log: line => help.push(line) });
     expect(help.join("\n")).toContain("gradient bundle <name>");
   });
 

@@ -30,6 +30,8 @@ describe("plugin manifest", () => {
 describe("marketplace", () => {
   it("points at ./plugin", () => {
     const m = JSON.parse(readFileSync(join(repoRoot, ".claude-plugin", "marketplace.json"), "utf8"));
+    expect(typeof m.description).toBe("string");
+    expect(m.description.length).toBeGreaterThan(0);
     expect(m.plugins?.[0]?.source).toBe("./plugin");
     expect(m.plugins?.[0]?.name).toBe("gradient");
   });
@@ -48,6 +50,12 @@ describe("plugin bundle", () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain(VERSION);   // banner includes the version
     expect(r.stdout).toContain("gradient scan");  // HELP text
+  });
+  it("uses the lightweight binary dispatcher as its entrypoint", () => {
+    const bundle = readFileSync(join(pluginDir, "bin", "gradient.mjs"), "utf8");
+    expect(bundle).toContain("// src/bin.ts");
+    expect(bundle).toContain("async function runBinary(");
+    expect(bundle).toContain("if (isEntrypoint(import.meta.url, process.argv[1]))");
   });
 });
 
@@ -80,5 +88,15 @@ describe("plugin skills", () => {
     for (const s of ["scan", "review", "stats"]) {
       expect(frontmatter(s)["disable-model-invocation"]).toBeUndefined();
     }
+  });
+  it("includes the shipped insights report in the stats skill", () => {
+    const body = readFileSync(join(pluginDir, "skills", "stats", "SKILL.md"), "utf8");
+    expect(body).toContain('gradient.mjs" stats');
+    expect(body).toContain('gradient.mjs" insights');
+  });
+  it("describes reviewed hooks as installed settings, not printed patches", () => {
+    const body = readFileSync(join(pluginDir, "skills", "review", "SKILL.md"), "utf8");
+    expect(body).toContain("local settings path");
+    expect(body).not.toContain("hook patches");
   });
 });

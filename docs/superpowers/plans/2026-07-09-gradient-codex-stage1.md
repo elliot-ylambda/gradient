@@ -1,5 +1,8 @@
 # gradient — Codex Target Stage 1 & Cheap-Model Skills — Implementation Plan
 
+**Status:** Complete. Unchecked boxes below preserve the original test-first
+execution recipe.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** `apply` fans skill artifacts out to every configured assistant (`targets: ["claude-code", "codex"]`), tracked per-target in the manifest and cleanly removable; mechanical skills carry a cheap-model frontmatter the reviewer sees before approving. Spec: `docs/superpowers/specs/2026-07-09-gradient-codex-and-cost-design.md` (Component 1 **Stage 1** + Component 2's mechanical-skill flag).

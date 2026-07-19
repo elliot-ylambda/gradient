@@ -1,7 +1,7 @@
 CLI := cli
 PKG := gradient.md
 
-.PHONY: test build publish-dry publish
+.PHONY: test build publish-dry publish release-check
 
 test:
 	cd $(CLI) && npm test
@@ -12,6 +12,11 @@ build:
 # Preview exactly what `make publish` would ship (tarball contents, version).
 publish-dry:
 	cd $(CLI) && npm publish --dry-run
+
+# Verify the already-published version is aligned across npm, GitHub Releases,
+# and the deployed marketing site. Run after completing every release.
+release-check:
+	node scripts/check-release-state.mjs
 
 # Publish cli/ to npm as gradient.md. prepublishOnly already runs
 # test + build + smoke:bin, so a red suite aborts the publish.

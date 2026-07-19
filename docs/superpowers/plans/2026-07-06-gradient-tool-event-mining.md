@@ -1,10 +1,13 @@
 # gradient — Tool-Event Mining — Implementation Plan
 
+**Status:** Complete (2026-07-18). Tasks T1–T6 are implemented and verified;
+the unchecked step boxes below are retained as the original test-first recipe.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Mine the assistant's half of the transcript — recurring in-session command failures ("failure loops") and commands repeatedly run after file edits ("post-edit rituals") — and route them through the existing suggestion funnel, including installable `PostToolUse` command hooks. Spec: `docs/superpowers/specs/2026-07-06-gradient-tool-event-mining-design.md`.
 
-**Architecture:** `parse.ts` gains an opt-in `parseToolEventsFile` pass (tool_use/tool_result pairing, per-session caps). New `core/toolmine.ts` turns events into `Candidate`s (`kind: "toolfail" | "ritual"`) that bypass trigram clustering and join the detect window (capped at ⌈window/3⌉, drops logged). The `hook` payload generalizes to carry either the existing gradient `subcommand` or a mined verbatim `command` + `matcher`; command hooks install via a matcher-aware `installHook` on apply and uninstall via `remove` (manifest-tracked) — subcommand hooks keep their print-only behavior.
+**Architecture:** `parse.ts` gains an opt-in `parseToolEventsFile` pass (tool_use/tool_result pairing, per-session caps). New `core/toolmine.ts` turns events into `Candidate`s (`kind: "toolfail" | "ritual"`) that bypass trigram clustering and join the detect window (capped at ⌈window/3⌉, drops logged). The `hook` payload generalizes to carry either the existing gradient `subcommand` or a mined verbatim `command` + `matcher`; reviewed hooks install via a matcher-aware `installHook` on apply and uninstall exactly via `remove` (manifest- and private-approval-tracked).
 
 **Tech Stack:** TypeScript (ESM, `.js` import suffixes), Node ≥ 20, vitest, zero new runtime dependencies. All work in `cli/`.
 

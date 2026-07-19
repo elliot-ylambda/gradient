@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import type { Assistant, Suggestion } from "./types.js";
 import type { ChainFinding } from "./sequence.js";
-import { sanitizeName } from "./security.js";
+import { redact, sanitizeName } from "./security.js";
 import { isNudge } from "./playbook.js";
+import { estMinutesSavedPerMonth, meanLength } from "./leverage.js";
+import { spanDays } from "./temporal.js";
 
 /** Evidence floor for suggesting anything into the committed file: strong,
  * repeated, multi-session repo-local habit — not a one-off. */
@@ -20,7 +22,17 @@ function suggestionId(seed: string): string {
 }
 
 function oneLine(text: string): string {
-  return text.replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, 480);
+  return redact(text)
+    .replaceAll("<!--", "[comment removed]")
+    .replaceAll("-->", "[comment removed]")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/ {2,}/g, " ")
+    .trim()
+    .slice(0, 480);
+}
+
+function safeSourceSignatures(values: string[]): string[] {
+  return [...new Set(values.map(oneLine).filter(Boolean))].sort().slice(0, 100);
 }
 
 export function chainWorkflowSuggestion(
@@ -33,16 +45,29 @@ export function chainWorkflowSuggestion(
   const text = oneLine(
     `After "${first}", the typical next step is "${second}"${third ? ` then "${third}"` : ""}.`,
   );
-  const pooled = [...new Set(chain.sessionIds.map(id => assistantBySession.get(id) ?? "claude-code"))];
+  const pooled = [...new Set(chain.sessionIds.map(id => assistantBySession.get(id) ?? "claude-code"))]
+    .sort((a, b) => a === b ? 0 : a === "claude-code" ? -1 : 1);
+  const sourceSignatures = safeSourceSignatures(chain.steps);
   return {
-    id: suggestionId(`workflow:${chain.steps.join("→")}`),
+    id: suggestionId(`workflow:${sourceSignatures.join("→")}`),
     name: sanitizeName(`pb-after-${first}`),
     title: `Repo workflow: ${first} → ${second}`.slice(0, 200),
     rationale:
       `This sequence recurs in this repo (${chain.count}× across ${chain.sessions} sessions); ` +
       "committing it lets every approving teammate's judge know the typical next step.",
-    evidence: { count: chain.count, sessions: chain.sessions, assistants: pooled },
+    evidence: {
+      count: chain.count,
+      sessions: chain.sessions,
+      assistants: pooled,
+      estMinutesSavedPerMonth: estMinutesSavedPerMonth({
+        count: chain.count,
+        chars: meanLength(sourceSignatures),
+        spanDays: spanDays(chain.occurrences),
+        kind: "command",
+      }),
+    },
     confidence: "inferred",
+    sourceSignatures,
     payload: { type: "project-playbook", section: "workflows", text },
   };
 }
@@ -52,6 +77,7 @@ export function nudgeRuleSuggestion(s: Suggestion): Suggestion | null {
   if (s.evidence.count < PROJECT_MIN_COUNT || s.evidence.sessions < PROJECT_MIN_SESSIONS) return null;
   const text = oneLine(s.payload.instruction);
   if (!isConstraintShaped(text)) return null;
+  const sourceSignatures = safeSourceSignatures(s.sourceSignatures?.length ? s.sourceSignatures : [text]);
   return {
     id: suggestionId(`rule:${text}`),
     name: sanitizeName(`pb-rule-${text.slice(0, 24)}`),
@@ -59,8 +85,17 @@ export function nudgeRuleSuggestion(s: Suggestion): Suggestion | null {
     rationale:
       `You repeat this constraint in this repo (${s.evidence.count}× across ${s.evidence.sessions} sessions); ` +
       "committing it lets every approving teammate's judge stand down accordingly.",
-    evidence: s.evidence,
+    evidence: {
+      ...s.evidence,
+      estMinutesSavedPerMonth: s.evidence.estMinutesSavedPerMonth ?? estMinutesSavedPerMonth({
+        count: s.evidence.count,
+        chars: text.length,
+        spanDays: s.evidence.temporal?.spanDays ?? 0,
+        kind: "rule",
+      }),
+    },
     confidence: "inferred",
+    sourceSignatures,
     payload: { type: "project-playbook", section: "rules", text },
   };
 }

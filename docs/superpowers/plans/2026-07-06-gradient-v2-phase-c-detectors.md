@@ -1,5 +1,8 @@
 # gradient v2 Phase C — New Detectors (Error Pastes & Answer Mining) — Implementation Plan
 
+**Status:** Complete. Unchecked boxes below preserve the original plan; the
+security revision documents the shipped behavior.
+
 > **Security revision (0.1.1):** This historical execution plan predates the
 > public-release audit. The shipped implementation does not rerun pasted
 > commands, forward free-form paste headers, infer rules from yes/no or ordinal

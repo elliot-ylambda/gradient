@@ -1,7 +1,15 @@
-import type { Candidate, Config, Suggestion, Turn } from "../core/types.js";
+import { homedir } from "node:os";
+import type { Candidate, CommandEvent, Config, Suggestion, ToolEvent, Turn } from "../core/types.js";
 import { collect } from "../core/collect.js";
 import { collectCodex } from "../core/collect-codex.js";
-import { parseDialogueFile, parseFile, type DialogueTurn } from "../core/parse.js";
+import {
+  parseDialogueFile,
+  parseAssistantFollowedUserFile,
+  parseToolEventsFile,
+  parseTranscriptFile,
+  type DialogueTurn,
+  type ParsedTranscript,
+} from "../core/parse.js";
 import {
   parseCodexDialogueFile,
   parseCodexFile,
@@ -11,6 +19,9 @@ import { compileIgnorePatterns, filterPrompts, hasTemplateFloodSupport, isTempla
 import { boundedPromptLimit, capByRecency, MAX_PROMPTS_HARD_CAP } from "../core/cap.js";
 import { DEFAULT_DETECT_WINDOW, DEFAULT_MAX_PROMPTS } from "../core/scope.js";
 import { cluster, normalize } from "../core/cluster.js";
+import { annotateTemporal } from "../core/temporal.js";
+import { hookFromEvents, markLoops } from "../core/classify.js";
+import { markCorrections } from "../core/corrections.js";
 import { mineSequences, SEQ_MAX_BIGRAMS } from "../core/sequence.js";
 import { boundedDetectLimit, detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
@@ -24,8 +35,12 @@ import { detectPasteCandidates, extractPasteKey } from "../core/paste.js";
 import { ANSWER_MAX_PAIRS, extractAnswerPairs, mineAnswerCandidates } from "../core/answers.js";
 import { attentionSuggestion, mineAttention } from "../core/attention.js";
 import { mineProjectPlaybook } from "../core/project-suggest.js";
+import { failureLoops, rituals } from "../core/toolmine.js";
+import { loadInstructions } from "../core/instructions.js";
+import { audit, clearInstructionAudit, CORRECTION_RE, saveInstructionAudit } from "../core/audit.js";
 
 const MAX_MINED_PROMPT_CHARS = 4_000;
+export const MAX_TOOL_EVENTS = 20_000;
 
 export interface ScanOptions {
   scope: "project" | "all";
@@ -42,7 +57,9 @@ export interface ScanDeps {
   config?: Config;
   collectFn?: (options: ScanOptions) => Promise<string[]>;
   collectCodexFn?: (options: ScanOptions) => Promise<string[]>;
-  parseFn?: (path: string) => Promise<Turn[]>;
+  parseFn?: (path: string) => Promise<ParsedTranscript | Turn[]>;
+  parseToolEventsFn?: (path: string) => Promise<{ events: ToolEvent[]; dropped: number }>;
+  parseCorrectionContextFn?: (path: string) => Promise<Turn[]>;
   parseCodexFn?: (path: string) => Promise<Turn[]>;
   parseDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
   parseCodexDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
@@ -64,7 +81,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
 
   const collectFn = deps.collectFn ?? ((options: ScanOptions) => collect({ ...options, onWarn: log }));
   const collectCodexFn = deps.collectCodexFn ?? ((options: ScanOptions) => collectCodex({ ...options, onWarn: log }));
-  const parseFn = deps.parseFn ?? parseFile;
+  const parseFn = deps.parseFn ?? parseTranscriptFile;
   const projectDir = opts.projectPath ?? process.cwd();
   const claudeFiles = targets.includes("claude-code") ? await collectFn(opts) : [];
   const codexFiles = targets.includes("codex") ? await collectCodexFn(opts) : [];
@@ -88,16 +105,57 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
       ? capByRecency(current, MAX_PROMPTS_HARD_CAP).kept
       : current;
   };
+  // Mirrors pushTurns' bound: command events are tiny per-record but still
+  // an unbounded-history accumulator without a ceiling.
+  const pushEvents = (current: CommandEvent[], additions: CommandEvent[]): CommandEvent[] => {
+    current.push(...scoped(additions));
+    return capByRecency(current, MAX_PROMPTS_HARD_CAP).kept;
+  };
 
   const ignore = compileIgnorePatterns(config.ignorePatterns);
   const answerPairs = [] as ReturnType<typeof extractAnswerPairs>;
   const pairCap = Math.min(ANSWER_MAX_PAIRS, max);
+  const instructions = opts.scope === "project"
+    ? await loadInstructions(projectDir, opts.home ?? homedir())
+    : [];
+  if (opts.scope === "project" && instructions.length === 0) {
+    await clearInstructionAudit(projectDir, opts.home);
+  }
   let turns: Turn[] = [];
+  let toolEvents: ToolEvent[] = [];
+  let toolEventsDropped = 0;
+  let confirmedCorrections: Turn[] = [];
+  // Command events stay separate from minable prompt text and feed adoption,
+  // insights, and deterministic checkpoint-hook detection.
+  let events: CommandEvent[] = [];
+  const parseToolEventsFn = deps.parseToolEventsFn ?? (deps.parseFn ? undefined : parseToolEventsFile);
+  const parseCorrectionContextFn = deps.parseCorrectionContextFn ??
+    (deps.parseFn ? undefined : parseAssistantFollowedUserFile);
   const userTurnCounts = new Map<string, number>();
   for (const file of claudeFiles) {
-    const parsed = await parseFn(file);
-    userTurnCounts.set(file, parsed.length);
-    turns = pushTurns(turns, parsed);
+    const parsedValue = await parseFn(file);
+    const parsed: ParsedTranscript = Array.isArray(parsedValue)
+      ? { turns: parsedValue, events: [] }
+      : parsedValue;
+    userTurnCounts.set(file, parsed.turns.length + parsed.events.length);
+    turns = pushTurns(turns, parsed.turns);
+    events = pushEvents(events, parsed.events);
+    if (config.mineToolEvents !== false && parseToolEventsFn) {
+      const parsedEvents = await parseToolEventsFn(file);
+      toolEventsDropped += parsedEvents.dropped;
+      toolEvents.push(...scoped(parsedEvents.events));
+      if (toolEvents.length > MAX_TOOL_EVENTS) {
+        const capped = capByRecency(toolEvents, MAX_TOOL_EVENTS, MAX_TOOL_EVENTS);
+        toolEventsDropped += capped.dropped;
+        toolEvents = capped.kept;
+      }
+    }
+    if (instructions.length > 0 && parseCorrectionContextFn) {
+      confirmedCorrections.push(...scoped(await parseCorrectionContextFn(file)));
+      if (confirmedCorrections.length > MAX_PROMPTS_HARD_CAP) {
+        confirmedCorrections = capByRecency(confirmedCorrections, MAX_PROMPTS_HARD_CAP).kept;
+      }
+    }
   }
 
   const productionCodexSinglePass = !deps.parseCodexFn && !deps.parseCodexDialogueFn;
@@ -140,11 +198,33 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const { kept, dropped } = capByRecency(prompts, max);
   if (dropped > 0) log(`capped to most recent ${max} prompts; ${dropped} older dropped (raise with --max-prompts)`);
 
+  let auditCandidates: Candidate[] = [];
+  if (instructions.length > 0) {
+    const claudePrompts = kept.filter(turn => (turn.assistant ?? "claude-code") === "claude-code");
+    const result = audit(claudePrompts, instructions, { confirmedCorrections });
+    const restatementFindings = result.candidates.filter(candidate =>
+      candidate.hint?.startsWith("restated instruction")).length;
+    const correctionFindings = result.candidates.length - restatementFindings;
+    log(
+      `instruction audit: ${instructions.length} instructions · ` +
+      `${restatementFindings} restatement findings · ${correctionFindings} correction findings`,
+    );
+    await saveInstructionAudit(projectDir, result.tallies, opts.home);
+    auditCandidates = result.candidates;
+    const auditCandidateCap = Math.ceil(window / 3);
+    if (auditCandidates.length > auditCandidateCap) {
+      log(`audit candidates capped to ${auditCandidateCap}; ${auditCandidates.length - auditCandidateCap} dropped`);
+      auditCandidates = auditCandidates.slice(0, auditCandidateCap);
+    }
+  }
+
   const detectedPastes = detectPasteCandidates(kept);
   const pasteFloods = detectedPastes.filter(hasTemplateFloodSupport);
   const pastes = detectedPastes.filter(candidate => !hasTemplateFloodSupport(candidate));
   const clusterInput = kept
-    .filter(turn => !extractPasteKey(turn.text ?? ""))
+    .filter(turn =>
+      !extractPasteKey(turn.text ?? "") &&
+      !(instructions.length > 0 && CORRECTION_RE.test(turn.text ?? "")))
     .map(turn => ({ ...turn, text: turn.text?.slice(0, MAX_MINED_PROMPT_CHARS) }));
   const clustered = cluster(clusterInput);
   const floods = clustered.filter(isTemplateFlood);
@@ -196,10 +276,43 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     count: chain.count,
     sessions: chain.sessions,
     sessionIds: chain.sessionIds,
+    // A chain occurrence is timestamped at its final step. Its ordered full
+    // signature remains the stable identity, so memberSignatures stays empty.
+    occurrences: chain.occurrences,
+    memberSignatures: [],
     confidence: "high",
     assistants: [...new Set(chain.sessionIds.map(sessionId => assistantBySession.get(sessionId) ?? "claude-code"))],
   }));
-  const allCandidates = [...nonSequenceCandidates, ...sequenceCandidates];
+  let toolCandidates: Candidate[] = [];
+  if (config.mineToolEvents !== false) {
+    const failures = failureLoops(toolEvents);
+    const observedRituals = rituals(toolEvents);
+    log(
+      `tool events: ${toolEvents.length} (${toolEventsDropped} dropped) → ` +
+      `${failures.length} failure loops, ${observedRituals.length} rituals`,
+    );
+    toolCandidates = [...failures, ...observedRituals]
+      .sort((left, right) => right.count - left.count || left.signature.localeCompare(right.signature));
+    const toolCandidateCap = Math.ceil(window / 3);
+    if (toolCandidates.length > toolCandidateCap) {
+      log(`tool-event candidates capped to ${toolCandidateCap}; ${toolCandidates.length - toolCandidateCap} dropped`);
+      toolCandidates = toolCandidates.slice(0, toolCandidateCap);
+    }
+  }
+  const allCandidates = [...nonSequenceCandidates, ...sequenceCandidates, ...toolCandidates, ...auditCandidates];
+  // Runs are computed over the full kept stream, not clusterInput: a paste turn
+  // sitting between two cluster members must break the run like any non-member.
+  annotateTemporal(kept, allCandidates);
+  // Deterministic reclassification from temporal evidence alone — no LLM
+  // involved; must run before detect so a marked loop reaches both the
+  // degrade path and the model's view of candidate kind.
+  markLoops(allCandidates);
+  // Deterministic reclassification of unprompted user pushback ("no, use
+  // pnpm", "don't add comments") into kind "correction" — also no LLM
+  // involved. Runs after markLoops so a candidate already reclassified as a
+  // loop is left untouched (loops win ties by order); only kind-"unknown"
+  // candidates are eligible.
+  if (opts.scope === "project") markCorrections(allCandidates);
   log(`mining → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);
 
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });
@@ -216,6 +329,31 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     } catch (error) {
       log(`skipping invalid suggestion: ${(error as Error).message}`);
     }
+  }
+
+  // Deterministic checkpoint-hook proposal from raw /compact command evidence
+  // — independent of the LLM/backend, so it works in degraded mode too.
+  try {
+    const hookSuggestion = hookFromEvents(events);
+    // Dedupe by semantic hook type, not id: an LLM-sourced PreCompact hook
+    // derives its id from whatever text candidates the model referenced, so
+    // it never matches the event-derived id (same convention as the
+    // Notification-hook append below).
+    const hasCheckpointHook = valid.some(suggestion =>
+      suggestion.payload.type === "hook" &&
+      suggestion.payload.event === "PreCompact" &&
+      suggestion.payload.subcommand === "checkpoint",
+    );
+    if (hookSuggestion && !hasCheckpointHook) {
+      validateSuggestion(hookSuggestion);
+      valid.push(hookSuggestion);
+      log(
+        `compact: ${hookSuggestion.evidence.count} /compact invocation(s) across ` +
+        `${hookSuggestion.evidence.sessions} sessions — checkpoint hook suggested`,
+      );
+    }
+  } catch (error) {
+    log(`compact hook check failed: ${(error as Error).message}`);
   }
 
   // Attention notifications are Claude-specific lifecycle hooks. Mine only

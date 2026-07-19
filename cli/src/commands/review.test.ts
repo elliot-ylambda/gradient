@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { resolveClarify, review, reviewJson } from "./review.js";
+import { resolveClarify, review, reviewJson, suggestionPreview } from "./review.js";
 import { loadSuggestions, saveSuggestions } from "./apply.js";
 import { isNudge } from "../core/playbook.js";
 import type { Suggestion } from "../core/types.js";
@@ -87,6 +87,34 @@ describe("review", () => {
     const [applied] = await review(dir, async () => "approve", { home });
     expect(applied.writes.map(write => write.target)).toEqual(["claude-code", "codex"]);
   });
+
+  it("persists skip and hides the suggestion on the next review", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await seed(dir, home, ["ship"]);
+    await review(dir, async () => "skip", { home });
+
+    let prompted = false;
+    expect(await review(dir, async () => {
+      prompted = true;
+      return "approve";
+    }, { home })).toEqual([]);
+    expect(prompted).toBe(false);
+  });
+
+  it("explains and then re-prompts the same suggestion", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const item = { ...mk("ship"), examples: ["ship after checks"], evidence: { count: 3, sessions: 2, estMinutesSavedPerMonth: 7 } };
+    await saveSuggestions(dir, [item], home);
+    const decisions = ["explain", "skip"] as const;
+    const explanations: string[] = [];
+    let calls = 0;
+    await review(dir, async () => decisions[calls++], { home, onExplain: message => explanations.push(message) });
+    expect(calls).toBe(2);
+    expect(explanations[0]).toContain("≈7m/month");
+    expect(explanations[0]).toContain("ship after checks");
+  });
 });
 
 describe("nudge hint", () => {
@@ -97,6 +125,31 @@ describe("nudge hint", () => {
       payload: { type: "loop" as const, instruction: "continue until done" },
     };
     expect(isNudge(s)).toBe(true);
+  });
+});
+
+describe("command hook preview", () => {
+  it("shows the exact automatically-run command and matcher before approval", () => {
+    const suggestion: Suggestion = {
+      id: "hook-1",
+      name: "post-edit-lint",
+      title: "Lint after edits",
+      rationale: "Observed ritual",
+      evidence: { count: 18, sessions: 3 },
+      confidence: "inferred",
+      payload: {
+        type: "hook",
+        event: "PostToolUse",
+        matcher: "Edit|Write|NotebookEdit",
+        command: "npm run lint",
+        description: "lint after edits",
+      },
+    };
+    const preview = suggestionPreview(suggestion, "skill");
+    expect(preview).toContain("PostToolUse");
+    expect(preview).toContain("Edit|Write|NotebookEdit");
+    expect(preview).toContain("npm run lint");
+    expect(preview).toContain("runs automatically");
   });
 });
 
@@ -120,6 +173,15 @@ describe("reviewJson", () => {
     const { reviewJson } = await import("./review.js");
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    expect(JSON.parse(await reviewJson(dir, home))).toEqual({ projectPlaybook: "none", suggestions: [] });
+  });
+
+  it("omits persistently dismissed suggestions", async () => {
+    const { reviewJson } = await import("./review.js");
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    await saveSuggestions(dir, [mk("ship")], home);
+    await review(dir, async () => "skip", { home });
     expect(JSON.parse(await reviewJson(dir, home))).toEqual({ projectPlaybook: "none", suggestions: [] });
   });
 });

@@ -6,7 +6,7 @@ import { addEntry, artifactHasMarker, loadManifest, manifestTarget } from "./man
 import { safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
 import { installHook, removeHook } from "./settings.js";
 import { validateSuggestion } from "./validate.js";
-import { recordArtifactApproval } from "./approvals.js";
+import { hookApprovalContent, recordArtifactApproval } from "./approvals.js";
 import { spliceLine } from "./playbook-splice.js";
 import { parseProjectPlaybook, savePlaybookPin } from "./playbook.js";
 
@@ -82,7 +82,12 @@ export async function applySuggestion(
       let approvalContent: string | undefined;
       let previousContent: string | undefined;
       let created = false;
-      let installedHook: { event: string; command: string; settingsFile: string } | undefined;
+      let installedHook: {
+        event: string;
+        matcher?: string;
+        command: string;
+        settingsFile: string;
+      } | undefined;
 
       if (result.kind === "command" || result.kind === "skill" || result.kind === "rule") {
         const abs = join(projectDir, result.path);
@@ -136,11 +141,15 @@ export async function applySuggestion(
         // Approval means installation: merge the hook into the project's
         // settings rather than printing JSON the user would have to hand-merge.
         if (suggestion.payload.type !== "hook") throw new Error("hook artifact requires a hook payload");
-        const command = `gradient ${suggestion.payload.subcommand}`;
-        const settingsFile = await installHook(projectDir, suggestion.payload.event, command, {
+        const install = result.install ?? {
+          event: suggestion.payload.event,
           ...(suggestion.payload.matcher !== undefined ? { matcher: suggestion.payload.matcher } : {}),
+          command: `gradient ${suggestion.payload.subcommand}`,
+        };
+        const settingsFile = await installHook(projectDir, install.event, install.command, {
+          ...(install.matcher !== undefined ? { matcher: install.matcher } : {}),
         });
-        installedHook = { event: suggestion.payload.event, command, settingsFile };
+        installedHook = { ...install, settingsFile };
         type = "hook";
       }
 
@@ -151,15 +160,22 @@ export async function applySuggestion(
         createdAt: new Date().toISOString().slice(0, 10),
         suggestionId: suggestion.id,
         ...(target === "codex" ? { target } : {}),
-        ...(installedHook ? { hook: { event: installedHook.event, command: installedHook.command } } : {}),
+        ...(installedHook ? {
+          hook: {
+            event: installedHook.event,
+            ...(installedHook.matcher !== undefined ? { matcher: installedHook.matcher } : {}),
+            command: installedHook.command,
+          },
+        } : {}),
       };
 
       try {
         // The repo-local manifest and marker prove ownership, not human
         // approval. Record exact bytes in the private per-project ledger first;
         // a stale ledger entry is harmless if the manifest update then fails.
-        if (written && approvalContent) {
-          await recordArtifactApproval(projectDir, entry, approvalContent, opts.home);
+        const approvedContent = entry.hook ? hookApprovalContent(entry.hook) : approvalContent;
+        if (approvedContent) {
+          await recordArtifactApproval(projectDir, entry, approvedContent, opts.home);
         }
         await addEntry(projectDir, entry);
       } catch (error) {
@@ -170,7 +186,12 @@ export async function applySuggestion(
           }
         }
         if (installedHook) {
-          await removeHook(projectDir, installedHook.event, installedHook.command).catch(() => undefined);
+          await removeHook(
+            projectDir,
+            installedHook.event,
+            installedHook.command,
+            installedHook.matcher,
+          ).catch(() => undefined);
         }
         throw error;
       }

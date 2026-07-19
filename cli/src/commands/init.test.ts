@@ -83,7 +83,7 @@ describe("init", () => {
       { backend: null },
     )).rejects.toThrow(/requires the claude-code target/);
   });
-  it("installs a SessionStart scan hook and sets the config flag when sessionScan is on", async () => {
+  it("installs a SessionStart surfacing hook and sets the config flag when sessionScan is on", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-init-home-"));
     const projectDir = await mkdtemp(join(tmpdir(), "grad-init-proj-"));
     const r = await init(
@@ -94,7 +94,20 @@ describe("init", () => {
     const cfg = JSON.parse(await readFile(join(home, ".config", "gradient", "config.json"), "utf8"));
     expect(cfg.scanOnSessionStart).toBe(true);
     const settings = JSON.parse(await readFile(join(projectDir, ".claude", "settings.local.json"), "utf8"));
-    expect(settings.hooks.SessionStart[0].hooks[0].command).toBe("gradient scan --detach");
+    expect(settings.hooks.SessionStart[0].hooks[0].command).toBe("gradient session-start");
+  });
+  it("migrates the old detached-scan hook exactly once", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-init-home-"));
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-init-proj-"));
+    await mkdir(join(projectDir, ".claude"), { recursive: true });
+    await writeFile(join(projectDir, ".claude", "settings.local.json"), JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: "command", command: "gradient scan --detach" }] }] },
+    }));
+    await init({ installSkill: false, sessionScan: true, home, projectDir }, { backend: null });
+    await init({ installSkill: false, sessionScan: true, home, projectDir }, { backend: null });
+    const settings = JSON.parse(await readFile(join(projectDir, ".claude", "settings.local.json"), "utf8"));
+    const commands = settings.hooks.SessionStart.flatMap((group: any) => group.hooks.map((hook: any) => hook.command));
+    expect(commands).toEqual(["gradient session-start"]);
   });
   it("preserves existing config keys instead of clobbering them (init doesn't disable autopilot)", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-"));

@@ -35,6 +35,15 @@ describe("config", () => {
     await writeFile(path, JSON.stringify({ autopilotProjects: { relative: "nudge" } }));
     await expect(loadConfig(home)).rejects.toThrow(/autopilotProjects/);
   });
+  it("rejects a non-boolean tool-event mining switch", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-"));
+    await mkdir(join(home, ".config", "gradient"), { recursive: true });
+    await writeFile(
+      join(home, ".config", "gradient", "config.json"),
+      JSON.stringify({ mineToolEvents: "false" }),
+    );
+    await expect(loadConfig(home)).rejects.toThrow(/mineToolEvents.*boolean/);
+  });
   it("bounds malformed and excessive paid autopilot budgets", () => {
     expect(boundedAutopilotBudget(Number.POSITIVE_INFINITY)).toBe(10);
     expect(boundedAutopilotBudget(1_000_000)).toBe(MAX_AUTOPILOT_BUDGET);

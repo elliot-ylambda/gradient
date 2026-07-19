@@ -8,10 +8,14 @@
 
 ## Releasing
 
-Two commands, in order, so npm and the GitHub "Latest" badge stay in sync:
+Complete all three steps in order so npm, GitHub, and the deployed site stay in
+sync. A release is not complete until every step is verified:
 
 1. `make publish` — publishes `cli/` to npm and pushes the `v<version>` tag. Guarded: refuses when not logged in, the tree is dirty, or the version is already live.
 2. `gh release create v<version> --title "gradient <version>"` — with release notes and the exact registry tarball attached (`npm pack gradient.md@<version>`).
+3. Update the version and any changed feature copy in the private `gradient-web`
+   repository, push its `main`, and verify both `https://gradient.md` and
+   `gh release view v<version>` report the new version.
 
 ## Make targets
 

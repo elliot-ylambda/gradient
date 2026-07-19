@@ -1,5 +1,8 @@
 # gradient — Sequence Mining — Implementation Plan
 
+**Status:** Complete and merged into the v2 pipeline. Unchecked boxes below
+preserve the original plan; the security revision documents shipped behavior.
+
 > **Security revision (0.1.1):** This historical plan's pair-merging and
 > playbook sink were superseded by the public-release audit. The shipped code
 > counts actual same-session bigrams/trigrams, never infers a triple from

@@ -1,7 +1,7 @@
 # gradient — Claude Code Plugin Distribution — Design
 
 **Date:** 2026-07-06
-**Status:** Draft (brainstorming complete; awaiting user review)
+**Status:** Implemented (2026-07-18)
 **Scope:** Spec 5. Packages gradient itself as a Claude Code plugin so
 `/plugin install gradient` replaces `npx gradient` + `gradient init` as the
 recommended onboarding. Distinct from Spec 4 Phase E (`gradient bundle`),
@@ -94,7 +94,7 @@ stable field names for conversational rendering.
 
 ## 5. Build
 
-- `npm run build:plugin` (in `cli/`): esbuild bundle of `src/cli.ts` →
+- `npm run build:plugin` (in `cli/`): esbuild bundle of `src/bin.ts` →
   `../plugin/bin/gradient.mjs` (`platform: node`, `format: esm`,
   `target: node20`, minify off — the bundle is reviewable in diffs), then
   rewrite `plugin/.claude-plugin/plugin.json` with the package version.
