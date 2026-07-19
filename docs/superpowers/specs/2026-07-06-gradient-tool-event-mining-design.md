@@ -52,7 +52,7 @@ export interface ToolEvent {
   ts: string;
   sessionId: string;
   kind: "bash" | "edit";        // edit = Edit | Write | NotebookEdit
-  command?: string;             // bash only — first line, whitespace-collapsed
+  command?: string;             // bash only — first line, whitespace-collapsed, ≤1,000 chars
   isError?: boolean;            // bash only — from the paired tool_result
   errorHead?: string;           // bash only — first line of stderr/output, redacted, ≤120 chars
   file?: string;                // edit only — repo-relative path
@@ -65,6 +65,9 @@ export interface ToolEvent {
   and everything else are ignored (v1).
 - Caps (Decision 6) keep memory flat on large histories; the scan report
   lists dropped-event counts per scope, same style as the prompt cap.
+- Bash command text is bounded during extraction, before it can enter the
+  event list; detectors and model input still use only the shorter
+  `commandHead()` described below.
 
 ## 4. Detector 1 — failure loops
 

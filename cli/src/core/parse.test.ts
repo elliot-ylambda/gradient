@@ -198,6 +198,14 @@ describe("parseToolEventLines", () => {
     expect(events[0].command).toBe("make dev \\");
   });
 
+  it("bounds command text before retaining the tool event", () => {
+    const { events } = parseToolEventLines([
+      toolUse("t1", "Bash", { command: "x".repeat(2_000) }),
+      toolResult("t1", false, "ok"),
+    ]);
+    expect(events[0].command).toHaveLength(1_000);
+  });
+
   it("pairs duplicate tool ids only within their session", () => {
     const { events } = parseToolEventLines([
       toolUse("t1", "Bash", { command: "npm test" }, "s1"),

@@ -173,6 +173,7 @@ export async function parseAssistantFollowedUserFile(path: string): Promise<Turn
 const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 const PER_SESSION_EVENT_CAP = 400;
 const ERROR_HEAD_MAX = 120;
+const TOOL_COMMAND_MAX = 1_000;
 
 function firstLine(value: unknown): string {
   let text = "";
@@ -225,10 +226,11 @@ export function parseToolEventLines(lines: string[]): { events: ToolEvent[]; dro
       if (raw.type === "assistant" && block.type === "tool_use" && block.id) {
         if (block.name === "Bash") {
           const commandValue = block.input?.command;
-          const command = (typeof commandValue === "string" ? commandValue : "")
+          const command = (typeof commandValue === "string" ? commandValue.slice(0, TOOL_COMMAND_MAX + 1) : "")
             .split(/\r?\n/, 1)[0]
             .replace(/\s+/g, " ")
-            .trim();
+            .trim()
+            .slice(0, TOOL_COMMAND_MAX);
           if (command) {
             pending.set(`${sessionId}:${block.id}`, {
               ts: (raw.timestamp ?? "").slice(0, 100),
