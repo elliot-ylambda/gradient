@@ -4,7 +4,7 @@ The local-first `gradient` command-line tool.
 
 ```bash
 npx gradient.md init --target both # configure Claude Code + Codex (existing CLI auth)
-npx gradient.md scan      # mine bounded prompt, paste, answer, and sequence candidates
+npx gradient.md scan      # mine bounded prompt and tool-activity candidates
 npx gradient.md review    # approve the ones you want; gradient writes the artifacts
 npx gradient.md list      # see what it generated · npx gradient.md remove <name> to undo
 npx gradient.md migrate   # convert older generated commands into skills
@@ -18,11 +18,16 @@ npx gradient.md bundle team-kit # package approved artifacts as a plugin
 ## How it works
 
 1. Reads enabled local histories: Claude Code (`~/.claude/projects/**/*.jsonl`)
-   and Codex (`~/.codex/sessions/**/*.jsonl`). Spawned subagent logs are excluded.
+   and Codex (`~/.codex/sessions/**/*.jsonl`). Spawned subagent logs are
+   excluded. The Claude pass also pairs Bash calls with their results and notes
+   Edit/Write/NotebookEdit events using bounded reads.
 2. Clusters repeated prompts, failing-command pastes, recurring sequences, and
-   conservative low-impact Q→A preferences locally (no LLM). Pasted bodies and
-   command arguments are discarded; cross-project scans skip Q→A rules. It
-   also measures long Claude question→answer waits with bounded local reads.
+   conservative low-impact Q→A preferences locally (no LLM). It separately
+   detects commands that fail across sessions and commands repeatedly run after
+   edits. Tool candidates retain only bounded command heads and redacted first
+   error lines—never successful output or file contents. Pasted bodies and
+   command arguments are discarded; cross-project scans skip Q→A rules. It also
+   measures long Claude question→answer waits with bounded local reads.
 3. Sends only the top candidates to an LLM (`claude` by default, isolated
    `codex exec --ephemeral` for a Codex-only target, with an Anthropic API-key
    fallback) to name and type them.
@@ -36,6 +41,10 @@ Paste and sequence findings are advisory: prior behavior is never treated as
 authorization to rerun a command or execute later workflow steps. Preference
 rules require repeated support across sessions, are limited to low-impact
 format/style/tool choices, and preserve confirmation for consequential actions.
+Recurring failures remain advisory rules or skills. A detected post-edit ritual
+can become a `PostToolUse` hook only after `review` shows the exact command and
+the user approves its automatic execution. Set `"mineToolEvents": false` in
+`~/.config/gradient/config.json` to disable tool-event extraction entirely.
 
 Skills are the default because Claude Code can invoke them from their mined
 trigger descriptions. Set `emitTarget` to `"command"` in the gradient config

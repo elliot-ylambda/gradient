@@ -4,9 +4,10 @@
 
 **The prompts you keep retyping into Claude Code and Codex, compiled into skills.**
 
-`gradient` reads your own Claude Code and Codex history, finds repeated prompts, error
-pastes, short preference answers, and recurring sequences, then generates the
-automations to stop — **skills, rules, loops, and hooks** — through a
+`gradient` reads your own Claude Code and Codex history, finds repeated prompts,
+recurring command failures, post-edit verification rituals, error pastes, short
+preference answers, and recurring sequences, then generates the automations to
+stop — **skills, rules, loops, and hooks** — through a
 local-mining **scan** → approve **review** → reversible **apply** flow.
 It only ever suggests: nothing runs without you turning it on.
 
@@ -71,7 +72,7 @@ every automation stays opt-in.
 
 ```bash
 npx gradient.md init --target both # install the gradient skill for Claude Code + Codex
-npx gradient.md scan        # prompts, advisory paste/sequence patterns, and safe preferences
+npx gradient.md scan        # prompts, tool rituals/failures, advisory patterns, and preferences
 npx gradient.md scan --user # all projects, last 7 days — your recent cross-project habits
 npx gradient.md scan --all  # all projects, no time limit (thorough; can be slow)
 npx gradient.md review      # inspect the ranked suggestions and their evidence
@@ -119,10 +120,13 @@ for workflows the judge marks mechanical, and an empty string disables it.
 The default backend reuses the CLI auth you already have: `claude` for the
 default Claude Code target and `codex exec --ephemeral` for a Codex-only target.
 No API key is required for local use.
-Clustering is local and LLM-free. `scan` sends bounded candidate snippets—not
-whole transcripts—to the selected model after redacting common credential and
-PII formats. Redaction is defense in depth, not a guarantee that arbitrary
-private or proprietary text is removed; review the
+Prompt clustering and tool-activity mining are local and LLM-free. `scan` sends
+bounded candidate snippets—not whole transcripts—to the selected model after
+redacting common credential and PII formats. Tool candidates contain only a
+bounded command head and, for failures, a redacted first error line; successful
+tool output and file contents are never extracted. Redaction is defense in
+depth, not a guarantee that arbitrary private or proprietary text is removed;
+review the
 [data and trust boundaries](#data-and-trust-boundaries) before scanning
 sensitive history.
 
@@ -283,16 +287,21 @@ consent, deletes the checkpoint, then removes only those two hooks.
 ## Data and trust boundaries
 
 - `scan` reads user-authored turns from enabled local Claude Code and Codex
-  transcripts (excluding Codex subagent rollouts), writes a
+  transcripts (excluding Codex subagent rollouts). From Claude Code history it
+  also pairs bounded Bash calls with their results and records file-edit events
+  locally to detect recurring failures and post-edit rituals. It extracts no
+  successful output; at most a redacted 120-character first error line can join
+  a candidate. It writes a
   private per-project cache under `~/.config/gradient/projects/`, and sends only
   capped/redacted candidate snippets to the selected model. Project-scoped
   preference mining also reads bounded assistant questions; cross-project scans
   skip that pass. `--user --since` filters individual turn timestamps; every
   scope keeps the default 1,500-prompt processing cap and an absolute 5,000
-  prompt ceiling. Transcript traversal, individual files, total input bytes,
-  candidate count, caches, settings, playbooks, and append-only logs are also
-  bounded. Site-specific `ignorePatterns` accept only a capped, linear-looking
-  regex subset to avoid backtracking denial of service.
+  prompt ceiling. Tool events have a 400-per-session cap and a 20,000-event
+  global cap, with all drops reported. Transcript traversal, individual files,
+  total input bytes, candidate count, caches, settings, playbooks, and
+  append-only logs are also bounded. Site-specific `ignorePatterns` accept only
+  a capped, linear-looking regex subset to avoid backtracking denial of service.
 - Suggestions must map to opaque IDs for exact local source candidates; redacted
   text is never used as a provenance key. Artifact bodies, titles, triggers,
   rule text, and hook commands are reconstructed locally, and `review` shows the

@@ -2,11 +2,169 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scan } from "./scan.js";
+import { MAX_TOOL_EVENTS, scan } from "./scan.js";
 import { playbookPath } from "../core/playbook.js";
 import { suggestionsPath } from "./apply.js";
+import type { ToolEvent } from "../core/types.js";
 
 describe("scan", () => {
+  it("mines Claude tool events into candidates and reports extraction drops", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-tools-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const logs: string[] = [];
+    const failure = (sessionId: string): ToolEvent => ({
+      ts: "2026-07-01T00:00:00Z",
+      sessionId,
+      kind: "bash",
+      command: "npm test",
+      isError: true,
+      errorHead: "FAIL",
+    });
+    const events = [failure("s1"), failure("s1"), failure("s2"), failure("s2")];
+    await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        backend: null,
+        config: {},
+        collectFn: async () => ["f1"],
+        parseFn: async () => [],
+        parseToolEventsFn: async () => ({ events, dropped: 2 }),
+        attentionFn: async () => null,
+        log: message => logs.push(message),
+      },
+    );
+    expect(logs).toContain("tool events: 4 (2 dropped) → 1 failure loops, 0 rituals");
+  });
+
+  it("skips tool parsing when mineToolEvents is disabled", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-tools-off-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    let called = false;
+    await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        backend: null,
+        config: { mineToolEvents: false },
+        collectFn: async () => ["f1"],
+        parseFn: async () => [],
+        parseToolEventsFn: async () => {
+          called = true;
+          return { events: [], dropped: 0 };
+        },
+        attentionFn: async () => null,
+      },
+    );
+    expect(called).toBe(false);
+  });
+
+  it("enforces and reports the global tool-event cap", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-tools-cap-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const logs: string[] = [];
+    const events: ToolEvent[] = Array.from({ length: MAX_TOOL_EVENTS + 5 }, (_, index) => ({
+      ts: `2026-07-01T00:00:${String(index).padStart(5, "0")}Z`,
+      sessionId: `s${index}`,
+      kind: "bash",
+      command: `echo ${index}`,
+      isError: false,
+    }));
+    await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        backend: null,
+        config: {},
+        collectFn: async () => ["f1"],
+        parseFn: async () => [],
+        parseToolEventsFn: async () => ({ events, dropped: 0 }),
+        attentionFn: async () => null,
+        log: message => logs.push(message),
+      },
+    );
+    expect(logs).toContain(`tool events: ${MAX_TOOL_EVENTS} (5 dropped) → 0 failure loops, 0 rituals`);
+  });
+
+  it("feeds one recurring failure and one post-edit ritual through the real parser", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-tools-e2e-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const transcript = join(projectDir, "tools.jsonl");
+    const lines: string[] = [];
+    let id = 0;
+    let second = 0;
+    const toolUse = (
+      sessionId: string,
+      name: string,
+      input: Record<string, unknown>,
+    ): string => JSON.stringify({
+      type: "assistant",
+      sessionId,
+      timestamp: `2026-07-01T00:00:${String(second++ % 60).padStart(2, "0")}Z`,
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: `tool-${id}`, name, input }],
+      },
+    });
+    const toolResult = (sessionId: string, isError: boolean, content: string): string => JSON.stringify({
+      type: "user",
+      sessionId,
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: `tool-${id++}`, is_error: isError, content }],
+      },
+    });
+    const bash = (sessionId: string, command: string, isError = false, content = "ok"): void => {
+      lines.push(toolUse(sessionId, "Bash", { command }), toolResult(sessionId, isError, content));
+    };
+    const edit = (sessionId: string, index: number): void => {
+      lines.push(toolUse(sessionId, "Edit", { file_path: `/p/src/${sessionId}-${index}.ts` }));
+      id++;
+    };
+
+    for (const sessionId of ["s1", "s2"]) {
+      bash(sessionId, "npm test", true, "FAIL src/x.test.ts");
+      bash(sessionId, "npm test", true, "FAIL src/x.test.ts");
+    }
+    const attachedCounts = [6, 5, 5];
+    const fillerCounts = [1, 2, 1];
+    for (let session = 0; session < 3; session++) {
+      const sessionId = `s${session + 1}`;
+      for (let index = 0; index < attachedCounts[session]; index++) {
+        edit(sessionId, index);
+        bash(sessionId, "npm run lint");
+      }
+      for (let filler = 0; filler < fillerCounts[session]; filler++) {
+        edit(sessionId, 100 + filler);
+        for (let offset = 0; offset < 3; offset++) {
+          bash(sessionId, `echo filler-${sessionId}-${filler}-${offset}`);
+        }
+      }
+    }
+    await writeFile(transcript, `${lines.join("\n")}\n`);
+
+    let candidates: Array<{ kind?: string; signature: string }> = [];
+    await scan(
+      { scope: "project", projectPath: projectDir, home },
+      {
+        config: {},
+        collectFn: async () => [transcript],
+        backend: {
+          name: "recording",
+          available: async () => true,
+          complete: async ({ prompt }: { prompt: string }) => {
+            candidates = JSON.parse(prompt);
+            return JSON.stringify({ suggestions: [] });
+          },
+        },
+        gitLogFn: async () => "",
+        attentionFn: async () => null,
+      },
+    );
+
+    expect(candidates.map(candidate => [candidate.kind, candidate.signature])).toEqual([
+      ["ritual", "npm run lint"],
+      ["toolfail", "npm test"],
+    ]);
+  });
+
   it("suggests a matched Notification hook when attention gaps cross the session floor", async () => {
     const projectDir = await mkdtemp(join(tmpdir(), "grad-attention-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));

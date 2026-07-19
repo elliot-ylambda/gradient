@@ -1,7 +1,7 @@
 # gradient — Tool-Event Mining: the Assistant's Half of the Transcript — Design
 
 **Date:** 2026-07-06
-**Status:** Draft (brainstorming complete; awaiting user review)
+**Status:** Implemented (2026-07-18)
 **Scope:** Spec 6. Extends mining input from user prompts to the session's
 tool events (Bash commands and their failures, file-edit tools), adding two
 detectors: **failure loops** and **post-edit rituals**. Builds on Spec 4
@@ -13,10 +13,9 @@ additive when D exists).
 
 ## 1. Context
 
-The pipeline mines user prompts only — `core/types.ts` says so in its
-header: *"The mining pipeline consumes only user text."* But the transcripts
-already on disk record every tool call and result, and two high-value
-patterns live exclusively there:
+The pipeline previously mined user prompts only. The transcripts already on
+disk also record every tool call and result, and two high-value patterns live
+exclusively there:
 
 - **Failure loops.** The same command failing across sessions and days —
   the same test, the same build step — never appears in a user prompt
@@ -110,15 +109,14 @@ export interface ToolEvent {
 - `core/settings.ts#installHook` generalizes to accept `{event, matcher?,
   command}` alongside the existing gradient-subcommand form. Idempotent
   merge and the corrupt-settings refusal (Spec 1) are unchanged.
-- **Deliberate behavior change, command hooks only:** today `apply` merely
-  *prints* hook payloads as a settings patch (`core/apply.ts`). A command
-  hook instead installs through the corrupt-refusing merge on `apply` —
-  `apply` is the approval, and printing a JSON patch for hand-editing is
-  exactly the retyping gradient exists to kill. Gradient-subcommand hook
-  payloads keep their existing print-only behavior, unchanged.
+- `apply` installs both command and allowlisted gradient-subcommand hook
+  payloads through the corrupt-refusing settings merge. `apply` is the
+  explicit approval boundary; scan and review never install a hook.
 - Manifest entries for command hooks record the full hook shape
   (`{event, matcher?, command}`) so `remove` uninstalls exactly what was
-  added, via `removeHook`.
+  added, via `removeHook`. Raw command hooks are additionally bound to the
+  private approval ledger, preventing a forged repository manifest from
+  claiming and removing an arbitrary user-owned settings entry.
 
 ## 7. `insights` integration (additive)
 

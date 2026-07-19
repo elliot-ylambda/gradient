@@ -1,7 +1,12 @@
-import type { Candidate, Config, Suggestion, Turn } from "../core/types.js";
+import type { Candidate, Config, Suggestion, ToolEvent, Turn } from "../core/types.js";
 import { collect } from "../core/collect.js";
 import { collectCodex } from "../core/collect-codex.js";
-import { parseDialogueFile, parseFile, type DialogueTurn } from "../core/parse.js";
+import {
+  parseDialogueFile,
+  parseFile,
+  parseToolEventsFile,
+  type DialogueTurn,
+} from "../core/parse.js";
 import {
   parseCodexDialogueFile,
   parseCodexFile,
@@ -23,8 +28,10 @@ import { saveSuggestions } from "./apply.js";
 import { detectPasteCandidates, extractPasteKey } from "../core/paste.js";
 import { ANSWER_MAX_PAIRS, extractAnswerPairs, mineAnswerCandidates } from "../core/answers.js";
 import { attentionSuggestion, mineAttention } from "../core/attention.js";
+import { failureLoops, rituals } from "../core/toolmine.js";
 
 const MAX_MINED_PROMPT_CHARS = 4_000;
+export const MAX_TOOL_EVENTS = 20_000;
 
 export interface ScanOptions {
   scope: "project" | "all";
@@ -42,6 +49,7 @@ export interface ScanDeps {
   collectFn?: (options: ScanOptions) => Promise<string[]>;
   collectCodexFn?: (options: ScanOptions) => Promise<string[]>;
   parseFn?: (path: string) => Promise<Turn[]>;
+  parseToolEventsFn?: (path: string) => Promise<{ events: ToolEvent[]; dropped: number }>;
   parseCodexFn?: (path: string) => Promise<Turn[]>;
   parseDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
   parseCodexDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
@@ -92,11 +100,24 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const answerPairs = [] as ReturnType<typeof extractAnswerPairs>;
   const pairCap = Math.min(ANSWER_MAX_PAIRS, max);
   let turns: Turn[] = [];
+  let toolEvents: ToolEvent[] = [];
+  let toolEventsDropped = 0;
+  const parseToolEventsFn = deps.parseToolEventsFn ?? (deps.parseFn ? undefined : parseToolEventsFile);
   const userTurnCounts = new Map<string, number>();
   for (const file of claudeFiles) {
     const parsed = await parseFn(file);
     userTurnCounts.set(file, parsed.length);
     turns = pushTurns(turns, parsed);
+    if (config.mineToolEvents !== false && parseToolEventsFn) {
+      const parsedEvents = await parseToolEventsFn(file);
+      toolEventsDropped += parsedEvents.dropped;
+      toolEvents.push(...scoped(parsedEvents.events));
+      if (toolEvents.length > MAX_TOOL_EVENTS) {
+        toolEvents.sort((left, right) => left.ts < right.ts ? 1 : left.ts > right.ts ? -1 : 0);
+        toolEventsDropped += toolEvents.length - MAX_TOOL_EVENTS;
+        toolEvents = toolEvents.slice(0, MAX_TOOL_EVENTS);
+      }
+    }
   }
 
   const productionCodexSinglePass = !deps.parseCodexFn && !deps.parseCodexDialogueFn;
@@ -198,7 +219,23 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     confidence: "high",
     assistants: [...new Set(chain.sessionIds.map(sessionId => assistantBySession.get(sessionId) ?? "claude-code"))],
   }));
-  const allCandidates = [...nonSequenceCandidates, ...sequenceCandidates];
+  let toolCandidates: Candidate[] = [];
+  if (config.mineToolEvents !== false) {
+    const failures = failureLoops(toolEvents);
+    const observedRituals = rituals(toolEvents);
+    log(
+      `tool events: ${toolEvents.length} (${toolEventsDropped} dropped) → ` +
+      `${failures.length} failure loops, ${observedRituals.length} rituals`,
+    );
+    toolCandidates = [...failures, ...observedRituals]
+      .sort((left, right) => right.count - left.count || left.signature.localeCompare(right.signature));
+    const toolCandidateCap = Math.ceil(window / 3);
+    if (toolCandidates.length > toolCandidateCap) {
+      log(`tool-event candidates capped to ${toolCandidateCap}; ${toolCandidates.length - toolCandidateCap} dropped`);
+      toolCandidates = toolCandidates.slice(0, toolCandidateCap);
+    }
+  }
+  const allCandidates = [...nonSequenceCandidates, ...sequenceCandidates, ...toolCandidates];
   log(`mining → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);
 
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });

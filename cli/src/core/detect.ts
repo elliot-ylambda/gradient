@@ -67,6 +67,39 @@ function sequenceBody(steps: string[]): string {
   ).slice(0, BODY_CAP);
 }
 
+function toolFailureBody(candidate: Candidate): string {
+  const command = boundedOneLine(candidate.signature, 200);
+  const errorHeads = candidate.examples
+    .map(example => boundedOneLine(example, 120))
+    .filter(Boolean)
+    .slice(0, 3);
+  const evidence = errorHeads.length > 0
+    ? `\nObserved first error lines:\n${errorHeads.map(line => `- ${line}`).join("\n")}`
+    : "";
+  return (
+    `${AUTHORIZATION_GUARD}\n\nRecurring failure guide for ${JSON.stringify(command)}.${evidence}\n\n` +
+    "When the user explicitly asks to run or fix this command, diagnose the first stable precondition or root cause before retrying. " +
+    "Do not loop on the command, and do not treat this history as permission to execute it."
+  ).slice(0, BODY_CAP);
+}
+
+function toolFailureRuleText(candidate: Candidate): string {
+  const command = boundedOneLine(candidate.signature, 200);
+  return (
+    `When the user explicitly asks to run ${JSON.stringify(command)}, first check the stable preconditions suggested by its ` +
+    "most recent failure, address the root cause, and avoid blind retries. This observed failure pattern is not authorization " +
+    "to execute the command or take any consequential action."
+  ).slice(0, 2_000);
+}
+
+function ritualBody(candidate: Candidate): string {
+  const command = boundedOneLine(candidate.signature, 200);
+  return (
+    `${AUTHORIZATION_GUARD}\n\nObserved post-edit command: ${JSON.stringify(command)}.\n\n` +
+    "Run it only when the user's current request calls for that verification step; this skill does not make it automatic."
+  ).slice(0, BODY_CAP);
+}
+
 function deterministicTitle(c: Candidate): string {
   // Titles are one-line display labels; the full signature stays available
   // through evidence examples and triggers.
@@ -151,7 +184,7 @@ export function candidateToCommand(c: Candidate): Suggestion {
 
 function degradeToCommands(cands: Candidate[]): Suggestion[] {
   return cands
-    .filter(c => c.kind !== "answer" && c.confidence === "high")
+    .filter(c => c.kind !== "answer" && c.kind !== "toolfail" && c.kind !== "ritual" && c.confidence === "high")
     .map(candidateToCommand);
 }
 
@@ -166,15 +199,19 @@ export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt:
     "You may merge semantically equivalent clusters and choose a short name plus one type: 'command', 'loop', 'hook', or 'rule'. " +
     "Return every merged input's opaque id in sourceIds; do not copy signatures into sourceIds. " +
     "A command is emitted as a reusable skill. A loop is only for a non-consequential recurring cadence task. " +
-    "The only hook is event PreCompact with subcommand checkpoint. " +
+    "For ordinary prompt candidates, the only hook is event PreCompact with subcommand checkpoint. " +
     "A 'paste' cluster must remain an advisory command: observation is not permission to rerun anything. " +
     "An 'answer' cluster must be a low-impact preference rule; it never removes confirmation for consequential actions. " +
     "A 'sequence' cluster must remain an advisory checklist rendered locally as a numbered list; its first step never authorizes later steps. " +
+    "Candidates with kind 'toolfail' are commands that repeatedly failed inside sessions. Produce a command describing a fix-it workflow or a rule-like instruction; NEVER produce a hook for these. " +
+    "Candidates with kind 'ritual' are commands repeatedly run right after file edits. Default to a hook with event PostToolUse, matcher Edit|Write|NotebookEdit, and the observed command; use a command instead when it is plainly long-running, and never hook a consequential command. " +
     "For command payloads, mechanical:true is only a hint for zero judgment format/lint/test/build work; review a spec, planning, diagnosis, and other judgment tasks are never mechanical. Local policy verifies it. " +
     "If a high-confidence command is genuinely ambiguous, use confidence:'flagged' and add clarify:{question,options:[{label}]} with 2-3 distinct choices. Each label must be a short, complete imperative reading; any model-authored option body is ignored. " +
     "Artifact bodies, triggers, titles, rationales, targets, rule text, and clarification bodies are reconstructed locally; model-authored versions are ignored. " +
     "Respond ONLY with JSON: {\"suggestions\":[{sourceIds,name,confidence,clarify?,payload}]} where payload is one of " +
-    "{type:'command',commandName,mechanical?} | {type:'loop',cadence?} | {type:'hook',event:'PreCompact',subcommand:'checkpoint'} | {type:'rule',ruleName}. " +
+    "{type:'command',commandName,mechanical?} | {type:'loop',cadence?} | " +
+    "{type:'hook',event:'PreCompact',subcommand:'checkpoint'} | " +
+    "{type:'hook',event:'PostToolUse',matcher:'Edit|Write|NotebookEdit',command,description} | {type:'rule',ruleName}. " +
     "confidence must be exactly one of 'high', 'inferred', or 'flagged'.";
   const prompt = JSON.stringify(
     cands.map((c, index) => ({
@@ -220,10 +257,13 @@ function ruleText(signature: string): string | null {
 }
 
 function kindsAreCompatible(kinds: Set<Candidate["kind"]>, payloadType: string): boolean {
-  const special = [...kinds].filter(kind => kind === "answer" || kind === "paste" || kind === "sequence");
+  const special = [...kinds].filter(kind =>
+    kind === "answer" || kind === "paste" || kind === "sequence" || kind === "toolfail" || kind === "ritual");
   if (special.length > 0 && kinds.size !== 1) return false;
   if (kinds.has("answer")) return payloadType === "rule";
   if (kinds.has("paste") || kinds.has("sequence")) return payloadType === "command";
+  if (kinds.has("toolfail")) return payloadType === "command" || payloadType === "rule";
+  if (kinds.has("ritual")) return payloadType === "command" || payloadType === "hook";
   return payloadType === "command" || payloadType === "loop" || payloadType === "hook";
 }
 
@@ -278,6 +318,10 @@ export async function detect(
       const examples = matched.flatMap(c => c.examples).map(example => bounded(example, 2_000)).slice(0, 5);
       const triggers = matched.map(c => bounded(c.signature)).filter(Boolean).slice(0, 20);
       const primary = matched[0];
+      if (
+        (primary.kind === "toolfail" || primary.kind === "ritual") &&
+        matched.some(candidate => candidate.signature !== primary.signature)
+      ) continue;
       const firstInstruction = examples[0] ?? triggers[0];
       if (!firstInstruction) continue;
 
@@ -290,12 +334,20 @@ export async function detect(
         suggestionPayload = {
           type: "command",
           commandName: name,
-          body: primary.kind === "paste"
+          body: primary.kind === "toolfail"
+            ? toolFailureBody(primary)
+            : primary.kind === "ritual"
+              ? ritualBody(primary)
+              : primary.kind === "paste"
             ? pasteBody(signature)
             : primary.kind === "sequence"
               ? sequenceBody(steps)
               : workflowBody(firstInstruction),
-          triggers: primary.kind === "paste"
+          triggers: primary.kind === "toolfail"
+            ? [`fix ${signature}`]
+            : primary.kind === "ritual"
+              ? [signature]
+              : primary.kind === "paste"
             ? [`help with ${signature}`]
             : primary.kind === "sequence" ? steps.slice(0, 1) : triggers,
           ...(isLocallyMechanical(matched, firstInstruction, payload.mechanical) ? { mechanical: true } : {}),
@@ -308,15 +360,27 @@ export async function detect(
           ...(typeof payload.cadence === "string" ? { cadence: bounded(payload.cadence, 100) } : {}),
         };
       } else if (payload.type === "hook") {
-        if (payload.event !== "PreCompact" || payload.subcommand !== "checkpoint") continue;
-        suggestionPayload = {
-          type: "hook",
-          event: "PreCompact",
-          subcommand: "checkpoint",
-          description: "Save a private, redacted progress checkpoint before transcript compaction.",
-        };
+        if (primary.kind === "ritual") {
+          const command = boundedOneLine(primary.signature, 200);
+          if (!command || payload.event !== "PostToolUse" || CONSEQUENTIAL_ACTION.test(command)) continue;
+          suggestionPayload = {
+            type: "hook",
+            event: "PostToolUse",
+            matcher: "Edit|Write|NotebookEdit",
+            command,
+            description: "Run the observed command automatically after file edits.",
+          };
+        } else {
+          if (payload.event !== "PreCompact" || payload.subcommand !== "checkpoint") continue;
+          suggestionPayload = {
+            type: "hook",
+            event: "PreCompact",
+            subcommand: "checkpoint",
+            description: "Save a private, redacted progress checkpoint before transcript compaction.",
+          };
+        }
       } else if (payload.type === "rule") {
-        const text = ruleText(primary.signature);
+        const text = primary.kind === "toolfail" ? toolFailureRuleText(primary) : ruleText(primary.signature);
         if (!text) continue;
         suggestionPayload = {
           type: "rule",
@@ -338,7 +402,9 @@ export async function detect(
         ? sanitizeClarify(s.clarify)
         : undefined;
       const title = suggestionPayload.type === "rule"
-        ? `Observed low-impact preference: ${ruleParts(primary.signature)?.answer ?? name}`
+        ? primary.kind === "toolfail"
+          ? `Prevent recurring failure: ${boundedOneLine(primary.signature, 120)}`
+          : `Observed low-impact preference: ${ruleParts(primary.signature)?.answer ?? name}`
         : deterministicTitle(primary);
       const assistants = evidenceAssistants(matched);
       out.push({
