@@ -405,6 +405,20 @@ describe("scan", () => {
     }
   });
 
+  it("does not auto-emit a correction rule when the classifier is unavailable", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const projectDir = await mkdtemp(join(tmpdir(), "grad-project-"));
+    const turns = ["s1", "s2", "s3"].map((sessionId, index) => ({
+      ts: `2026-06-0${index + 1}T10:00:00Z`, project: "p", role: "user" as const,
+      text: "don't add comments", sessionId,
+    }));
+    const suggestions = await scan(
+      { scope: "project", projectPath: projectDir, home },
+      { backend: null, collectFn: async () => ["f"], parseFn: async () => ({ turns, events: [] }) },
+    );
+    expect(suggestions).toEqual([]);
+  });
+
   // Regression: 12 /compact events across 4 sessions produce the PreCompact hook
   // suggestion in degraded (backend null) mode — hookFromEvents must be appended
   // post-detect even when there's no LLM at all.

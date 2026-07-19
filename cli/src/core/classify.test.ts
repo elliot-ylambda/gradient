@@ -67,9 +67,37 @@ describe("markLoops", () => {
     expect(below.kind).toBe("loop");
     expect(below.cadence).toBeUndefined();
 
-    const atFloor = cand({ signature: "check the dashboard", temporal: { maxRunLength: LOOP_MIN_RUN, runSessions: LOOP_MIN_RUN_SESSIONS, medianGapMinutes: 5, distinctDays: SCHEDULE_MIN_DAYS, spanDays: SCHEDULE_MIN_DAYS - 1 } });
+    const atFloor = cand({
+      signature: "check the dashboard",
+      occurrences: Array.from({ length: SCHEDULE_MIN_DAYS }, (_, index) => ({
+        ts: `2026-06-0${index + 1}T09:00:00Z`, sessionId: `s${index}`,
+      })),
+      temporal: { maxRunLength: LOOP_MIN_RUN, runSessions: LOOP_MIN_RUN_SESSIONS, medianGapMinutes: 5, distinctDays: SCHEDULE_MIN_DAYS, spanDays: SCHEDULE_MIN_DAYS - 1 },
+    });
     markLoops([atFloor]);
-    expect(atFloor.cadence).toBe(deriveDailyCadence(atFloor));
+    expect(atFloor.cadence).toBe("0 9 * * *");
+  });
+
+  it("classifies a dense daily schedule without requiring same-session runs", () => {
+    const scheduled = cand({
+      occurrences: Array.from({ length: 8 }, (_, index) => ({
+        ts: `2026-06-${String(index + 1).padStart(2, "0")}T14:00:00Z`, sessionId: `s${index}`,
+      })),
+      temporal: { maxRunLength: 1, runSessions: 0, medianGapMinutes: 1_440, distinctDays: 8, spanDays: 9 },
+    });
+    markLoops([scheduled]);
+    expect(scheduled).toMatchObject({ kind: "loop", cadence: "0 14 * * *" });
+  });
+
+  it("accepts the exact 0.8 daily-coverage boundary and rejects sparser schedules", () => {
+    const occurrences = Array.from({ length: 8 }, (_, index) => ({
+      ts: `2026-06-${String(index + 1).padStart(2, "0")}T10:00:00Z`, sessionId: `s${index}`,
+    }));
+    const exact = cand({ occurrences, temporal: { maxRunLength: 1, runSessions: 0, medianGapMinutes: 0, distinctDays: 8, spanDays: 9 } });
+    const sparse = cand({ occurrences: occurrences.slice(0, 7), temporal: { maxRunLength: 1, runSessions: 0, medianGapMinutes: 0, distinctDays: 7, spanDays: 9 } });
+    markLoops([exact, sparse]);
+    expect(exact.kind).toBe("loop");
+    expect(sparse.kind).toBe("unknown");
   });
 
   // Regression: a "continue"-style cluster with runs (maxRunLength 4, runSessions 3)
@@ -97,14 +125,18 @@ describe("markLoops", () => {
 });
 
 describe("deriveDailyCadence", () => {
-  it("reads 'daily' when occurrences cover nearly every calendar day in the span", () => {
-    const c = cand({ temporal: { maxRunLength: 1, runSessions: 0, medianGapMinutes: 0, distinctDays: 7, spanDays: 6 } });
-    expect(deriveDailyCadence(c)).toBe("daily");
+  it("uses the median observed UTC hour in a deterministic cron", () => {
+    const c = cand({
+      occurrences: [8, 9, 10].map((hour, index) => ({
+        ts: `2026-06-0${index + 1}T${String(hour).padStart(2, "0")}:00:00Z`, sessionId: `s${index}`,
+      })),
+    });
+    expect(deriveDailyCadence(c)).toBe("0 9 * * *");
   });
 
-  it("reads 'most weekdays' when occurrences skip a meaningful fraction of the span", () => {
-    const c = cand({ temporal: { maxRunLength: 1, runSessions: 0, medianGapMinutes: 0, distinctDays: 10, spanDays: 13 } });
-    expect(deriveDailyCadence(c)).toBe("most weekdays");
+  it("returns undefined without a parseable occurrence", () => {
+    expect(deriveDailyCadence(cand())).toBeUndefined();
+    expect(deriveDailyCadence(cand({ occurrences: [{ ts: "bad", sessionId: "s" }] }))).toBeUndefined();
   });
 });
 
@@ -133,6 +165,15 @@ describe("hookFromEvents", () => {
     expect(hookFromEvents(other)).toBeNull();
   });
 
+  it("normalizes command case and ignores malformed command values", () => {
+    const compact = Array.from({ length: HOOK_MIN_COUNT }, (_, i) => event("/COMPACT", `s${i % HOOK_MIN_SESSIONS}`));
+    expect(hookFromEvents([...compact, event("/compact now", "bad")])).not.toBeNull();
+  });
+
+  it("returns null for empty evidence", () => {
+    expect(hookFromEvents([])).toBeNull();
+  });
+
   it("returns the PreCompact/checkpoint hook suggestion with a stable id and event-derived evidence", () => {
     const events = Array.from({ length: HOOK_MIN_COUNT }, (_, i) => event("/compact", `s${i % HOOK_MIN_SESSIONS}`));
     const s = hookFromEvents(events);
@@ -146,6 +187,8 @@ describe("hookFromEvents", () => {
     });
     expect(s!.evidence.count).toBe(HOOK_MIN_COUNT);
     expect(s!.evidence.sessions).toBe(HOOK_MIN_SESSIONS);
+    expect(s!.evidence.estMinutesSavedPerMonth).toBeGreaterThanOrEqual(0);
+    expect(s!.sourceSignatures).toEqual(["/compact"]);
   });
 
   it("keeps the same id regardless of event ordering or which sessions appear first", () => {

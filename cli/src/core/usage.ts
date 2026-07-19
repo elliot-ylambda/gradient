@@ -1,4 +1,5 @@
 import type { CommandEvent } from "./types.js";
+import { commandKey } from "./command.js";
 
 /** Count command/skill invocation events since each artifact's creation. */
 export function countArtifactUses(
@@ -16,7 +17,8 @@ export function countArtifactUses(
     const usedAt = Date.parse(event.ts);
     if (!Number.isFinite(usedAt)) continue;
 
-    const name = event.command.replace(/^\//, "");
+    const name = commandKey(event.command);
+    if (!name) continue;
     const record = result.get(name);
     if (!record) continue;
     const created = createdAt.get(name);

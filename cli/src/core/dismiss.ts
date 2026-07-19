@@ -2,7 +2,7 @@ import { join } from "node:path";
 import type { Suggestion } from "./types.js";
 import { gradientDir } from "./manifest.js";
 import { safeReadFile, safeWriteFile } from "./safeFs.js";
-import { sanitizeName, stripUnsafeControls } from "./security.js";
+import { redact, sanitizeName, stripUnsafeControls } from "./security.js";
 
 export interface Dismissal {
   id: string;
@@ -37,7 +37,8 @@ function validateDismissal(value: unknown): Dismissal {
     throw new Error("dismissal name is invalid");
   }
   if (!Array.isArray(entry.signatures) || entry.signatures.length > DISMISSAL_MAX_SIGNATURES ||
-    entry.signatures.some(signature => !safeOneLine(signature, SIGNATURE_MAX_CHARS)) ||
+    entry.signatures.some(signature =>
+      !safeOneLine(signature, SIGNATURE_MAX_CHARS) || redact(signature) !== signature) ||
     new Set(entry.signatures).size !== entry.signatures.length) {
     throw new Error("dismissal signatures are invalid");
   }

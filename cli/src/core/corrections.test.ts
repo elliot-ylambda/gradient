@@ -3,6 +3,7 @@ import {
   CORRECTION_MIN_COUNT,
   CORRECTION_MIN_SESSIONS,
   isCorrectionShaped,
+  isDismissiveCorrection,
   markCorrections,
 } from "./corrections.js";
 import type { Candidate } from "./types.js";
@@ -38,6 +39,14 @@ describe("isCorrectionShaped", () => {
     expect(isCorrectionShaped("")).toBe(false);
     expect(isCorrectionShaped("   ")).toBe(false);
   });
+
+  it.each(["never mind, continue", "no worries, continue", "no problem, carry on", "all good, proceed"])(
+    "rejects the dismissive opener %j",
+    text => {
+      expect(isDismissiveCorrection(text)).toBe(true);
+      expect(isCorrectionShaped(text)).toBe(false);
+    },
+  );
 });
 
 describe("markCorrections", () => {

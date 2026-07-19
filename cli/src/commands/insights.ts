@@ -24,6 +24,7 @@ import { gradientDir } from "../core/manifest.js";
 import { safeWriteFile } from "../core/safeFs.js";
 import { loadInstructionAudit, type InstructionTally } from "../core/audit.js";
 import { failureLoops as mineFailureLoops, rituals as mineRituals } from "../core/toolmine.js";
+import { capByRecency } from "../core/cap.js";
 
 export interface InsightsReport {
   label: string;
@@ -147,9 +148,13 @@ export async function insights(
       toolEventsDropped += parsedTools.dropped;
       toolEvents.push(...scopedTools);
       if (toolEvents.length > INSIGHTS_MAX_TOOL_EVENTS) {
-        toolEvents.sort((left, right) => left.ts < right.ts ? 1 : left.ts > right.ts ? -1 : 0);
-        toolEventsDropped += toolEvents.length - INSIGHTS_MAX_TOOL_EVENTS;
-        toolEvents = toolEvents.slice(0, INSIGHTS_MAX_TOOL_EVENTS);
+        const cappedTools = capByRecency(
+          toolEvents,
+          INSIGHTS_MAX_TOOL_EVENTS,
+          INSIGHTS_MAX_TOOL_EVENTS,
+        );
+        toolEventsDropped += cappedTools.dropped;
+        toolEvents = cappedTools.kept;
       }
     }
   }

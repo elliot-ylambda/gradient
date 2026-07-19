@@ -1,10 +1,22 @@
 import type { Turn, Candidate } from "./types.js";
 import { normalize } from "./cluster.js";
 
+function sortedTimestamps(occurrences: { ts: string }[]): number[] {
+  return occurrences
+    .map(occurrence => Date.parse(occurrence.ts))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+}
+
+function spanFromSorted(ts: number[]): number {
+  return ts.length > 1
+    ? Math.round(((ts[ts.length - 1] - ts[0]) / 86_400_000) * 10) / 10
+    : 0;
+}
+
 /** Whole days between first and last occurrence, one decimal. */
 export function spanDays(occurrences: { ts: string }[]): number {
-  const ts = occurrences.map(o => Date.parse(o.ts)).filter(Number.isFinite).sort((a, b) => a - b);
-  return ts.length > 1 ? Math.round(((ts[ts.length - 1] - ts[0]) / 86_400_000) * 10) / 10 : 0;
+  return spanFromSorted(sortedTimestamps(occurrences));
 }
 
 function median(nums: number[]): number {
@@ -23,12 +35,12 @@ export function annotateTemporal(prompts: Turn[], candidates: Candidate[]): void
   const byMember = new Map<string, number>();
   candidates.forEach((c, i) => { for (const sig of c.memberSignatures) byMember.set(sig, i); });
 
-  const maxRun = new Array<number>(candidates.length).fill(1);
+  const maxRun = new Array<number>(candidates.length).fill(0);
   const runSessions: Set<string>[] = candidates.map(() => new Set());
 
   const bySession = new Map<string, Turn[]>();
   for (const t of prompts) {
-    if (!t.text) continue;
+    if (t.role !== "user" || !t.text) continue;
     const arr = bySession.get(t.sessionId) ?? [];
     arr.push(t);
     bySession.set(t.sessionId, arr);
@@ -48,17 +60,15 @@ export function annotateTemporal(prompts: Turn[], candidates: Candidate[]): void
   }
 
   candidates.forEach((c, i) => {
-    const ts = c.occurrences.map(o => Date.parse(o.ts)).filter(Number.isFinite).sort((a, b) => a - b);
+    const ts = sortedTimestamps(c.occurrences);
     const gaps: number[] = [];
     for (let j = 1; j < ts.length; j++) gaps.push((ts[j] - ts[j - 1]) / 60_000);
     c.temporal = {
       maxRunLength: maxRun[i],
       runSessions: runSessions[i].size,
       medianGapMinutes: Math.round(median(gaps)),
-      distinctDays: new Set(
-        c.occurrences.filter(o => Number.isFinite(Date.parse(o.ts))).map(o => o.ts.slice(0, 10)),
-      ).size,
-      spanDays: spanDays(c.occurrences),
+      distinctDays: new Set(ts.map(timestamp => new Date(timestamp).toISOString().slice(0, 10))).size,
+      spanDays: spanFromSorted(ts),
     };
   });
 }

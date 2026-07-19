@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { redact } from "./security.js";
 import type { Assistant, CommandEvent, Role, ToolEvent, Turn } from "./types.js";
+import { normalizeCommandName } from "./command.js";
 
 export const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 export const MAX_PARSED_TURNS_PER_FILE = 20_000;
@@ -115,11 +116,13 @@ export interface ParsedTranscript {
 // A user turn whose text opens with a slash-command echo tag (Claude Code's
 // own rendering of a typed `/foo` invocation). Anchored so a genuine prompt
 // that merely mentions the tag stays a turn.
-const COMMAND_TAG_RE = /^\s*<command-name>([^<]+)<\/command-name>/;
+const COMMAND_TAG_RE = /^\s*<command-name>\s*([^<]*)\s*<\/command-name>/i;
+const COMMAND_ENVELOPE_RE = /^\s*<command-name(?:>|\s)/i;
 
 export function parseTranscript(lines: string[], maxTurns = MAX_PARSED_TURNS_PER_FILE): ParsedTranscript {
   const turns: Turn[] = [];
   const events: CommandEvent[] = [];
+  const pendingBySession = new Map<string, Turn>();
   const limit = Math.max(1, Math.min(maxTurns, MAX_PARSED_TURNS_PER_FILE));
   const start = Math.max(0, lines.length - limit * 4);
   for (let index = start; index < lines.length; index++) {
@@ -133,23 +136,36 @@ export function parseTranscript(lines: string[], maxTurns = MAX_PARSED_TURNS_PER
     }
     const turn = parseOne(raw);
     if (turn) {
-      const match = turn.text ? COMMAND_TAG_RE.exec(turn.text) : null;
-      if (match) {
-        events.push({
-          ts: turn.ts,
-          sessionId: turn.sessionId,
-          project: turn.project,
-          command: match[1].trim(),
-        });
-        if (events.length > limit) events.shift();
+      if (turn.text && COMMAND_ENVELOPE_RE.test(turn.text)) {
+        // A command envelope is never a minable prompt. Invalid/empty husks are
+        // dropped, and either form clears usage attribution for the prior turn.
+        pendingBySession.delete(turn.sessionId);
+        const match = COMMAND_TAG_RE.exec(turn.text);
+        const command = normalizeCommandName(match?.[1]);
+        if (command) {
+          events.push({
+            ts: turn.ts,
+            sessionId: turn.sessionId,
+            project: turn.project,
+            command,
+          });
+          if (events.length > limit) events.shift();
+        }
         continue;
       }
       turns.push(turn);
-      if (turns.length > limit) turns.shift();
+      pendingBySession.set(turn.sessionId, turn);
+      if (turns.length > limit) {
+        const removed = turns.shift();
+        if (removed && pendingBySession.get(removed.sessionId) === removed) {
+          pendingBySession.delete(removed.sessionId);
+        }
+      }
       continue;
     }
     const tokens = usageTokens(raw);
-    const pending = turns[turns.length - 1];
+    const sessionId = (raw.sessionId ?? "?").slice(0, 200);
+    const pending = pendingBySession.get(sessionId);
     if (pending && tokens > 0) pending.usageTokens = Math.min(MAX_USAGE_TOKENS, (pending.usageTokens ?? 0) + tokens);
   }
   return { turns, events };

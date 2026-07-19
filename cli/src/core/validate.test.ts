@@ -96,6 +96,30 @@ describe("hook payload: subcommand xor command", () => {
 });
 
 describe("optional suggestion fields", () => {
+  it("accepts valid leverage, temporal evidence, and redacted source signatures", () => {
+    expect(() => validateSuggestion({
+      ...good,
+      evidence: {
+        ...good.evidence,
+        estMinutesSavedPerMonth: 12,
+        temporal: { maxRunLength: 3, runSessions: 2, medianGapMinutes: 5, distinctDays: 8, spanDays: 9.5 },
+      },
+      sourceSignatures: ["email [REDACTED]", "lgtm"],
+    })).not.toThrow();
+  });
+
+  it("rejects malformed optional evidence and provenance", () => {
+    expect(() => validateSuggestion({
+      ...good, evidence: { ...good.evidence, estMinutesSavedPerMonth: -1 },
+    })).toThrow(/estMinutes/);
+    expect(() => validateSuggestion({
+      ...good, evidence: { ...good.evidence, temporal: { maxRunLength: 1 } },
+    })).toThrow(/temporal/);
+    expect(() => validateSuggestion({ ...good, sourceSignatures: ["dup", "dup"] })).toThrow(/sourceSignatures/);
+    expect(() => validateSuggestion({ ...good, sourceSignatures: ["person@example.com"] })).toThrow(/sourceSignatures/);
+    expect(() => validateSuggestion({ ...good, sourceSignatures: ["line\nbreak"] })).toThrow(/sourceSignatures/);
+  });
+
   it("accepts a complete clarification and rejects malformed options", () => {
     const clarify = {
       question: "Acknowledge or merge?",

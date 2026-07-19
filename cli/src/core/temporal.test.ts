@@ -76,7 +76,7 @@ describe("annotateTemporal", () => {
       confidence: "high" as const,
     };
     annotateTemporal([u("unrelated", "2026-06-01T10:00:00Z")], [seq]);
-    expect(seq.temporal).toEqual({ maxRunLength: 1, runSessions: 0, medianGapMinutes: 0, distinctDays: 0, spanDays: 0 });
+    expect(seq.temporal).toEqual({ maxRunLength: 0, runSessions: 0, medianGapMinutes: 0, distinctDays: 0, spanDays: 0 });
   });
   it("excludes unparseable timestamps from distinctDays", () => {
     const cand = {
@@ -87,5 +87,18 @@ describe("annotateTemporal", () => {
     };
     annotateTemporal([], [cand]);
     expect(cand.temporal!.distinctDays).toBe(1);
+  });
+  it("defensively ignores non-user turns when computing runs", () => {
+    const cand = {
+      kind: "unknown" as const, signature: "continue", examples: [], count: 1, sessions: 1,
+      sessionIds: ["s1"], occurrences: [{ ts: "2026-06-01T10:00:00Z", sessionId: "s1" }],
+      memberSignatures: ["continue"], confidence: "high" as const,
+    };
+    annotateTemporal([
+      { ...u("continue", "2026-06-01T10:00:00Z"), role: "assistant" },
+      u("continue", "2026-06-01T10:01:00Z"),
+    ], [cand]);
+    expect(cand.temporal!.maxRunLength).toBe(1);
+    expect(cand.temporal!.runSessions).toBe(0);
   });
 });

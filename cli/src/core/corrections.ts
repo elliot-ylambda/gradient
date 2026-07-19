@@ -27,9 +27,15 @@ const CORRECTION_PATTERNS: RegExp[] = [
   /\buse\s+\S+\s+not\s+\S+/i,
 ];
 
+const DISMISSIVE_OPENERS = /^(?:never\s*mind|no worries|no problem|no thanks|all good)\b/i;
+
+export function isDismissiveCorrection(text: string): boolean {
+  return DISMISSIVE_OPENERS.test(text.trim());
+}
+
 export function isCorrectionShaped(normalized: string): boolean {
   const text = normalized.trim();
-  if (!text) return false;
+  if (!text || isDismissiveCorrection(text)) return false;
   return CORRECTION_PATTERNS.some(pattern => pattern.test(text));
 }
 

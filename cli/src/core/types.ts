@@ -85,7 +85,7 @@ export interface Candidate {
   hint?: string;
   temporal?: TemporalFeatures;
   /** Set by classify.ts's markLoops when temporal.distinctDays crosses the
-   * schedule floor; a human-readable cadence ("daily" / "most weekdays"). */
+   * daily-coverage floor; a deterministic UTC cron expression. */
   cadence?: string;
 }
 

@@ -3,6 +3,7 @@ import { classifyPrompt } from "./filter.js";
 import { extractPasteKey, PASTE_MIN_COUNT } from "./paste.js";
 import { cleanupStale, listStateFiles, loadState } from "./state.js";
 import type { InstructionTally } from "./audit.js";
+import { commandKey } from "./command.js";
 
 const NUDGE_RE = /^(continue|go on|keep going|next|what'?s next|proceed|yes|y|ok|okay|do it|go|sure|yep|good|great|perfect|lgtm|looks good|approved?|ship it|sounds good)[.!?]*$/i;
 
@@ -41,7 +42,7 @@ export function computeMetrics(turns: Turn[], events: CommandEvent[] = [], ignor
   };
 
   for (const event of events) {
-    const command = event.command.replace(/^\//, "").toLowerCase();
+    const command = commandKey(event.command);
     if (command === "compact") metrics.compacts++;
     else if (command === "model") metrics.modelSwitches++;
     else if (command === "effort") metrics.effortSwitches++;

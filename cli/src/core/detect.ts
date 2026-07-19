@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Assistant, Candidate, Clarify, Confidence, Suggestion, SuggestionPayload } from "./types.js";
 import { redact, sanitizeName } from "./security.js";
-import { candidateLeverage, estMinutesSavedPerMonth } from "./leverage.js";
+import { candidateLeverage, estMinutesSavedPerMonth, meanLength } from "./leverage.js";
 import { spanDays } from "./temporal.js";
 import { normalize, similarity } from "./cluster.js";
 import type { LLMBackend } from "../llm/backend.js";
@@ -117,10 +117,6 @@ function evidenceAssistants(candidates: Candidate[]): Assistant[] {
     .sort((a, b) => a === b ? 0 : a === "claude-code" ? -1 : 1);
 }
 
-function meanLength(strings: string[]): number {
-  return strings.length ? strings.reduce((sum, s) => sum + s.length, 0) / strings.length : 0;
-}
-
 /** Redacted union of matched candidates' memberSignatures (fallback to the
  * candidate's own signature when it has none — non-cluster producers like
  * paste/answer/sequence leave memberSignatures empty). This is the stable
@@ -129,7 +125,12 @@ function meanLength(strings: string[]): number {
  * doesn't change when the corpus grows or candidates are scanned in a
  * different order. */
 function sourceSignaturesFor(matched: Candidate[]): string[] {
-  return matched.flatMap(c => (c.memberSignatures.length ? c.memberSignatures : [c.signature]).map(sig => bounded(sig)));
+  return [...new Set(matched
+    .flatMap(candidate => candidate.memberSignatures.length ? candidate.memberSignatures : [candidate.signature])
+    .map(signature => boundedOneLine(signature, OUTBOUND_FIELD_CAP))
+    .filter(Boolean))]
+    .sort()
+    .slice(0, 100);
 }
 
 /** Stable suggestion id: hashes the sorted, deduped signature union plus the
@@ -142,14 +143,18 @@ export function idFor(sigs: string[], payloadType: string): string {
 /** Descending by estimated minutes saved per month; a missing estimate (suggestions
  * cached before this field existed) sorts as if it were zero. */
 export function byLeverage(a: Suggestion, b: Suggestion): number {
-  return (b.evidence.estMinutesSavedPerMonth ?? 0) - (a.evidence.estMinutesSavedPerMonth ?? 0);
+  return (b.evidence.estMinutesSavedPerMonth ?? 0) - (a.evidence.estMinutesSavedPerMonth ?? 0) ||
+    b.evidence.count - a.evidence.count ||
+    a.name.localeCompare(b.name);
 }
 
 function evidenceFor(matched: Candidate[], payloadType: SuggestionPayload["type"]): Suggestion["evidence"] {
+  if (matched.length === 0) throw new Error("cannot derive evidence without a source candidate");
   const count = matched.reduce((n, c) => n + c.count, 0);
   const sessions = new Set(matched.flatMap(c => c.sessionIds)).size;
   const assistants = evidenceAssistants(matched);
-  const highestCount = [...matched].sort((a, b) => b.count - a.count)[0];
+  const highestCount = [...matched].sort((a, b) =>
+    b.count - a.count || a.signature.localeCompare(b.signature))[0];
   return {
     count,
     sessions,
@@ -244,12 +249,19 @@ export function candidateToLoop(c: Candidate): Suggestion {
 
   const name = sanitizeName(instruction.split(" ").slice(0, 3).join(" "));
   const sourceSignatures = sourceSignaturesFor([c]);
+  const evidence = evidenceFor([c], "loop");
+  const temporal = c.temporal;
+  const rationale = c.cadence && temporal
+    ? `Measured ${temporal.distinctDays} active day(s) across a ${temporal.spanDays}-day span; derived ${c.cadence} from the median observed UTC hour. Review is required before use.`
+    : temporal
+      ? `Measured a longest run of ${temporal.maxRunLength} prompt(s) across ${temporal.runSessions} recurring-run session(s). Review is required before use.`
+      : `Observed ${c.count}× across ${c.sessions} sessions; review is required before use.`;
   return {
     id: idFor(sourceSignatures, "loop"),
     name,
     title: deterministicTitle(c),
-    rationale: `Observed ${c.count}× across ${c.sessions} sessions; review is required before installation.`,
-    evidence: evidenceFor([c], "loop"),
+    rationale,
+    evidence,
     confidence: c.confidence,
     examples: safeExamples,
     sourceSignatures,
@@ -308,6 +320,8 @@ export function buildDetectPrompt(cands: Candidate[]): { system: string; prompt:
       confidence: c.confidence,
       assistants: c.assistants,
       ...(c.hint ? { hint: bounded(c.hint, 1_000) } : {}),
+      ...(c.temporal ? { temporal: c.temporal } : {}),
+      ...(c.cadence ? { cadence: bounded(c.cadence, 100) } : {}),
     })),
     null, 2,
   );
@@ -449,14 +463,25 @@ function mergeDistinctiveText(payload: SuggestionPayload): string {
   return payload.description;
 }
 
-/** Two independent lexical signals, either sufficient: the model naming two
- * clusters alike, or the underlying trigger/instruction text overlapping.
- * Concatenating them into one string dilutes both — a 0.77-similar trigger
- * pair drops below threshold once two unrelated names are prepended. */
+function canonicalMergeText(value: string): string {
+  return normalize(value
+    .replace(/\blgtm\b/gi, "looks good")
+    .replace(/\blooks good to me\b/gi, "looks good"));
+}
+
+/** Distinctive text is the primary signal. A strong name match can reinforce
+ * partial text overlap, but name alone never merges unrelated artifacts.
+ * The tiny semantic canonicalization covers the observed lgtm/looks-good
+ * dogfood synonym without pretending a lexical matcher is a general model. */
 function isNearDuplicate(a: Suggestion, b: Suggestion): boolean {
   if (a.payload.type !== b.payload.type) return false;
-  return similarity(normalize(a.name), normalize(b.name)) >= NEAR_DUPLICATE_THRESHOLD ||
-    similarity(normalize(mergeDistinctiveText(a.payload)), normalize(mergeDistinctiveText(b.payload))) >= NEAR_DUPLICATE_THRESHOLD;
+  const nameSimilarity = similarity(normalize(a.name), normalize(b.name));
+  const textSimilarity = similarity(
+    canonicalMergeText(mergeDistinctiveText(a.payload)),
+    canonicalMergeText(mergeDistinctiveText(b.payload)),
+  );
+  return textSimilarity >= NEAR_DUPLICATE_THRESHOLD ||
+    (nameSimilarity >= 0.75 && textSimilarity >= 0.25);
 }
 
 const CONFIDENCE_CAUTION: Record<Confidence, number> = { high: 0, inferred: 1, flagged: 2 };
@@ -465,32 +490,71 @@ const CONFIDENCE_CAUTION: Record<Confidence, number> = { high: 0, inferred: 1, f
  * asked to merge synonymous clusters, but nothing guarantees it will (the
  * dogfood case — "lgtm" and "looks good" returned as two separate command
  * suggestions for one habit). Hosts are considered in leverage order; a
- * suggestion folds into the first host of the same payload type that
- * isNearDuplicate judges lexically equivalent (either the names or the
- * distinctive payload text at trigram similarity ≥ 0.6). A merge that can't
- * re-resolve every unioned sourceSignature back to a candidate (e.g. a
- * signature outside this detect() window) leaves the host untouched and
- * simply drops the duplicate rather than fabricate evidence.
- *
- * Honest boundary: trigram similarity catches LEXICAL near-duplicates —
- * overlapping triggers ("push and create a/the pull request") or the model
- * naming two clusters alike ("lgtm-approve"/"looks-good-approve"). True
- * synonyms with dissimilar names AND triggers ("lgtm" vs "looks good" under
- * unrelated names) are not trigram-detectable; merging those remains the
- * model's prompt-instructed job, and this pass is the net under it. */
+ * suggestion folds into the first compatible host whose distinctive payload
+ * text is lexically equivalent. Unresolvable provenance keeps both outputs;
+ * deterministic consolidation must never silently drop evidence. */
+function sourceCandidates(
+  suggestion: Suggestion,
+  bySignature: Map<string, Candidate>,
+): Candidate[] | null {
+  const signatures = suggestion.sourceSignatures ?? [];
+  if (signatures.length === 0) return null;
+  const candidates = signatures.map(signature => bySignature.get(signature));
+  if (!candidates.every((candidate): candidate is Candidate => candidate !== undefined)) return null;
+  return [...new Set(candidates)];
+}
+
+function sourceSubtype(suggestion: Suggestion, bySignature: Map<string, Candidate>): string {
+  if (suggestion.payload.type === "hook") {
+    return [
+      "hook",
+      suggestion.payload.event,
+      suggestion.payload.matcher ?? "",
+      suggestion.payload.subcommand ?? "",
+      suggestion.payload.command ?? "",
+    ].join("\u0000");
+  }
+  if (suggestion.payload.type === "loop") {
+    return suggestion.payload.cadence ? "loop:scheduled" : "loop:unscheduled";
+  }
+  const candidates = sourceCandidates(suggestion, bySignature);
+  const kinds = [...new Set((candidates ?? []).map(candidate => candidate.kind))].sort();
+  if (suggestion.payload.type === "command") {
+    const special = kinds.filter(kind =>
+      kind === "paste" || kind === "sequence" || kind === "toolfail" || kind === "ritual");
+    return `command:${special.length ? special.join("+") : "plain"}`;
+  }
+  const special = kinds.filter(kind =>
+    kind === "answer" || kind === "correction" || kind === "instruction" || kind === "toolfail");
+  return `rule:${special.length ? special.join("+") : "plain"}`;
+}
+
 export function mergeNearDuplicates(suggestions: Suggestion[], bySignature: Map<string, Candidate>): Suggestion[] {
   const hosts: Suggestion[] = [];
   for (const suggestion of [...suggestions].sort(byLeverage)) {
-    const hostIndex = hosts.findIndex(host => isNearDuplicate(host, suggestion));
+    const hostIndex = hosts.findIndex(host =>
+      sourceSubtype(host, bySignature) === sourceSubtype(suggestion, bySignature) &&
+      isNearDuplicate(host, suggestion));
     if (hostIndex === -1) {
       hosts.push(suggestion);
       continue;
     }
 
     const host = hosts[hostIndex];
-    const unionSignatures = [...new Set([...(host.sourceSignatures ?? []), ...(suggestion.sourceSignatures ?? [])])];
-    const matched = unionSignatures.map(sig => bySignature.get(sig));
-    if (!matched.every((c): c is Candidate => c !== undefined)) continue; // unresolvable union: drop duplicate, host unchanged
+    const unionSignatures = [...new Set([
+      ...(host.sourceSignatures ?? []),
+      ...(suggestion.sourceSignatures ?? []),
+    ])].filter(Boolean).sort();
+    if (unionSignatures.length === 0) {
+      hosts.push(suggestion);
+      continue;
+    }
+    const resolved = unionSignatures.map(signature => bySignature.get(signature));
+    if (!resolved.every((candidate): candidate is Candidate => candidate !== undefined)) {
+      hosts.push(suggestion);
+      continue;
+    }
+    const matched = [...new Set(resolved)];
 
     const unionExamples = [...new Set([...(host.examples ?? []), ...(suggestion.examples ?? [])])].slice(0, 5);
     const evidence = evidenceFor(matched, host.payload.type);
@@ -522,7 +586,10 @@ export async function detect(
   opts: { limit?: number; onCap?: (dropped: number) => void; timeoutMs?: number } = {},
 ): Promise<Suggestion[]> {
   const limit = boundedDetectLimit(opts.limit);
-  const ranked = [...cands].sort((a, b) => candidateLeverage(b) - candidateLeverage(a) || b.count - a.count);
+  const ranked = [...cands].sort((a, b) =>
+    candidateLeverage(b) - candidateLeverage(a) ||
+    b.count - a.count ||
+    a.signature.localeCompare(b.signature));
   const top = ranked.slice(0, limit);
   if (ranked.length > limit) opts.onCap?.(ranked.length - limit);
 
@@ -609,7 +676,9 @@ export async function detect(
         suggestionPayload = {
           type: "loop",
           instruction: `${AUTHORIZATION_GUARD} Reminder: ${firstInstruction}`.slice(0, 2_000),
-          ...(typeof payload.cadence === "string" ? { cadence: bounded(payload.cadence, 100) } : {}),
+          // Cadence is derived from local timestamps. Model-authored cadence is
+          // untrusted wording and is never allowed to replace or invent it.
+          ...(primary.cadence ? { cadence: bounded(primary.cadence, 100) } : {}),
         };
       } else if (payload.type === "hook") {
         if (primary.kind === "ritual") {
@@ -684,6 +753,10 @@ export async function detect(
           : primary.hint === "repeated correction with no matching instruction"
             ? `A missing instruction was corrected ${evidence.count}× across ${evidence.sessions} distinct sessions; generated content is reconstructed locally.`
             : `The written instruction was restated ${evidence.count}× across ${evidence.sessions} distinct sessions; generated content is reconstructed locally.`
+        : primary.kind === "loop" && primary.cadence && primary.temporal
+          ? `Measured ${primary.temporal.distinctDays} active day(s) across a ${primary.temporal.spanDays}-day span; derived ${primary.cadence} from the median observed UTC hour.`
+          : primary.kind === "loop" && primary.temporal
+            ? `Measured a longest run of ${primary.temporal.maxRunLength} prompt(s) across ${primary.temporal.runSessions} recurring-run session(s).`
         : `Observed ${evidence.count}× across ${evidence.sessions} distinct sessions; generated content is reconstructed locally.`;
       out.push({
         id: idFor(sourceSignatures, suggestionPayload.type),
@@ -720,7 +793,8 @@ export async function detect(
     const bySignature = new Map<string, Candidate>();
     for (const candidate of top) {
       for (const sig of candidate.memberSignatures.length ? candidate.memberSignatures : [candidate.signature]) {
-        bySignature.set(bounded(sig), candidate);
+        const safeSignature = boundedOneLine(sig, OUTBOUND_FIELD_CAP);
+        if (safeSignature) bySignature.set(safeSignature, candidate);
       }
     }
     return mergeNearDuplicates(out, bySignature).sort(byLeverage);

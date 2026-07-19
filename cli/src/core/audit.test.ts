@@ -67,6 +67,15 @@ describe("audit restatements", () => {
 });
 
 describe("audit corrections", () => {
+  it("does not mine repeated dismissive openers as corrections", () => {
+    const prompts = [
+      turn("never mind, continue", "s1"),
+      turn("never mind, continue", "s2"),
+      turn("never mind, continue", "s3"),
+    ];
+    expect(audit(prompts, []).candidates).toEqual([]);
+  });
+
   it("routes a correction cluster matching an instruction to violated", () => {
     const instructions = [instruction("never edit generated files")];
     const prompts = [

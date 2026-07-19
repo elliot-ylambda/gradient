@@ -104,6 +104,17 @@ describe("candidateToCommand", () => {
     expect(s.sourceSignatures).toEqual(["make dev"]);
   });
 
+  it("stores a sorted, unique, redacted, non-empty signature set", () => {
+    const source = cand("fallback", 3);
+    source.memberSignatures = [" z ", "a", "a", "\n", "email person@example.com"];
+    const suggestion = candidateToCommand(source);
+    expect(suggestion.sourceSignatures).toEqual([
+      "a",
+      "email [REDACTED]",
+      "z",
+    ]);
+  });
+
   it("includes an estimated minutes-saved-per-month in evidence", () => {
     const s = candidateToCommand(cand("merge main into this pr", 9));
     expect(s.evidence.estMinutesSavedPerMonth).toBe(14);
@@ -122,9 +133,13 @@ describe("candidateToLoop", () => {
   });
 
   it("passes cadence through from the candidate", () => {
-    const loop: Candidate = { ...cand("check the dashboard", 8), kind: "loop", cadence: "daily" };
+    const loop: Candidate = {
+      ...cand("check the dashboard", 8), kind: "loop", cadence: "0 9 * * *",
+      temporal: { maxRunLength: 1, runSessions: 0, medianGapMinutes: 1_440, distinctDays: 8, spanDays: 9 },
+    };
     const s = candidateToLoop(loop);
-    expect(s.payload).toMatchObject({ type: "loop", cadence: "daily" });
+    expect(s.payload).toMatchObject({ type: "loop", cadence: "0 9 * * *" });
+    expect(s.rationale).toContain("8 active day(s)");
   });
 
   it("falls back to a command payload when the instruction contains a consequential action", () => {
@@ -208,6 +223,16 @@ describe("buildDetectPrompt", () => {
   it("forwards kind for loop candidates so the model can see they're already classified", () => {
     const loop: Candidate = { ...cand("run the smoke tests", 6), kind: "loop" };
     expect(JSON.parse(buildDetectPrompt([loop]).prompt)[0].kind).toBe("loop");
+  });
+
+  it("serializes local temporal and cadence evidence for loop decisions", () => {
+    const loop: Candidate = {
+      ...cand("check dashboard", 8), kind: "loop", cadence: "0 9 * * *",
+      temporal: { maxRunLength: 1, runSessions: 0, medianGapMinutes: 1_440, distinctDays: 8, spanDays: 9 },
+    };
+    const [wire] = JSON.parse(buildDetectPrompt([loop]).prompt);
+    expect(wire.temporal).toMatchObject({ distinctDays: 8, spanDays: 9 });
+    expect(wire.cadence).toBe("0 9 * * *");
   });
 
   it("redacts secrets and PII before sending candidates", () => {
@@ -485,9 +510,12 @@ describe("detect", () => {
     const llm = {
       name: "fake",
       available: async () => true,
-      complete: async () => JSON.stringify({ suggestions: [
+      complete: async ({ prompt }: { prompt: string }) => {
+        const wire = JSON.parse(prompt) as { id: string; signature: string }[];
+        const id = (signature: string) => wire.find(candidate => candidate.signature === signature)!.id;
+        return JSON.stringify({ suggestions: [
         {
-          sourceIds: [candidateRef(lgtm, 0)],
+          sourceIds: [id("lgtm")],
           name: "approve",
           confidence: "flagged",
           clarify: {
@@ -501,7 +529,7 @@ describe("detect", () => {
           payload: { type: "command", commandName: "approve", body: "MODEL ARTIFACT" },
         },
         {
-          sourceIds: [candidateRef(ship, 1)],
+          sourceIds: [id("ship")],
           name: "ship",
           confidence: "high",
           clarify: {
@@ -514,13 +542,14 @@ describe("detect", () => {
           payload: { type: "command", commandName: "ship" },
         },
         {
-          sourceIds: [candidateRef(review, 2)],
+          sourceIds: [id("review")],
           name: "review",
           confidence: "flagged",
           clarify: { question: "Only one?", options: [{ label: "a", body: "a" }] },
           payload: { type: "command", commandName: "review" },
         },
-      ] }),
+        ] });
+      },
     };
     const out = await detect([lgtm, ship, review], llm);
     expect(out[0].clarify).toEqual({
@@ -659,6 +688,20 @@ describe("detect", () => {
       payload: { type: "loop", cadence: "0 9 * * *" },
     }] }) };
     expect(await detect([source], llm)).toEqual([]);
+  });
+
+  it("preserves code-derived cadence and ignores model-authored cadence", async () => {
+    const loop: Candidate = {
+      ...cand("check the dashboard", 8), kind: "loop", cadence: "0 9 * * *",
+      temporal: { maxRunLength: 1, runSessions: 0, medianGapMinutes: 1_440, distinctDays: 8, spanDays: 9 },
+    };
+    const llm = { name: "fake", available: async () => true, complete: async () => JSON.stringify({ suggestions: [{
+      sourceIds: [candidateRef(loop)], name: "dashboard", confidence: "high",
+      payload: { type: "loop", cadence: "@reboot" },
+    }] }) };
+    const [out] = await detect([loop], llm);
+    expect(out.payload).toMatchObject({ type: "loop", cadence: "0 9 * * *" });
+    expect(out.rationale).toContain("derived 0 9 * * *");
   });
 
   it("normalizes unknown confidence and caps candidates", async () => {
@@ -932,6 +975,16 @@ describe("detect", () => {
 
 describe("mergeNearDuplicates", () => {
   const baseEvidence = { count: 5, sessions: 5, estMinutesSavedPerMonth: 5 };
+  const candidate = (signature: string, kind: Candidate["kind"] = "unknown", count = 5): Candidate => ({
+    kind, signature, examples: [signature], count, sessions: 2, sessionIds: ["s1", "s2"],
+    occurrences: [{ ts: "2026-06-01T10:00:00Z", sessionId: "s1" }],
+    memberSignatures: [signature], confidence: "high",
+  });
+  const commandSuggestion = (id: string, name: string, signature: string, trigger = signature): Suggestion => ({
+    id, name, title: "t", rationale: "r", confidence: "high", evidence: baseEvidence,
+    sourceSignatures: signature ? [signature] : [],
+    payload: { type: "command", commandName: name, body: "x", triggers: [trigger] },
+  });
 
   // Counter-test: identical distinctive text must still not merge a loop with
   // a command — the payload-type gate must be checked before similarity.
@@ -979,6 +1032,75 @@ describe("mergeNearDuplicates", () => {
     };
     const out = mergeNearDuplicates([a, b], new Map());
     expect(out).toHaveLength(2);
+  });
+
+  it("does not merge unrelated triggers merely because model names match", () => {
+    const a = commandSuggestion("a", "routine", "deploy staging");
+    const b = commandSuggestion("b", "routine-copy", "write parser tests");
+    const bySignature = new Map([
+      ["deploy staging", candidate("deploy staging")],
+      ["write parser tests", candidate("write parser tests")],
+    ]);
+    expect(mergeNearDuplicates([a, b], bySignature)).toHaveLength(2);
+  });
+
+  it("merges the lgtm/looks-good synonym even under unrelated model names", () => {
+    const a = commandSuggestion("a", "ack", "lgtm");
+    const b = commandSuggestion("b", "review-finished", "looks good");
+    const bySignature = new Map([
+      ["lgtm", candidate("lgtm")],
+      ["looks good", candidate("looks good")],
+    ]);
+    expect(mergeNearDuplicates([a, b], bySignature)).toHaveLength(1);
+  });
+
+  it("does not merge empty or unresolvable provenance", () => {
+    const emptyA = commandSuggestion("a", "same", "", "same trigger");
+    const emptyB = commandSuggestion("b", "same-copy", "", "same trigger");
+    expect(mergeNearDuplicates([emptyA, emptyB], new Map())).toHaveLength(2);
+
+    const missingA = commandSuggestion("c", "same", "missing-a", "same trigger");
+    const missingB = commandSuggestion("d", "same-copy", "missing-b", "same trigger");
+    expect(mergeNearDuplicates([missingA, missingB], new Map())).toHaveLength(2);
+  });
+
+  it("counts one candidate once when multiple member signatures resolve to it", () => {
+    const owner = candidate("primary", "unknown", 5);
+    owner.memberSignatures = ["primary", "alias"];
+    const a = commandSuggestion("a", "same", "primary", "same trigger");
+    const b = commandSuggestion("b", "same-copy", "alias", "same trigger");
+    const [merged] = mergeNearDuplicates([a, b], new Map([["primary", owner], ["alias", owner]]));
+    expect(merged.evidence.count).toBe(5);
+  });
+
+  it("keeps command/rule subtypes, loop schedule shape, and hook tuples separate", () => {
+    const paste = commandSuggestion("p", "workflow", "paste", "same trigger");
+    const sequence = commandSuggestion("s", "workflow-copy", "sequence", "same trigger");
+    const candidates = new Map([
+      ["paste", candidate("paste", "paste")],
+      ["sequence", candidate("sequence", "sequence")],
+    ]);
+    expect(mergeNearDuplicates([paste, sequence], candidates)).toHaveLength(2);
+
+    const scheduled: Suggestion = {
+      id: "l1", name: "daily-check", title: "t", rationale: "r", confidence: "high", evidence: baseEvidence,
+      sourceSignatures: ["daily"], payload: { type: "loop", instruction: "same", cadence: "0 9 * * *" },
+    };
+    const unscheduled: Suggestion = {
+      ...scheduled, id: "l2", name: "daily-check-copy", sourceSignatures: ["run"],
+      payload: { type: "loop", instruction: "same" },
+    };
+    expect(mergeNearDuplicates([scheduled, unscheduled], new Map())).toHaveLength(2);
+
+    const checkpoint: Suggestion = {
+      id: "h1", name: "checkpoint", title: "t", rationale: "r", confidence: "high", evidence: baseEvidence,
+      sourceSignatures: ["h1"], payload: { type: "hook", event: "PreCompact", subcommand: "checkpoint", description: "same" },
+    };
+    const notify: Suggestion = {
+      ...checkpoint, id: "h2", name: "checkpoint-copy", sourceSignatures: ["h2"],
+      payload: { type: "hook", event: "Notification", subcommand: "notify", description: "same" },
+    };
+    expect(mergeNearDuplicates([checkpoint, notify], new Map())).toHaveLength(2);
   });
 
   // Ambiguity must survive a merge: folding a flagged suggestion (with its
@@ -1040,15 +1162,20 @@ describe("idFor", () => {
 });
 
 describe("byLeverage", () => {
-  const suggestion = (estMinutesSavedPerMonth: number | undefined): Suggestion => ({
-    id: "x", name: "x", title: "x", rationale: "x", confidence: "high",
-    evidence: { count: 1, sessions: 1, ...(estMinutesSavedPerMonth !== undefined ? { estMinutesSavedPerMonth } : {}) },
-    payload: { type: "command", commandName: "x", body: "x" },
+  const suggestion = (estMinutesSavedPerMonth: number | undefined, count = 1, name = "x"): Suggestion => ({
+    id: name, name, title: "x", rationale: "x", confidence: "high",
+    evidence: { count, sessions: 1, ...(estMinutesSavedPerMonth !== undefined ? { estMinutesSavedPerMonth } : {}) },
+    payload: { type: "command", commandName: name, body: "x" },
   });
 
   it("sorts descending by estMinutesSavedPerMonth, treating a missing value as 0", () => {
     const sorted = [suggestion(1), suggestion(undefined), suggestion(5)].sort(byLeverage);
     expect(sorted.map(s => s.evidence.estMinutesSavedPerMonth)).toEqual([5, 1, undefined]);
+  });
+
+  it("uses evidence count and then name as deterministic tiebreaks", () => {
+    const sorted = [suggestion(5, 2, "z"), suggestion(5, 3, "b"), suggestion(5, 3, "a")].sort(byLeverage);
+    expect(sorted.map(item => item.name)).toEqual(["a", "b", "z"]);
   });
 });
 

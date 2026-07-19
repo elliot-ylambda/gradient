@@ -108,9 +108,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   // an unbounded-history accumulator without a ceiling.
   const pushEvents = (current: CommandEvent[], additions: CommandEvent[]): CommandEvent[] => {
     current.push(...scoped(additions));
-    if (current.length <= MAX_PROMPTS_HARD_CAP) return current;
-    const sorted = [...current].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
-    return sorted.slice(0, MAX_PROMPTS_HARD_CAP);
+    return capByRecency(current, MAX_PROMPTS_HARD_CAP).kept;
   };
 
   const ignore = compileIgnorePatterns(config.ignorePatterns);
@@ -146,9 +144,9 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
       toolEventsDropped += parsedEvents.dropped;
       toolEvents.push(...scoped(parsedEvents.events));
       if (toolEvents.length > MAX_TOOL_EVENTS) {
-        toolEvents.sort((left, right) => left.ts < right.ts ? 1 : left.ts > right.ts ? -1 : 0);
-        toolEventsDropped += toolEvents.length - MAX_TOOL_EVENTS;
-        toolEvents = toolEvents.slice(0, MAX_TOOL_EVENTS);
+        const capped = capByRecency(toolEvents, MAX_TOOL_EVENTS, MAX_TOOL_EVENTS);
+        toolEventsDropped += capped.dropped;
+        toolEvents = capped.kept;
       }
     }
     if (instructions.length > 0 && parseCorrectionContextFn) {
@@ -277,7 +275,9 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     count: chain.count,
     sessions: chain.sessions,
     sessionIds: chain.sessionIds,
-    occurrences: [],
+    // A chain occurrence is timestamped at its final step. Its ordered full
+    // signature remains the stable identity, so memberSignatures stays empty.
+    occurrences: chain.occurrences,
     memberSignatures: [],
     confidence: "high",
     assistants: [...new Set(chain.sessionIds.map(sessionId => assistantBySession.get(sessionId) ?? "claude-code"))],

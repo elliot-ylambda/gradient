@@ -35,7 +35,7 @@ export function estMinutesSavedPerMonth(
   return Math.round(monthly);
 }
 
-function meanLength(strings: string[]): number {
+export function meanLength(strings: string[]): number {
   return strings.length ? strings.reduce((sum, s) => sum + s.length, 0) / strings.length : 0;
 }
 

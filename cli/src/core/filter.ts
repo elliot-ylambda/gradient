@@ -15,6 +15,10 @@ const INJECTED_PATTERNS: RegExp[] = [
   /^<apps_instructions>/i,
   /^<plugins_instructions>/i,
   /^<multi_agent_mode>/i,
+  // Defensive fallback for Claude command wrapper fragments. A valid
+  // <command-name> envelope is consumed by parseTranscript; message/args-only
+  // fragments and older cached parser output must still never be mined.
+  /^<command-(?:message|args)>/i,
   /^\[Request interrupted/i,
   // Harness-scheduled autonomous-loop wakeups arrive in the user role but are
   // machine text, not habits: match the resolved tick/check headers and the

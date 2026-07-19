@@ -6,6 +6,7 @@ import type { InstructionLine } from "./instructions.js";
 import { safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
 import { stripUnsafeControls } from "./security.js";
 import type { Assistant, Candidate, Turn } from "./types.js";
+import { isDismissiveCorrection } from "./corrections.js";
 
 export const AUDIT = {
   SIM: 0.7,
@@ -180,7 +181,7 @@ export function audit(
   for (const prompt of prompts) {
     const text = prompt.text?.trim() ?? "";
     if (!text) continue;
-    if (CORRECTION_RE.test(text)) {
+    if (CORRECTION_RE.test(text) && !isDismissiveCorrection(text)) {
       if (options.confirmedCorrections === undefined && text.length < AUDIT.MAX_CORRECTION_LEN) {
         inferredCorrections.push(prompt);
       }
@@ -201,7 +202,8 @@ export function audit(
     ? inferredCorrections
     : options.confirmedCorrections.filter(prompt => {
       const text = prompt.text?.trim() ?? "";
-      return promptKeys.has(turnKey(prompt)) && text.length < AUDIT.MAX_CORRECTION_LEN && CORRECTION_RE.test(text);
+      return promptKeys.has(turnKey(prompt)) && text.length < AUDIT.MAX_CORRECTION_LEN &&
+        CORRECTION_RE.test(text) && !isDismissiveCorrection(text);
     });
 
   const candidates: Candidate[] = [];

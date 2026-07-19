@@ -1,6 +1,6 @@
 import type { Suggestion } from "./types.js";
 import { AUTHORIZATION_GUARD, clarifiedWorkflowBody } from "./detect.js";
-import { sanitizeName, stripUnsafeControls } from "./security.js";
+import { redact, sanitizeName, stripUnsafeControls } from "./security.js";
 
 export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan", "session-start", "recap", "notify"]);
 const TYPES = new Set(["command", "loop", "hook", "rule"]);
@@ -168,9 +168,36 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
   )) {
     throw new Error("suggestion.evidence assistants must contain known unique assistants");
   }
+  if (evidence.estMinutesSavedPerMonth !== undefined && (
+    !Number.isSafeInteger(evidence.estMinutesSavedPerMonth) ||
+    (evidence.estMinutesSavedPerMonth as number) < 0 ||
+    (evidence.estMinutesSavedPerMonth as number) > 1_000_000_000
+  )) {
+    throw new Error("suggestion.evidence estMinutesSavedPerMonth must be a non-negative safe integer");
+  }
+  if (evidence.temporal !== undefined) {
+    const temporal = evidence.temporal as Record<string, unknown> | null;
+    const integerFields = ["maxRunLength", "runSessions", "medianGapMinutes", "distinctDays"];
+    if (!temporal || typeof temporal !== "object" || Array.isArray(temporal) ||
+      integerFields.some(field => !Number.isSafeInteger(temporal[field]) ||
+        (temporal[field] as number) < 0 || (temporal[field] as number) > 1_000_000_000) ||
+      typeof temporal.spanDays !== "number" || !Number.isFinite(temporal.spanDays) ||
+      temporal.spanDays < 0 || temporal.spanDays > 1_000_000) {
+      throw new Error("suggestion.evidence temporal must contain bounded non-negative measurements");
+    }
+  }
   if (s.examples !== undefined &&
     (!Array.isArray(s.examples) || s.examples.length > 5 || s.examples.some(example => !validText(example, 2_000)))) {
     throw new Error("suggestion.examples must contain safe bounded text");
+  }
+  if (s.sourceSignatures !== undefined && (
+    !Array.isArray(s.sourceSignatures) ||
+    s.sourceSignatures.length > 100 ||
+    new Set(s.sourceSignatures).size !== s.sourceSignatures.length ||
+    s.sourceSignatures.some(signature =>
+      !validOneLine(signature, 1_000) || redact(signature) !== signature)
+  )) {
+    throw new Error("suggestion.sourceSignatures must contain unique redacted bounded lines");
   }
 }
 

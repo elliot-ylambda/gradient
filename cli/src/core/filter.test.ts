@@ -31,6 +31,10 @@ describe("isInjected", () => {
   it("no longer flags command-tag turns here — parseTranscript routes them to events before filter runs", () => {
     expect(isInjected("<command-name>/compact</command-name>")).toBe(false);
   });
+  it("keeps command message/args wrapper fragments out as a defensive fallback", () => {
+    expect(isInjected("<command-message>compact</command-message>")).toBe(true);
+    expect(isInjected("<command-args>--force</command-args>")).toBe(true);
+  });
   it("keeps genuine prompts that start with a non-injected tag (JSX/HTML/XML)", () => {
     expect(isInjected("<div>why is this broken?</div>")).toBe(false);
     expect(isInjected("<Button> not rendering correctly")).toBe(false);

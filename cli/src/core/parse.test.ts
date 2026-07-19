@@ -106,6 +106,45 @@ describe("parseTranscript", () => {
     });
     expect(parseTranscript([line]).events[0].command).toBe("/ship");
   });
+
+  it("drops empty, malformed, argument-bearing, and multiline command husks", () => {
+    const raw = (content: string) => JSON.stringify({
+      type: "user", sessionId: "s1", cwd: "/p/x", timestamp: "2026-06-01T00:00:00Z",
+      message: { role: "user", content },
+    });
+    const parsed = parseTranscript([
+      raw("<command-name></command-name>"),
+      raw("<command-name>   </command-name>"),
+      raw("<command-name>/ship now</command-name>"),
+      raw("<command-name>/ship\n/publish</command-name>"),
+      raw("<command-name>/unclosed"),
+    ]);
+    expect(parsed).toEqual({ turns: [], events: [] });
+  });
+
+  it("does not attribute post-command assistant usage to the prior human prompt", () => {
+    const command = commandLine("/compact");
+    const usage = JSON.stringify({
+      type: "assistant", sessionId: "s1",
+      message: { role: "assistant", content: [], usage: { input_tokens: 10, output_tokens: 5 } },
+    });
+    const parsed = parseTranscript([userString, command, usage]);
+    expect(parsed.turns[0].usageTokens).toBeUndefined();
+  });
+
+  it("attributes interleaved assistant usage only within the matching session", () => {
+    const otherUser = JSON.stringify({
+      type: "user", sessionId: "s2", cwd: "/p/y", timestamp: "2026-06-01T00:00:00Z",
+      message: { role: "user", content: "other prompt" },
+    });
+    const usage = JSON.stringify({
+      type: "assistant", sessionId: "s1",
+      message: { role: "assistant", content: [], usage: { output_tokens: 7 } },
+    });
+    const parsed = parseTranscript([userString, otherUser, usage]);
+    expect(parsed.turns[0].usageTokens).toBe(7);
+    expect(parsed.turns[1].usageTokens).toBeUndefined();
+  });
 });
 
 describe("parseTranscriptFile", () => {
