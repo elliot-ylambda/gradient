@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { boardStateDir, extractEditedFiles, locateRepo, resolveBoardRoot } from "./board.js";
+import {
+  boardStateDir,
+  discoverClaudeSessions,
+  extractEditedFiles,
+  locateRepo,
+  resolveBoardRoot,
+} from "./board.js";
 import { projectCacheDir } from "../config.js";
+import { encodeProjectDir } from "./collect.js";
 
 const execFileP = promisify(execFile);
 
@@ -71,5 +78,74 @@ describe("extractEditedFiles", () => {
   it("keeps paths outside the board root absolute and redacts secrets", () => {
     const lines = [toolLine("Edit", "/elsewhere/x.ts")];
     expect(extractEditedFiles(lines, "/repo")).toEqual(["/elsewhere/x.ts"]);
+  });
+});
+
+async function claudeTranscript(
+  home: string,
+  cwd: string,
+  sessionId: string,
+  opts: { branch?: string; sidechain?: boolean; ageMs?: number; extraLines?: string[] } = {},
+): Promise<string> {
+  const dir = join(home, ".claude", "projects", encodeProjectDir(cwd));
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, `${sessionId}.jsonl`);
+  const record = JSON.stringify({
+    type: "user",
+    cwd,
+    sessionId,
+    gitBranch: opts.branch ?? "main",
+    isSidechain: opts.sidechain ?? false,
+    message: { role: "user", content: "hello" },
+  });
+  await writeFile(path, [...(opts.extraLines ?? []), record].join("\n") + "\n");
+  if (opts.ageMs) {
+    const then = new Date(Date.now() - opts.ageMs);
+    await utimes(path, then, then);
+  }
+  return path;
+}
+
+describe("discoverClaudeSessions", () => {
+  it("finds live and idle sessions across worktrees, excluding other repos and sidechains", async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-repo-")));
+    const other = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-other-")));
+    await initRepo(repo);
+    await initRepo(other);
+    const worktree = join(repo, ".worktrees", "feature");
+    await execFileP("git", ["worktree", "add", "-q", worktree, "-b", "feature"], { cwd: repo });
+
+    await claudeTranscript(home, repo, "s-main", {
+      extraLines: [toolLine("Edit", join(repo, "cli/src/a.ts"))],
+    });
+    await claudeTranscript(home, worktree, "s-wt", { branch: "feature", ageMs: 20 * 60_000 });
+    await claudeTranscript(home, other, "s-other");
+    await claudeTranscript(home, repo, "s-side", { sidechain: true });
+    await claudeTranscript(home, repo, "s-old", { ageMs: 2 * 3_600_000 });
+
+    const sessions = await discoverClaudeSessions(repo, { home });
+    const byId = Object.fromEntries(sessions.map(s => [s.sessionId, s]));
+    expect(Object.keys(byId).sort()).toEqual(["s-main", "s-wt"]);
+    expect(byId["s-main"]).toMatchObject({
+      agent: "claude", branch: "main", worktree: "", liveness: "live",
+      editing: ["cli/src/a.ts"],
+    });
+    expect(byId["s-wt"]).toMatchObject({
+      branch: "feature", worktree: join(".worktrees", "feature"), liveness: "idle", editing: [],
+    });
+  });
+
+  it("reports unreadable transcripts via onWarn instead of failing silently", async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-repo-")));
+    await initRepo(repo);
+    const path = await claudeTranscript(home, repo, "s-locked");
+    await chmod(path, 0o000);
+    const warnings: string[] = [];
+    const sessions = await discoverClaudeSessions(repo, { home, onWarn: m => warnings.push(m) });
+    await chmod(path, 0o600);
+    expect(sessions).toEqual([]);
+    expect(warnings.some(w => w.includes("skipped unreadable transcript"))).toBe(true);
   });
 });
