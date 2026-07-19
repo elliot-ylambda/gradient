@@ -33,12 +33,12 @@ It writes:
   viewer.
 - `artifacts/dogfood/report.html` — a self-contained visual report.
 
-Pass means all 18 scenario groups passed with zero failures and zero skipped
+Pass means all 19 scenario groups passed with zero failures and zero skipped
 dependencies. A failure still writes reports and exits non-zero. `--keep`
 preserves only the synthetic temporary sandbox for debugging; otherwise it is
 removed after reporting.
 
-### What the 18 groups prove
+### What the 19 groups prove
 
 | Area | Packaged behavior |
 |---|---|
@@ -48,7 +48,7 @@ removed after reporting.
 | Artifacts | legacy command and migration; Claude/Codex skills; project/user/Codex rules; loop; built-in/command hooks; committed `gradient.md` entry |
 | Review and consent | direct apply, interactive approval, exact-prose playbook pinning, list, provenance, private modes |
 | Portability | team bundle, both plugin manifests, portable inclusion, hook/loop exclusion |
-| Runtime | recall hit and adoption, stats, terminal/HTML insights, continuity checkpoint/recap, autopilot continue/progress/stand-down, notification fail-open |
+| Runtime | recall hit and adoption, stats, terminal/HTML insights, continuity checkpoint/recap, board discovery/delta/consent, autopilot continue/progress/stand-down, notification fail-open |
 | Safety and cleanup | unknown/malformed/corrupt/oversized/symlinked input, disabled hook export, tamper refusal, line-surgical and hook-specific removal |
 | Evidence | tarball digest, source commit, sanitized paths/output, secret-sentinel absence, JSON/Markdown/HTML parity |
 
@@ -101,6 +101,11 @@ Result: PASS | FAIL | BLOCKED
       recent behavior and open the HTML artifact.
 - [ ] Enable continuity, trigger a real compaction, resume, and confirm the
       redacted checkpoint is helpful and clearly labeled untrusted.
+- [ ] In a repository with one Claude Code session and one Codex session, run
+      `gradient board` and confirm both appear without exposing prompt text.
+      Enable `gradient board on`, confirm a new commit or session produces one
+      delta line, then turn it off and confirm the hooks and cached board state
+      are removed.
 - [ ] Enable `gradient autopilot nudge` in the throwaway project. Observe one
       justified `Continue.` and one stand-down/no-progress decision; inspect
       `gradient autopilot status`, then turn it off.
@@ -110,8 +115,9 @@ Result: PASS | FAIL | BLOCKED
 - [ ] Build `gradient bundle live-dogfood`, load it as a local Claude plugin and
       through the supported Codex marketplace path, then invoke one bundled
       skill. Confirm hooks were not exported.
-- [ ] Run `gradient recall off`, `gradient continuity off`, and `gradient
-      autopilot off`; inspect settings and remove remaining generated artifacts.
+- [ ] Run `gradient recall off`, `gradient continuity off`, `gradient board
+      off`, and `gradient autopilot off`; inspect settings and remove remaining
+      generated artifacts.
 
 For each item, record `PASS`, `FAIL`, or `BLOCKED` plus a sanitized observation
 or link to non-sensitive evidence. Any safety-boundary failure, destructive

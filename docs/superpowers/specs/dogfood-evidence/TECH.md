@@ -88,7 +88,8 @@ flowchart LR
    list, settings inspection, project-playbook pinning, bundle, remove, and
    tamper refusal (PRODUCT 9–11, 13, 15).
 4. Runtime features: recall, adoption, stats, insights HTML, continuity,
-   checkpoint/recap, autopilot judge, notify, and hook contracts
+   checkpoint/recap, board session discovery and change-only refresh, autopilot
+   judge, notify, and hook contracts
    (PRODUCT 12–13).
 5. Failure directions: malformed/corrupt/oversized/symlinked inputs, unknown
    command, disabled hook export, and provenance-protected removal

@@ -17,7 +17,7 @@ an operating-system UI.
 The project has broad unit and integration coverage, but its release checks do
 not currently demonstrate that the packaged CLI's features compose correctly.
 A passing test count and a version smoke test cannot show that users can scan,
-review, apply, recall, remove, bundle, or run hooks through the artifact that is
+review, apply, recall, observe the board, remove, bundle, or run hooks through the artifact that is
 actually published.
 
 ## Goals
@@ -92,13 +92,14 @@ actually published.
 
 12. The suite proves the runtime assistance features: recall enable/status/hit
     and disable, adoption accounting, stats, terminal insights, HTML insights,
-    continuity enable/checkpoint/recap/disable, autopilot enable/status/judge
-    stand-down/disable, notification hook fail-open behavior, and hook-target
-    structured output contracts.
+    continuity enable/checkpoint/recap/disable, board discovery/consent/digest/
+    change-only refresh/disable, autopilot enable/status/judge stand-down/
+    disable, notification hook fail-open behavior, and hook-target structured
+    output contracts.
 
 13. Consent round-trips leave adjacent settings intact. Turning recall,
-    continuity, or autopilot off removes only the hook and private consent owned
-    by that feature.
+    continuity, board, or autopilot off removes only the hooks, private state,
+    and consent owned by that feature.
 
 14. Safety scenarios exercise at least unknown input, malformed hook input,
     corrupt configuration, corrupt and oversized suggestion caches, symlink
@@ -107,8 +108,9 @@ actually published.
     protected file or user action remains unchanged.
 
 15. The suite checks important filesystem invariants, including private modes
-    for configuration, caches, approvals, state, and generated agent artifacts;
-    provenance markers; settings merges; and removal round-trips.
+    for configuration, caches, approvals, board refresh baselines, state, and
+    generated agent artifacts; provenance markers; settings merges; and removal
+    round-trips.
 
 16. Each scenario records its human-readable purpose, sanitized command,
     outcome, duration, assertions, bounded stdout/stderr, and relevant artifact

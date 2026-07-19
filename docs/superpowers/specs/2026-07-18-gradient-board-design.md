@@ -1,7 +1,7 @@
 # gradient — `gradient board`: cross-session awareness — Design
 
 **Date:** 2026-07-18
-**Status:** Approved in design review; not yet implemented
+**Status:** Implemented and validated
 **Scope:** New feature. A derived, read-only "board" that tells each live
 Claude Code or Codex session in a repository what the *other* sessions are
 doing — branches, worktrees, recently edited files, recent merges, open PRs —

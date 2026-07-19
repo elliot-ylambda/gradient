@@ -4721,16 +4721,16 @@ var init_values = __esm({
 var sleep;
 var init_sleep = __esm({
   "node_modules/@anthropic-ai/sdk/internal/utils/sleep.mjs"() {
-    sleep = (ms, signal) => new Promise((resolve11) => {
+    sleep = (ms, signal) => new Promise((resolve12) => {
       if (signal?.aborted)
-        return resolve11();
+        return resolve12();
       const onAbort = () => {
         clearTimeout(timer);
-        resolve11();
+        resolve12();
       };
       const timer = setTimeout(() => {
         signal?.removeEventListener("abort", onAbort);
-        resolve11();
+        resolve12();
       }, ms);
       signal?.addEventListener("abort", onAbort, { once: true });
     });
@@ -6831,8 +6831,8 @@ var init_api_promise = __esm({
     init_parse2();
     APIPromise = class _APIPromise extends Promise {
       constructor(client, responsePromise, parseResponse = defaultParseResponse) {
-        super((resolve11) => {
-          resolve11(null);
+        super((resolve12) => {
+          resolve12(null);
         });
         this.responsePromise = responsePromise;
         this.parseResponse = parseResponse;
@@ -9328,16 +9328,16 @@ var init_async_queue = __esm({
         if (__classPrivateFieldGet(this, _AsyncQueue_closed, "f") || signal?.aborted) {
           return Promise.resolve({ done: true, value: void 0 });
         }
-        return new Promise((resolve11) => {
+        return new Promise((resolve12) => {
           const waiter = (r) => {
             signal?.removeEventListener("abort", onAbort);
-            resolve11(r);
+            resolve12(r);
           };
           const onAbort = () => {
             const idx = __classPrivateFieldGet(this, _AsyncQueue_waiters, "f").indexOf(waiter);
             if (idx >= 0)
               __classPrivateFieldGet(this, _AsyncQueue_waiters, "f").splice(idx, 1);
-            resolve11({ done: true, value: void 0 });
+            resolve12({ done: true, value: void 0 });
           };
           __classPrivateFieldGet(this, _AsyncQueue_waiters, "f").push(waiter);
           signal?.addEventListener("abort", onAbort, { once: true });
@@ -9932,13 +9932,13 @@ var init_json_schema = __esm({
 
 // node_modules/@anthropic-ai/sdk/internal/utils/promise.mjs
 function promiseWithResolvers() {
-  let resolve11;
+  let resolve12;
   let reject;
   const promise = new Promise((res, rej) => {
-    resolve11 = res;
+    resolve12 = res;
     reject = rej;
   });
-  return { promise, resolve: resolve11, reject };
+  return { promise, resolve: resolve12, reject };
 }
 var init_promise = __esm({
   "node_modules/@anthropic-ai/sdk/internal/utils/promise.mjs"() {
@@ -10537,7 +10537,7 @@ function betaGrepTool(ctx) {
   });
 }
 function runRipgrep(rg, pattern, searchPath, signal) {
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     const proc = cp.spawn(rg, ["-n", "--no-heading", "-e", pattern, "--", searchPath], {
       ...signal ? { signal } : {}
     });
@@ -10559,12 +10559,12 @@ function runRipgrep(rg, pattern, searchPath, signal) {
       if (signal?.aborted)
         return reject(new ToolError("grep: aborted"));
       if (truncated)
-        return resolve11(out + `
+        return resolve12(out + `
 [output truncated at ${GREP_OUTPUT_LIMIT} bytes]`);
       if (code === 0)
-        return resolve11(out);
+        return resolve12(out);
       if (code === 1)
-        return resolve11("no matches");
+        return resolve12("no matches");
       reject(new ToolError(`grep: rg failed: ${errOut || `exit ${code}`}`));
     });
     proc.on("error", (e) => {
@@ -10741,8 +10741,8 @@ var init_node = __esm({
 `;
         __classPrivateFieldGet(this, _BashSession_proc, "f").stdin.write(wrapped);
         if (__classPrivateFieldGet(this, _BashSession_buf, "f").indexOf(sentinel2) < 0) {
-          const { promise: sentinelSeen, resolve: resolve11 } = promiseWithResolvers();
-          __classPrivateFieldSet(this, _BashSession_waiting, { sentinel: sentinel2, resolve: resolve11 }, "f");
+          const { promise: sentinelSeen, resolve: resolve12 } = promiseWithResolvers();
+          __classPrivateFieldSet(this, _BashSession_waiting, { sentinel: sentinel2, resolve: resolve12 }, "f");
           let timer;
           let onAbort;
           try {
@@ -12482,12 +12482,12 @@ var init_BetaMessageStream = __esm({
           }
           return this._emit("error", new AnthropicError(String(error)));
         });
-        __classPrivateFieldSet(this, _BetaMessageStream_connectedPromise, new Promise((resolve11, reject) => {
-          __classPrivateFieldSet(this, _BetaMessageStream_resolveConnectedPromise, resolve11, "f");
+        __classPrivateFieldSet(this, _BetaMessageStream_connectedPromise, new Promise((resolve12, reject) => {
+          __classPrivateFieldSet(this, _BetaMessageStream_resolveConnectedPromise, resolve12, "f");
           __classPrivateFieldSet(this, _BetaMessageStream_rejectConnectedPromise, reject, "f");
         }), "f");
-        __classPrivateFieldSet(this, _BetaMessageStream_endPromise, new Promise((resolve11, reject) => {
-          __classPrivateFieldSet(this, _BetaMessageStream_resolveEndPromise, resolve11, "f");
+        __classPrivateFieldSet(this, _BetaMessageStream_endPromise, new Promise((resolve12, reject) => {
+          __classPrivateFieldSet(this, _BetaMessageStream_resolveEndPromise, resolve12, "f");
           __classPrivateFieldSet(this, _BetaMessageStream_rejectEndPromise, reject, "f");
         }), "f");
         __classPrivateFieldGet(this, _BetaMessageStream_connectedPromise, "f").catch(() => {
@@ -12657,11 +12657,11 @@ var init_BetaMessageStream = __esm({
        *   const message = await stream.emitted('message') // rejects if the stream errors
        */
       emitted(event) {
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve12, reject) => {
           __classPrivateFieldSet(this, _BetaMessageStream_catchingPromiseCreated, true, "f");
           if (event !== "error")
             this.once("error", reject);
-          this.once(event, resolve11);
+          this.once(event, resolve12);
         });
       }
       async done() {
@@ -13023,7 +13023,7 @@ var init_BetaMessageStream = __esm({
               if (done) {
                 return { value: void 0, done: true };
               }
-              return new Promise((resolve11, reject) => readQueue.push({ resolve: resolve11, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: void 0, done: true });
+              return new Promise((resolve12, reject) => readQueue.push({ resolve: resolve12, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: void 0, done: true });
             }
             const chunk = pushQueue.shift();
             return { value: chunk, done: false };
@@ -15243,12 +15243,12 @@ var init_MessageStream = __esm({
           }
           return this._emit("error", new AnthropicError(String(error)));
         });
-        __classPrivateFieldSet(this, _MessageStream_connectedPromise, new Promise((resolve11, reject) => {
-          __classPrivateFieldSet(this, _MessageStream_resolveConnectedPromise, resolve11, "f");
+        __classPrivateFieldSet(this, _MessageStream_connectedPromise, new Promise((resolve12, reject) => {
+          __classPrivateFieldSet(this, _MessageStream_resolveConnectedPromise, resolve12, "f");
           __classPrivateFieldSet(this, _MessageStream_rejectConnectedPromise, reject, "f");
         }), "f");
-        __classPrivateFieldSet(this, _MessageStream_endPromise, new Promise((resolve11, reject) => {
-          __classPrivateFieldSet(this, _MessageStream_resolveEndPromise, resolve11, "f");
+        __classPrivateFieldSet(this, _MessageStream_endPromise, new Promise((resolve12, reject) => {
+          __classPrivateFieldSet(this, _MessageStream_resolveEndPromise, resolve12, "f");
           __classPrivateFieldSet(this, _MessageStream_rejectEndPromise, reject, "f");
         }), "f");
         __classPrivateFieldGet(this, _MessageStream_connectedPromise, "f").catch(() => {
@@ -15418,11 +15418,11 @@ var init_MessageStream = __esm({
        *   const message = await stream.emitted('message') // rejects if the stream errors
        */
       emitted(event) {
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve12, reject) => {
           __classPrivateFieldSet(this, _MessageStream_catchingPromiseCreated, true, "f");
           if (event !== "error")
             this.once("error", reject);
-          this.once(event, resolve11);
+          this.once(event, resolve12);
         });
       }
       async done() {
@@ -15743,7 +15743,7 @@ var init_MessageStream = __esm({
               if (done) {
                 return { value: void 0, done: true };
               }
-              return new Promise((resolve11, reject) => readQueue.push({ resolve: resolve11, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: void 0, done: true });
+              return new Promise((resolve12, reject) => readQueue.push({ resolve: resolve12, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: void 0, done: true });
             }
             const chunk = pushQueue.shift();
             return { value: chunk, done: false };
@@ -21308,7 +21308,7 @@ ${c.bold("Instruction effectiveness")}`);
       case "board": {
         const action = positionals[0] ?? "show";
         if (action === "on" || action === "off") {
-          const result = await setBoard(action === "on", projectDir);
+          const result = await setBoard(action === "on", projectDir, { home: io.home });
           log(
             result.on ? `${c.ok("board hooks installed")} ${c.muted(result.settingsPath)}` : `${c.muted("board hooks removed:")} ${result.settingsPath}`
           );
@@ -21317,7 +21317,7 @@ ${c.bold("Instruction effectiveness")}`);
         if (action === "digest" || action === "refresh") {
           try {
             const input = await readStdin();
-            const text = action === "digest" ? await boardDigest(input, projectDir) : await boardRefresh(input, projectDir);
+            const text = action === "digest" ? await boardDigest(input, projectDir, { home: io.home }) : await boardRefresh(input, projectDir, { home: io.home });
             if (text) log(text);
           } catch {
           }
@@ -21330,6 +21330,7 @@ ${c.bold("Instruction effectiveness")}`);
         const warnings = [];
         const selfId = process.env.CLAUDE_SESSION_ID;
         log(await boardShow(projectDir, {
+          home: io.home,
           ...selfId ? { selfSessionId: selfId } : {},
           ...flags.verbose ? { onWarn: (m) => warnings.push(m) } : {}
         }));
@@ -21537,12 +21538,12 @@ Usage:
 
 // src/bin.ts
 import { realpathSync as realpathSync3 } from "node:fs";
-import { resolve as resolve10 } from "node:path";
+import { resolve as resolve11 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var STDIN_MAX_CHARS = 1e6;
 function gradientHomeFromEnv(env = process.env) {
   const configured = env.GRADIENT_HOME?.trim();
-  return configured ? resolve10(configured) : void 0;
+  return configured ? resolve11(configured) : void 0;
 }
 async function readStdinJson2() {
   if (process.stdin.isTTY) return {};

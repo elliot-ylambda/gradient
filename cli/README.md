@@ -176,7 +176,7 @@ and its five implementation plans under `docs/superpowers/plans/`.
 npm install
 npm test         # vitest
 npm run build    # tsc → dist/
-npm run dogfood  # packed install → 18 synthetic end-to-end scenario groups
+npm run dogfood  # packed install → 19 synthetic end-to-end scenario groups
 ```
 
 `GRADIENT_HOME=/absolute/path` is an optional isolation override for CI,

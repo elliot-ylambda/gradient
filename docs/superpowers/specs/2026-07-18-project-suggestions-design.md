@@ -1,7 +1,7 @@
 # gradient — Project suggestions → committed `gradient.md` — Design
 
 **Date:** 2026-07-18
-**Status:** Approved (design review complete; implementation plan pending)
+**Status:** Implemented and validated (merged in PR #20)
 **Scope:** Builds the increment deferred in
 [`2026-07-01-gradient-md-design.md`](./2026-07-01-gradient-md-design.md) §6: a
 project-level suggestion payload written into the committed `<repo>/gradient.md`

@@ -536,7 +536,7 @@ export async function main(
       case "board": {
         const action = positionals[0] ?? "show";
         if (action === "on" || action === "off") {
-          const result = await setBoard(action === "on", projectDir);
+          const result = await setBoard(action === "on", projectDir, { home: io.home });
           log(
             result.on
               ? `${c.ok("board hooks installed")} ${c.muted(result.settingsPath)}`
@@ -549,8 +549,8 @@ export async function main(
           try {
             const input = await readStdin();
             const text = action === "digest"
-              ? await boardDigest(input as { session_id?: unknown }, projectDir)
-              : await boardRefresh(input as { session_id?: unknown }, projectDir);
+              ? await boardDigest(input as { session_id?: unknown }, projectDir, { home: io.home })
+              : await boardRefresh(input as { session_id?: unknown }, projectDir, { home: io.home });
             if (text) log(text);
           } catch {
             // A board failure must never block a session.
@@ -567,6 +567,7 @@ export async function main(
         const warnings: string[] = [];
         const selfId = process.env.CLAUDE_SESSION_ID;
         log(await boardShow(projectDir, {
+          home: io.home,
           ...(selfId ? { selfSessionId: selfId } : {}),
           ...(flags.verbose ? { onWarn: (m: string) => warnings.push(m) } : {}),
         }));

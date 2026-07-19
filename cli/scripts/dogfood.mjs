@@ -34,7 +34,7 @@ const LIVE_LIMITATIONS = [
 const COVERED_COMMANDS = new Set([
   "<bare>", "help", "init", "scan", "review", "session-start", "apply", "explain",
   "notify", "list", "remove", "migrate", "recall", "stats", "insights", "continuity",
-  "recap", "bundle", "checkpoint", "autopilot", "respond",
+  "board", "recap", "bundle", "checkpoint", "autopilot", "respond",
 ]);
 
 function parseOptions(argv) {
@@ -444,8 +444,27 @@ async function main() {
         mkdir(state.project, { recursive: true }),
         mkdir(state.fakeBin, { recursive: true }),
       ]);
-      const gitInit = await command("git init --quiet <project>", "git", ["init", "--quiet", state.project], { cwd: state.sandbox, env: process.env });
+      const gitInit = await command(
+        "git init --quiet --initial-branch=main <project>",
+        "git",
+        ["init", "--quiet", "--initial-branch=main", state.project],
+        { cwd: state.sandbox, env: process.env },
+      );
       equal(gitInit.exitCode, 0, "synthetic project is a Git repository");
+      await writeFile(join(state.project, "README.md"), "# Synthetic Gradient dogfood project\n", { mode: 0o644 });
+      const gitAdd = await command("git add README.md", "git", ["add", "README.md"], { cwd: state.project, env: process.env });
+      equal(gitAdd.exitCode, 0, "synthetic baseline is staged");
+      const gitCommit = await command("git commit --quiet -m 'synthetic baseline'", "git", ["commit", "--quiet", "-m", "synthetic baseline"], {
+        cwd: state.project,
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Gradient Dogfood",
+          GIT_AUTHOR_EMAIL: "dogfood@example.invalid",
+          GIT_COMMITTER_NAME: "Gradient Dogfood",
+          GIT_COMMITTER_EMAIL: "dogfood@example.invalid",
+        },
+      });
+      equal(gitCommit.exitCode, 0, "synthetic main branch has a baseline commit");
 
       const fakeBackend = `#!${process.execPath}\n` + String.raw`
 import { basename } from "node:path";
@@ -475,6 +494,9 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         await writeFile(path, fakeBackend, { mode: 0o755 });
         await chmod(path, 0o755);
       }
+      const fakeGhPath = join(state.fakeBin, "gh");
+      await writeFile(fakeGhPath, `#!${process.execPath}\nprocess.stdout.write("[]");\n`, { mode: 0o755 });
+      await chmod(fakeGhPath, 0o755);
 
       const encoded = state.project.replace(/[\\/]/g, "-").replace(/:/g, "-");
       const claudeRoot = join(state.home, ".claude", "projects", encoded);
@@ -493,7 +515,7 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
           claudeLine("user", sessionId, iso(session * 10), repeated),
           claudeLine("assistant", sessionId, iso(session * 10 + 1), [
             { type: "text", text: "Synthetic assistant output." },
-            { type: "tool_use", name: "Edit", id: `tool-${session}` },
+            { type: "tool_use", name: "Edit", id: `tool-${session}`, input: { file_path: join(state.project, "README.md") } },
           ]),
           claudeLine("user", sessionId, iso(session * 10 + 2), repeated),
           claudeLine("user", sessionId, iso(session * 10 + 3), "<command-name>/compact</command-name>"),
@@ -800,6 +822,84 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       assertion(statusOff.stdout.includes("PreCompact): off") && statusOff.stdout.includes("SessionStart): off"), "continuity status reports both hooks off");
     }, ["insights"]);
 
+    await scenario("board", "Observe live sessions, change-only refresh, and consent cleanup", "runtime", async ({ assertion, equal }) => {
+      const manual = await runCli(["board"]);
+      equal(manual.exitCode, 0, "manual board succeeds without prior consent");
+      assertion(manual.stdout.includes("gradient board — 4 other sessions in this repo"), "manual board discovers both synthetic Claude and Codex sessions");
+      assertion(manual.stdout.includes("• claude") && manual.stdout.includes("• codex"), "manual board identifies both agent families");
+      assertion(manual.stdout.includes("editing: README.md"), "manual board derives bounded edited-file context");
+      assertion(!manual.stdout.includes(SECRET_SENTINEL), "manual board redacts the secret sentinel");
+
+      const withoutConsent = await runCli(["board", "digest"], {
+        input: JSON.stringify({ session_id: "claude-dogfood-1" }),
+      });
+      equal(withoutConsent.exitCode, 0, "board digest fails open before consent");
+      equal(withoutConsent.stdout, "", "board digest stays silent before consent");
+
+      const on = await runCli(["board", "on"]);
+      equal(on.exitCode, 0, "board enable succeeds");
+      const enabledConfig = await readJson(configPath);
+      equal(enabledConfig.boardProjects, [await realpath(state.project)], "board consent is isolated to the synthetic repository root");
+      const settingsPath = join(state.project, ".claude", "settings.local.json");
+      const settingsOn = JSON.stringify(await readJson(settingsPath));
+      assertion(settingsOn.includes("gradient board digest") && settingsOn.includes("gradient board refresh"), "board installs both project hooks");
+
+      const digest = await runCli(["board", "digest"], {
+        input: JSON.stringify({ session_id: "claude-dogfood-1" }),
+      });
+      equal(digest.exitCode, 0, "consented board digest succeeds");
+      assertion(digest.stdout.includes("<gradient-board>") && digest.stdout.includes("untrusted data"), "hook digest is explicitly wrapped as untrusted data");
+      assertion(digest.stdout.includes("3 other sessions") && digest.stdout.includes("(you) claude"), "hook digest excludes and marks the caller");
+      assertion(!digest.stdout.includes(SECRET_SENTINEL), "hook digest contains no secret sentinel");
+
+      const boardDir = join(await projectCacheDir(), "board");
+      const seenPath = join(boardDir, "seen", "claude-dogfood-1");
+      assertion(await pathExists(seenPath), "board digest records an isolated refresh baseline");
+      equal((await stat(seenPath)).mode & 0o077, 0, "board refresh baseline is private");
+      const unchanged = await runCli(["board", "refresh"], {
+        input: JSON.stringify({ session_id: "claude-dogfood-1" }),
+      });
+      equal(unchanged.exitCode, 0, "unchanged board refresh succeeds");
+      equal(unchanged.stdout, "", "unchanged board refresh stays silent");
+
+      await writeFile(join(state.project, "board-landed.txt"), "synthetic board change\n", { mode: 0o644 });
+      const boardAdd = await command("git add board-landed.txt", "git", ["add", "board-landed.txt"], { cwd: state.project, env: process.env });
+      equal(boardAdd.exitCode, 0, "board change is staged");
+      const boardCommit = await command("git commit --quiet -m 'dogfood board landed change'", "git", ["commit", "--quiet", "-m", "dogfood board landed change"], {
+        cwd: state.project,
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Gradient Dogfood",
+          GIT_AUTHOR_EMAIL: "dogfood@example.invalid",
+          GIT_COMMITTER_NAME: "Gradient Dogfood",
+          GIT_COMMITTER_EMAIL: "dogfood@example.invalid",
+        },
+      });
+      equal(boardCommit.exitCode, 0, "main advances after the digest baseline");
+      const baseline = await readJson(seenPath);
+      await writeJson(seenPath, { ...baseline, checkedAt: Date.now() - 60_000 });
+      const changed = await runCli(["board", "refresh"], {
+        input: JSON.stringify({ session_id: "claude-dogfood-1" }),
+      });
+      equal(changed.exitCode, 0, "changed board refresh succeeds");
+      assertion(changed.stdout.startsWith("board:") && changed.stdout.includes("landed on main"), "changed board refresh emits one actionable delta line");
+
+      const off = await runCli(["board", "off"]);
+      equal(off.exitCode, 0, "board disable succeeds");
+      const disabledConfig = await readJson(configPath);
+      equal(disabledConfig.boardProjects, [], "board disable revokes repository consent");
+      const settingsOff = JSON.stringify(await readJson(settingsPath));
+      assertion(!settingsOff.includes("gradient board digest") && !settingsOff.includes("gradient board refresh"), "board disable removes only its hooks");
+      assertion(!(await pathExists(boardDir)), "board disable removes private board state");
+      const staleHook = await runCli(["board", "digest"], {
+        input: JSON.stringify({ session_id: "claude-dogfood-1" }),
+      });
+      equal(staleHook.exitCode, 0, "stale board hook remains fail-open after consent removal");
+      equal(staleHook.stdout, "", "stale board hook is inert after consent removal");
+      const unknown = await runCli(["board", "sideways"]);
+      equal(unknown.exitCode, 2, "unknown board action is a usage error");
+    }, ["continuity"]);
+
     await scenario("autopilot", "Exercise autopilot continue, progress, stand-down, and consent removal", "runtime", async ({ assertion, equal }) => {
       await updateConfig({ backend: "claude-cli", targets: ["claude-code", "codex"] });
       const on = await runCli(["autopilot", "nudge"]);
@@ -837,14 +937,14 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       equal(off.exitCode, 0, "autopilot disable succeeds");
       const statusOff = await runCli(["autopilot", "status"]);
       assertion(statusOff.stdout.includes("mode: off") && statusOff.stdout.includes("stop hook here: not installed"), "autopilot consent and hook are removed together");
-    }, ["continuity"]);
+    }, ["board"]);
 
     await scenario("hook-contracts", "Verify notification and malformed hook inputs fail open", "runtime", async ({ assertion, equal }) => {
       const notify = await runCli(["notify"], { input: JSON.stringify({ hook_event_name: "Notification" }) });
       equal(notify.exitCode, 0, "notification hook exits zero without desktop support");
       equal(notify.stdout, "", "notification hook is silent");
-      for (const name of ["recall", "checkpoint", "respond"]) {
-        const result = await runCli([name], { input: "{malformed" });
+      for (const name of ["recall", "checkpoint", "respond", "board digest", "board refresh"]) {
+        const result = await runCli(name.split(" "), { input: "{malformed" });
         equal(result.exitCode, 0, `${name} malformed hook input fails open`);
         equal(result.stdout, "", `${name} malformed hook input stays silent`);
       }
