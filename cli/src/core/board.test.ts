@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, realpath, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,14 +8,19 @@ import { promisify } from "node:util";
 import {
   boardStateDir,
   collectRepoState,
+  deltaLine,
+  digestForSession,
   discoverClaudeSessions,
   discoverCodexSessions,
   extractEditedFiles,
   landedLine,
   locateRepo,
   openPrs,
+  refreshDelta,
   renderDigest,
   resolveBoardRoot,
+  seenEqual,
+  seenFromBoard,
   type BoardState,
 } from "./board.js";
 import { projectCacheDir } from "../config.js";
@@ -315,5 +321,63 @@ describe("renderDigest", () => {
       worktree: "", liveness: "live" as const, ageMs: 60_000, editing: [],
     }));
     expect(renderDigest(stateFixture({ sessions: many })).split("\n").length).toBe(25);
+  });
+});
+
+describe("fingerprint and refresh", () => {
+  it("ignores mtimes and editing lists but catches merges, sessions, and PR changes", () => {
+    const base = seenFromBoard(stateFixture(), 1000);
+    const churn = seenFromBoard(stateFixture({
+      sessions: stateFixture().sessions.map(s => ({ ...s, ageMs: s.ageMs + 60_000, editing: [] })),
+    }), 2000);
+    expect(seenEqual(base, churn)).toBe(true);
+
+    const merged = seenFromBoard(stateFixture({
+      mainTip: "b".repeat(40),
+      landed: ["PR #16 spec/plugin", "PR #18 codex/release-cleanup"],
+    }), 3000);
+    expect(seenEqual(base, merged)).toBe(false);
+    expect(deltaLine(base, merged, "main"))
+      .toBe("board: PR #18 codex/release-cleanup landed on main");
+
+    const ended = seenFromBoard(stateFixture({ sessions: [stateFixture().sessions[0]] }), 4000);
+    expect(deltaLine(base, ended, "main"))
+      .toBe("board: claude session on spec/plugin ended");
+  });
+
+  it("digest writes a baseline; refresh is silent until something changes, honoring the floor", async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-repo-")));
+    await initRepo(repo);
+    const gh = async () => "[]";
+    const now = Date.now();
+
+    await claudeTranscript(home, repo, "me");
+    const digest = await digestForSession(repo, "me", { home, now, gh });
+    expect(digest).toContain("gradient board — 0 other sessions in this repo");
+
+    // Inside the floor: silent even though state will change below.
+    await claudeTranscript(home, repo, "peer", { branch: "feature" });
+    expect(await refreshDelta(repo, "me", { home, now: now + 10_000, gh })).toBeNull();
+    // Past the floor: the new session is announced once, then silence again.
+    expect(await refreshDelta(repo, "me", { home, now: now + 40_000, gh }))
+      .toBe("board: claude session on feature joined");
+    expect(await refreshDelta(repo, "me", { home, now: now + 80_000, gh })).toBeNull();
+  });
+
+  it("garbage-collects seen files older than 7 days", async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-repo-")));
+    await initRepo(repo);
+    const gh = async () => "[]";
+    const now = Date.now();
+    await claudeTranscript(home, repo, "me");
+    await digestForSession(repo, "departed", { home, now, gh });
+    await digestForSession(repo, "me", { home, now, gh });
+    const departedSeen = join(boardStateDir(await realpath(repo), home), "seen", "departed");
+    const eightDaysAgo = new Date(now - 8 * 24 * 3_600_000);
+    await utimes(departedSeen, eightDaysAgo, eightDaysAgo);
+    await refreshDelta(repo, "me", { home, now: now + 40_000, gh });
+    expect(existsSync(departedSeen)).toBe(false);
   });
 });

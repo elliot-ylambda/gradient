@@ -5,8 +5,8 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { projectCacheDir } from "../config.js";
 import { collectCodex, readCodexSessionMeta } from "./collect-codex.js";
-import { safeMkdir, safeReadFile, safeWriteFile } from "./safeFs.js";
-import { redact } from "./security.js";
+import { safeMkdir, safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
+import { redact, sanitizeName } from "./security.js";
 import { readTranscriptLines } from "./tail.js";
 
 export const LIVE_MS = 600_000;
@@ -429,4 +429,130 @@ export function renderDigest(state: BoardState): string {
     );
   }
   return lines.slice(0, DIGEST_LINE_CAP).join("\n");
+}
+
+export interface SeenState {
+  checkedAt: number;
+  sessions: string[];
+  mainTip: string;
+  prs: string[];
+  landed: string[];
+}
+
+export function seenFromBoard(state: BoardState, now: number): SeenState {
+  return {
+    checkedAt: now,
+    sessions: state.sessions
+      .map(session => `${session.agent}:${session.sessionId}:${session.branch ?? ""}`)
+      .sort(),
+    mainTip: state.mainTip,
+    prs: state.prs === "unavailable" ? [] : [...state.prs.lines].sort(),
+    landed: [...state.landed],
+  };
+}
+
+export function seenEqual(a: SeenState, b: SeenState): boolean {
+  return JSON.stringify({ ...a, checkedAt: 0 }) === JSON.stringify({ ...b, checkedAt: 0 });
+}
+
+function describeSessionKey(key: string): string {
+  const [agent, , ...branchParts] = key.split(":");
+  const branch = branchParts.join(":");
+  return branch ? `${agent} session on ${branch}` : `${agent} session`;
+}
+
+export function deltaLine(prev: SeenState, next: SeenState, defaultBranch: string): string {
+  const parts: string[] = [];
+  for (const landed of next.landed) {
+    if (!prev.landed.includes(landed)) parts.push(`${landed} landed on ${defaultBranch}`);
+  }
+  const prevSessions = new Set(prev.sessions);
+  const nextSessions = new Set(next.sessions);
+  for (const key of next.sessions) {
+    if (!prevSessions.has(key)) parts.push(`${describeSessionKey(key)} joined`);
+  }
+  for (const key of prev.sessions) {
+    if (!nextSessions.has(key)) parts.push(`${describeSessionKey(key)} ended`);
+  }
+  if (JSON.stringify(prev.prs) !== JSON.stringify(next.prs)) parts.push("open PRs changed");
+  if (parts.length === 0 && prev.mainTip !== next.mainTip) {
+    parts.push(`new commits on ${defaultBranch}`);
+  }
+  return `board: ${parts.slice(0, 4).join("; ")}`;
+}
+
+function seenPath(root: string, sessionId: string, home: string): string {
+  return join(boardStateDir(root, home), "seen", sanitizeName(sessionId) || "unknown");
+}
+
+async function writeSeen(root: string, sessionId: string, seen: SeenState, home: string): Promise<void> {
+  const dir = join(boardStateDir(root, home), "seen");
+  await safeMkdir(home, dir);
+  await safeWriteFile(home, seenPath(root, sessionId, home), JSON.stringify(seen));
+}
+
+export async function digestForSession(
+  projectDir: string,
+  sessionId: string | undefined,
+  opts: AssembleOptions = {},
+): Promise<string | null> {
+  const state = await assembleBoard(projectDir, { ...opts, selfSessionId: sessionId });
+  if (!state) return null;
+  if (sessionId) {
+    const home = opts.home ?? homedir();
+    const now = opts.now ?? Date.now();
+    try {
+      await writeSeen(state.root, sessionId, seenFromBoard(state, now), home);
+    } catch {
+      // the digest is still useful without a refresh baseline
+    }
+  }
+  return renderDigest(state);
+}
+
+export async function refreshDelta(
+  projectDir: string,
+  sessionId: string,
+  opts: AssembleOptions = {},
+): Promise<string | null> {
+  const home = opts.home ?? homedir();
+  const now = opts.now ?? Date.now();
+  const root = await resolveBoardRoot(projectDir);
+  if (!root) return null;
+  let prev: SeenState | null = null;
+  try {
+    const parsed = JSON.parse(
+      await safeReadFile(home, seenPath(root, sessionId, home), { maxBytes: 100_000 }),
+    ) as SeenState;
+    if (Number.isFinite(parsed.checkedAt)) prev = parsed;
+  } catch {
+    // no baseline yet
+  }
+  if (prev && now - prev.checkedAt < REFRESH_FLOOR_MS) return null;
+  const state = await assembleBoard(projectDir, { ...opts, selfSessionId: sessionId });
+  if (!state) return null;
+  const next = seenFromBoard(state, now);
+  await writeSeen(root, sessionId, next, home);
+  await gcSeen(root, home, now);
+  if (!prev) return null; // first look was (or will be) the SessionStart digest
+  if (seenEqual(prev, next)) return null;
+  return deltaLine(prev, next, state.defaultBranch);
+}
+
+async function gcSeen(root: string, home: string, now: number): Promise<void> {
+  const dir = join(boardStateDir(root, home), "seen");
+  let names: string[] = [];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const path = join(dir, name);
+    try {
+      if (now - (await lstat(path)).mtimeMs > SEEN_TTL_MS) await safeUnlink(home, path);
+    } catch {
+      // leave entries we cannot stat or remove
+    }
+  }
 }
