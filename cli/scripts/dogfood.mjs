@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   chmod,
+  cp,
   lstat,
   mkdir,
   mkdtemp,
@@ -268,6 +269,27 @@ async function lockedProductionDependencies() {
   return dependencies.sort((left, right) => left.lockPath.localeCompare(right.lockPath));
 }
 
+async function stageProductionDependencies(dependencies, seedRoot) {
+  const staged = [];
+  for (const dependency of dependencies) {
+    const installPath = join(seedRoot, dependency.lockPath);
+    await mkdir(dirname(installPath), { recursive: true });
+    await cp(dependency.sourcePath, installPath, {
+      recursive: true,
+      dereference: true,
+      errorOnExist: true,
+      force: false,
+    });
+    const manifestPath = join(installPath, "package.json");
+    const manifest = await readJson(manifestPath);
+    delete manifest.scripts;
+    delete manifest.packageManager;
+    await writeJson(manifestPath, manifest, 0o644);
+    staged.push({ ...dependency, installPath });
+  }
+  return staged;
+}
+
 async function waitFor(predicate, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -309,6 +331,7 @@ async function main() {
     project: join(sandbox, "project"),
     fakeBin: join(sandbox, "fake-bin"),
     npmCache: join(sandbox, "empty-npm-cache"),
+    dependencySeed: join(sandbox, "locked-production-graph"),
     cliBin: "",
     pluginBin: join(repoRoot, "plugin", "bin", "gradient.mjs"),
     package: { name: "gradient.md", version: "unknown", tarballSha256: "unknown", tarball: "" },
@@ -426,6 +449,8 @@ async function main() {
 
   try {
     await scenario("package", "Pack and install the release artifact", "distribution", async ({ assertion, equal }) => {
+      const sourcePackageManifestPath = join(cliDir, "package.json");
+      const sourcePackageManifest = await readFile(sourcePackageManifestPath, "utf8");
       await mkdir(state.packDir, { recursive: true });
       await mkdir(state.consumer, { recursive: true });
       await mkdir(state.npmCache, { recursive: true });
@@ -450,17 +475,19 @@ async function main() {
       assertion(packedPaths.has("dist/bin.js"), "tarball contains the executable");
       assertion(packedPaths.has("src/skill/SKILL.md"), "tarball contains the bundled Gradient skill");
 
-      const productionDependencies = await lockedProductionDependencies();
+      const lockedDependencies = await lockedProductionDependencies();
+      const productionDependencies = await stageProductionDependencies(lockedDependencies, state.dependencySeed);
       assertion(productionDependencies.length > 0, "locked production dependency graph is available locally");
+      assertion(productionDependencies.every(dependency => dependency.installPath.startsWith(`${state.dependencySeed}/`)), "production dependency inputs are staged inside the disposable sandbox");
       equal(await readdir(state.npmCache), [], "consumer npm cache starts empty");
       const installed = await command(
-        "npm install --cache <empty-cache> --offline --install-links --ignore-scripts --no-audit --no-fund --no-save <tarball> <locked-production-graph>",
+        "npm install --cache <empty-cache> --offline --install-links --ignore-scripts --no-audit --no-fund --no-save <tarball> <staged-production-graph>",
         "npm",
         [
           "install", "--cache", state.npmCache, "--offline", "--install-links",
           "--ignore-scripts", "--no-audit", "--no-fund", "--no-save",
           state.package.tarball,
-          ...productionDependencies.map(dependency => dependency.sourcePath),
+          ...productionDependencies.map(dependency => dependency.installPath),
         ],
         { cwd: state.consumer, env: npmEnv, timeoutMs: 180_000 },
       );
@@ -473,6 +500,7 @@ async function main() {
         const installedPath = join(state.consumer, dependency.lockPath);
         assertion((await lstat(installedPath)).isDirectory(), `${dependency.lockPath} is copied into the disposable consumer`);
       }
+      equal(await readFile(sourcePackageManifestPath, "utf8"), sourcePackageManifest, "offline install leaves the source package manifest untouched");
     });
 
     await scenario("fixtures", "Create an isolated project, home, histories, and local backends", "isolation", async ({ assertion, equal }) => {
