@@ -379,6 +379,14 @@ model-invoked Claude Code skills under `.claude/skills/` by default. Existing
 current-safe gradient-generated commands can be converted with `gradient
 migrate` (`--dry-run` previews the change). Pre-0.1.1 commands lack the private
 exact-content approval and are skipped; re-scan, review, and apply them first.
+
+**0.6 stable-id migration:** suggestion ids now derive from their source
+evidence instead of an LLM-chosen name. After upgrading from an earlier
+release, run `gradient scan` and `gradient review`. If an already-applied
+artifact appears again, re-apply the reviewed suggestion and remove the old
+manifest entry with `gradient remove <name>`. Gradient does not rewrite or
+delete existing artifacts automatically.
+
 Set `emitTarget` to `"command"` in the gradient config only when legacy
 `.claude/commands/` output is required. Phase B
 adds local recall hints and artifact adoption reporting, closing the gap between

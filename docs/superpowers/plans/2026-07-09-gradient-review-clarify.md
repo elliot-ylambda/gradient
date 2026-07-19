@@ -1,5 +1,8 @@
 # gradient — Review Disambiguation & Attention Hooks — Implementation Plan
 
+**Status:** Complete. Unchecked boxes below preserve the original plan; the
+security amendment documents the shipped behavior.
+
 > **Security amendment (0.3.1):** The implementation deliberately supersedes
 > the original code snippets below. The model supplies only a bounded/redacted
 > question and 2–3 short labels; all option bodies are reconstructed locally

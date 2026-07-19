@@ -214,7 +214,18 @@ describe("main", () => {
       name: "lgtm",
       title: "LGTM approval",
       rationale: "Ambiguous intent",
-      evidence: { count: 5, sessions: 3 },
+      evidence: {
+        count: 5,
+        sessions: 3,
+        estMinutesSavedPerMonth: 17,
+        temporal: {
+          maxRunLength: 4,
+          runSessions: 2,
+          medianGapMinutes: 30,
+          distinctDays: 5,
+          spanDays: 7,
+        },
+      },
       confidence: "high",
       payload: {
         type: "command",
@@ -242,6 +253,9 @@ describe("main", () => {
     expect(output).toContain("clarify: Acknowledge or merge?");
     expect(output).toContain("✓ Approve and merge");
     expect(output).toContain("· Acknowledge only");
+    expect(output).toContain("estimated ≈17m/month");
+    expect(output).toContain("temporal: longest run 4");
+    expect(output).toContain("5 active day(s) across 7 day(s)");
   });
 
   it("returns 2 for an unknown command", async () => {

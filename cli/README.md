@@ -59,6 +59,12 @@ conversion of manifest-tracked commands; `gradient migrate` performs it without
 touching hand-written files. Commands created before the hardened private
 approval ledger are skipped; re-scan, review, and apply those workflows first.
 
+Starting in 0.6, suggestion ids derive from source evidence instead of an
+LLM-chosen name. After upgrading, run `gradient scan` and `gradient review`. If
+an already-applied artifact appears again, re-apply the reviewed suggestion and
+remove the old manifest entry with `gradient remove <name>`. Gradient never
+rewrites or deletes existing artifacts as part of this migration.
+
 Configure `"targets": ["claude-code", "codex"]` to fan approved skills out to
 both assistants. The default remains `["claude-code"]`. Mechanical Claude Code
 skills use `"cheapSkillModel": "haiku"` by default; set it to `""` to disable

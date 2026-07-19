@@ -1,5 +1,8 @@
 # gradient v2 Phase D — Insights & Continuity Pack — Implementation Plan
 
+**Status:** Complete. Unchecked boxes below preserve the original plan; the
+security revision documents the shipped behavior.
+
 > **Security revision (0.1.1):** This historical plan's repo-root
 > `progress.md` design was superseded by the public-release audit. The shipped
 > implementation uses a private per-project user cache, symlink-safe 0600

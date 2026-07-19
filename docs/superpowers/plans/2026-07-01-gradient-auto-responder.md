@@ -1,5 +1,8 @@
 # gradient Autopilot (Personalized Auto-Responder) Implementation Plan
 
+**Status:** Complete and released for `nudge`; arbitrary-response `full` mode
+is intentionally security-disabled. Unchecked boxes preserve the original plan.
+
 > **Amended 2026-07-03:** the playbook artifact was renamed to `gradient.md`
 > and gained a per-project layer. See
 > [`2026-07-01-gradient-md-design.md`](../specs/2026-07-01-gradient-md-design.md).

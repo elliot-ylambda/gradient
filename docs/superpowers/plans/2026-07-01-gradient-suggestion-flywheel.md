@@ -1,12 +1,16 @@
 # gradient — Tailored Suggestions & Feedback Flywheel: Implementation Plan
 
+**Status:** Complete (2026-07-18). Tasks 1–12 are implemented and verified;
+Task 6 was superseded by the existing standalone `rule` mechanism as described
+in the revision log. The work is integrated on the release-candidate branch.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement spec `docs/superpowers/specs/2026-07-01-gradient-suggestion-flywheel-design.md` — leverage-ranked suggestions, temporal loop/hook evidence, corrections→preference rules (main's `.claude/rules/` mechanism), and the dismissal/surfacing flywheel. (Revised 2026-07-18 against main@44d4af0 — see Revision log at the bottom.)
 
 **Architecture:** Everything extends the existing `scan` pipeline (`collect → parse → filter → cap → cluster/paste/answers/sequences → detect → validate → cache`) plus the CLI commands around it. New pure core modules (`temporal`, `leverage`, `classify`, `corrections`, `dismiss`) slot between existing stages; two new commands (`session-start`, the bare-invocation mirror) reuse them. No new subsystem, no new dependency.
 
-**Tech Stack:** TypeScript (ESM, `.js` import suffixes), Node ≥ 20, vitest 2, zero new runtime deps.
+**Tech Stack:** TypeScript (ESM, `.js` import suffixes), Node ≥ 20, Vitest 4, zero new runtime deps.
 
 ## Global Constraints
 
@@ -551,5 +555,10 @@ After Task 12: whole-branch review against main (base = merge-base), full gate o
 
 ## Revision log
 
+- **2026-07-18 (completion)** — Tasks 1–12 landed and passed the whole-branch
+  review, full test suite, and typecheck. The final implementation keeps cache
+  evidence fields optional for backward compatibility, uses live transcript
+  events instead of `usage.json`, emits standalone project rules instead of
+  editing CLAUDE.md, and documents the one-time stable-id migration.
 - **2026-07-18** — Main moved +4,154 lines (auto-responder, 0.4.0) while Tasks 1–2 were in flight; branch rebased onto 44d4af0 (609-test baseline). Tasks 3–12 re-scoped against current main: Task 6 dropped (CLAUDE.md managed block superseded by the landed `.claude/rules/` design); Task 10 slimmed (usage.json superseded by live adoption counting); Tasks 3/4/5/7/8/9/11/12 re-anchored (new consumers to migrate, stable-id derivation now replaces `candidateRef`-based ids, AUTHORIZATION_GUARD excluded from merge similarity, review prompter/clarify preserved, bin.ts hook dispatch). Complete-code blocks were replaced by requirement specs — the code they were written against no longer exists; implementers TDD against current main.
 - Earlier self-review notes (still binding): evidence fields optional; dismissal load silent-empty on corrupt; deterministic hook suggestion works in degraded mode.

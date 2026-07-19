@@ -1,5 +1,8 @@
 # gradient v2 Phase A — Honest Input & Skills Output — Implementation Plan
 
+**Status:** Complete. Unchecked boxes below preserve the original test-first
+execution recipe.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Machine-generated prompts can never become "habits" (classifier + template-flood guard), and gradient's default artifact becomes a Claude Code skill (`.claude/skills/<name>/SKILL.md`) with mined trigger phrasings in its `description`, plus `gradient migrate` to convert existing command artifacts. Spec: `docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md` §3.

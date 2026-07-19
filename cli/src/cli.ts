@@ -343,7 +343,18 @@ export async function main(
         const sources = s.evidence.assistants?.length === 2
           ? " · sources: Claude Code + Codex"
           : "";
-        log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions${sources}`));
+        const leverage = s.evidence.estMinutesSavedPerMonth !== undefined
+          ? ` · estimated ≈${s.evidence.estMinutesSavedPerMonth}m/month`
+          : "";
+        log(c.dim(`seen ${s.evidence.count}× across ${s.evidence.sessions} sessions${sources}${leverage}`));
+        const temporal = s.evidence.temporal;
+        if (temporal) {
+          log(c.dim(
+            `temporal: longest run ${temporal.maxRunLength} · recurring-run sessions ${temporal.runSessions}` +
+            ` · median gap ${temporal.medianGapMinutes}m · ${temporal.distinctDays} active day(s)` +
+            ` across ${temporal.spanDays} day(s)`,
+          ));
+        }
         for (const ex of s.examples ?? []) log(`  ${c.muted("·")} ${c.muted(terminalSafeLine(ex))}`);
         if (s.clarify) {
           log(c.dim(`clarify: ${terminalSafeLine(s.clarify.question)}`));
