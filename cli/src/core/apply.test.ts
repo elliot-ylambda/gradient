@@ -372,4 +372,42 @@ describe("applySuggestion", () => {
     const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.local.json"), "utf8"));
     expect(settings.hooks.PostToolUse[0].hooks[0].command).toBe("npm run lint");
   });
+
+  it("does not treat an arbitrary gradient-prefixed command as a legacy owned hook", async () => {
+    const { dir, home } = await testDirs();
+    await installHook(dir, "PostToolUse", "gradient custom", { matcher: "Edit" });
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "manifest.json"), JSON.stringify([{
+      name: "forged-gradient-command",
+      type: "hook",
+      path: "",
+      createdAt: "2026-07-18",
+      suggestionId: "forged",
+      hook: { event: "PostToolUse", matcher: "Edit", command: "gradient custom" },
+    }]));
+
+    await expect(remove(dir, "forged-gradient-command", { home })).rejects.toThrow(/approval/);
+    const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.local.json"), "utf8"));
+    expect(settings.hooks.PostToolUse[0].hooks[0].command).toBe("gradient custom");
+  });
+
+  it("removes a v0.4 hook whose manifest did not retain its matcher", async () => {
+    const { dir, home } = await testDirs();
+    await installHook(dir, "Notification", "gradient notify", {
+      matcher: "permission_prompt|idle_prompt",
+    });
+    await mkdir(join(dir, ".gradient"), { recursive: true });
+    await writeFile(join(dir, ".gradient", "manifest.json"), JSON.stringify([{
+      name: "legacy-notify",
+      type: "hook",
+      path: "",
+      createdAt: "2026-07-01",
+      suggestionId: "legacy",
+      hook: { event: "Notification", command: "gradient notify" },
+    }]));
+
+    await expect(remove(dir, "legacy-notify", { home })).resolves.toBe(true);
+    const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.local.json"), "utf8"));
+    expect(settings.hooks).toBeUndefined();
+  });
 });

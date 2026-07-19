@@ -18,6 +18,37 @@ import {
   revokeArtifactApproval,
 } from "../core/approvals.js";
 
+interface HookTuple {
+  event: string;
+  command: string;
+  matcher?: string;
+}
+
+// These exact static tuples were installed by Gradient before private approval
+// ledgers existed. Do not broaden this to a command-prefix check: a repository
+// manifest is untrusted and must not be able to claim an arbitrary user hook
+// merely because its command starts with `gradient `.
+const LEGACY_GRADIENT_HOOKS: readonly HookTuple[] = [
+  { event: "Stop", command: "gradient respond" },
+  { event: "PreCompact", command: "gradient checkpoint" },
+  { event: "SessionStart", command: "gradient scan" },
+  { event: "SessionStart", command: "gradient scan --detach" },
+  // v0.4 manifests did not retain matchers, even when settings did.
+  { event: "SessionStart", command: "gradient recap" },
+  { event: "SessionStart", command: "gradient recap", matcher: "resume|compact" },
+  { event: "UserPromptSubmit", command: "gradient recall" },
+  { event: "Notification", command: "gradient notify" },
+  { event: "Notification", command: "gradient notify", matcher: "permission_prompt|idle_prompt" },
+];
+
+function isLegacyGradientHook(hook: HookTuple): boolean {
+  return LEGACY_GRADIENT_HOOKS.some(known =>
+    known.event === hook.event &&
+    known.command === hook.command &&
+    known.matcher === hook.matcher,
+  );
+}
+
 export async function remove(
   projectDir: string,
   name: string,
@@ -31,7 +62,7 @@ export async function remove(
   // Validate every target before deleting any of them. One forged entry must
   // not turn a multi-target remove into a partial destructive operation.
   for (const entry of entries) {
-    if (entry.hook && !entry.hook.command.startsWith("gradient ")) {
+    if (entry.hook && !isLegacyGradientHook(entry.hook)) {
       approvals ??= await loadArtifactApprovals(projectDir, opts.home);
       if (!approvalMatches(approvals, entry, hookApprovalContent(entry.hook))) {
         throw new Error(`refusing to remove command hook without matching private approval: ${entry.name}`);

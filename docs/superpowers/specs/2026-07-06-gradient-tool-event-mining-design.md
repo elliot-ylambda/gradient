@@ -117,9 +117,12 @@ export interface ToolEvent {
   explicit approval boundary; scan and review never install a hook.
 - Manifest entries for command hooks record the full hook shape
   (`{event, matcher?, command}`) so `remove` uninstalls exactly what was
-  added, via `removeHook`. Raw command hooks are additionally bound to the
+  added, via `removeHook`. Command hooks are additionally bound to the
   private approval ledger, preventing a forged repository manifest from
-  claiming and removing an arbitrary user-owned settings entry.
+  claiming and removing an arbitrary user-owned settings entry. The only
+  ledger-free compatibility exception is an exact static Gradient hook tuple
+  that predates the ledger; a `gradient ` command prefix alone never proves
+  ownership.
 
 ## 7. `insights` integration (additive)
 
