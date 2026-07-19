@@ -244,7 +244,16 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   // — independent of the LLM/backend, so it works in degraded mode too.
   try {
     const hookSuggestion = hookFromEvents(events);
-    if (hookSuggestion && !valid.some(suggestion => suggestion.id === hookSuggestion.id)) {
+    // Dedupe by semantic hook type, not id: an LLM-sourced PreCompact hook
+    // derives its id from whatever text candidates the model referenced, so
+    // it never matches the event-derived id (same convention as the
+    // Notification-hook append below).
+    const hasCheckpointHook = valid.some(suggestion =>
+      suggestion.payload.type === "hook" &&
+      suggestion.payload.event === "PreCompact" &&
+      suggestion.payload.subcommand === "checkpoint",
+    );
+    if (hookSuggestion && !hasCheckpointHook) {
       validateSuggestion(hookSuggestion);
       valid.push(hookSuggestion);
       log(

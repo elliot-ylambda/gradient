@@ -112,6 +112,37 @@ describe("scan", () => {
     expect(cached.some((s: { id: string }) => s.id === hookSuggestion?.id)).toBe(true);
   });
 
+  // Regression: an LLM-sourced PreCompact hook carries a text-candidate-derived
+  // id that never equals the event-derived id — dedup must key on the semantic
+  // hook type or the user sees the same checkpoint hook twice.
+  it("emits exactly one checkpoint hook when the llm and /compact evidence both propose it", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const events = ["s1", "s1", "s1", "s2", "s2", "s2", "s3", "s3", "s3", "s4", "s4", "s4"].map(sessionId => ({
+      ts: "2026-07-01T00:00:00Z", project: "p", sessionId, command: "/compact",
+    }));
+    const turns = ["s1", "s2", "s3"].map(sessionId => ({
+      ts: "2026-07-01T00:00:00Z", project: "p", role: "user" as const,
+      text: "we keep losing context after compaction", sessionId,
+    }));
+    const backend = {
+      name: "f",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => {
+        const [first] = JSON.parse(prompt);
+        return JSON.stringify({ suggestions: [{
+          sourceIds: [first.id], name: "checkpoint-before-compact", confidence: "high",
+          payload: { type: "hook", event: "PreCompact", subcommand: "checkpoint" },
+        }] });
+      },
+    };
+    const suggestions = await scan(
+      { scope: "all", projectPath: process.cwd(), home },
+      { backend, collectFn: async () => ["f"], parseFn: async () => ({ turns, events }), log: () => {} },
+    );
+    const hooks = suggestions.filter(s => s.payload.type === "hook" && s.payload.event === "PreCompact");
+    expect(hooks).toHaveLength(1);
+  });
+
   it("sends up to DEFAULT_DETECT_WINDOW candidates to the llm", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const logs: string[] = [];
