@@ -2,8 +2,9 @@
 
 ## Supported versions
 
-Only the latest published release receives security fixes. Upgrade to `0.3.1`
-or newer: `0.1.0` has known isolation and installed-entrypoint defects; the
+Only the latest published release receives security fixes. The current
+supported release is `0.4.0`. Upgrade to `0.4.0` or newer: `0.1.0` has known
+isolation and installed-entrypoint defects; the
 unpublished `0.2.x`/`0.3.0` development line lacks the complete cross-target
 filesystem, process-isolation, approval, clarification, attention-mining, and
 notification hardening present in `0.3.1`.

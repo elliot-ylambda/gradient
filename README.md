@@ -347,6 +347,9 @@ cd cli && npm install && npm test && npm run build
 
 ## Status
 
+The current public npm release is `gradient.md@0.4.0`. The product is published
+on npm's `latest` channel; it is a pre-1.0 release, not a beta-tagged build.
+
 Phase A of the v2 funnel makes both ends of mining more honest: continuation
 summaries, task notifications, configured injectors, and template floods are
 excluded from habit detection; approved command-type suggestions now become
