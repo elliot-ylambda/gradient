@@ -12,6 +12,7 @@ import {
   extractEditedFiles,
   landedLine,
   locateRepo,
+  openPrs,
   resolveBoardRoot,
 } from "./board.js";
 import { projectCacheDir } from "../config.js";
@@ -224,5 +225,33 @@ describe("collectRepoState", () => {
   it("returns null outside a git repository", async () => {
     const dir = await mkdtemp(join(tmpdir(), "gradient-board-plain-"));
     expect(await collectRepoState(dir, dir)).toBeNull();
+  });
+});
+
+describe("openPrs", () => {
+  const payload = JSON.stringify([
+    { number: 18, headRefName: "codex/release-cleanup", baseRefName: "main" },
+  ]);
+
+  it("fetches, caches, then serves the fresh cache without re-running gh", async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
+    let calls = 0;
+    const gh = async () => { calls++; return payload; };
+    const now = 1_000_000_000_000;
+    expect(await openPrs("/repo/a", { home, now, gh }))
+      .toEqual({ lines: ["#18 codex/release-cleanup → main"] });
+    expect(await openPrs("/repo/a", { home, now: now + 60_000, gh }))
+      .toEqual({ lines: ["#18 codex/release-cleanup → main"] });
+    expect(calls).toBe(1);
+  });
+
+  it("labels a stale cache when gh fails, and reports unavailable with no cache", async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
+    const now = 1_000_000_000_000;
+    const failing = async () => { throw new Error("gh missing"); };
+    expect(await openPrs("/repo/a", { home, now, gh: failing })).toBe("unavailable");
+    await openPrs("/repo/a", { home, now, gh: async () => payload });
+    const later = await openPrs("/repo/a", { home, now: now + 12 * 60_000, gh: failing });
+    expect(later).toEqual({ lines: ["#18 codex/release-cleanup → main"], staleMs: 12 * 60_000 });
   });
 });

@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { projectCacheDir } from "../config.js";
 import { collectCodex, readCodexSessionMeta } from "./collect-codex.js";
+import { safeMkdir, safeReadFile, safeWriteFile } from "./safeFs.js";
 import { redact } from "./security.js";
 import { readTranscriptLines } from "./tail.js";
 
@@ -290,4 +291,57 @@ export async function collectRepoState(
   const behind = Number.isFinite(parsed[0]) ? parsed[0] : 0;
   const ahead = Number.isFinite(parsed[1]) ? parsed[1] : 0;
   return { defaultBranch, mainTip, landed, ahead, behind };
+}
+
+export type GhRunner = (args: string[], cwd: string) => Promise<string>;
+export type PrResult = { lines: string[]; staleMs?: number } | "unavailable";
+
+interface PrCache { fetchedAt: number; lines: string[] }
+
+const defaultGh: GhRunner = async (args, cwd) => {
+  const { stdout } = await execFileP("gh", args, {
+    cwd,
+    timeout: GH_TIMEOUT_MS,
+    maxBuffer: 1_000_000,
+  });
+  return stdout;
+};
+
+export async function openPrs(
+  boardRoot: string,
+  opts: { home?: string; now?: number; gh?: GhRunner } = {},
+): Promise<PrResult> {
+  const home = opts.home ?? homedir();
+  const now = opts.now ?? Date.now();
+  const stateDir = boardStateDir(boardRoot, home);
+  const cachePath = join(stateDir, "pr-cache.json");
+  let cache: PrCache | null = null;
+  try {
+    const parsed = JSON.parse(await safeReadFile(home, cachePath, { maxBytes: 100_000 })) as PrCache;
+    if (Number.isFinite(parsed.fetchedAt) && Array.isArray(parsed.lines) &&
+      parsed.lines.every(line => typeof line === "string")) {
+      cache = parsed;
+    }
+  } catch {
+    // no usable cache
+  }
+  if (cache && now - cache.fetchedAt < PR_CACHE_FRESH_MS) return { lines: cache.lines };
+  try {
+    const gh = opts.gh ?? defaultGh;
+    const raw = JSON.parse(await gh(
+      ["pr", "list", "--json", "number,headRefName,baseRefName", "--limit", "20"],
+      boardRoot,
+    )) as Array<{ number?: unknown; headRefName?: unknown; baseRefName?: unknown }>;
+    const lines = raw
+      .filter(pr => typeof pr.number === "number" && typeof pr.headRefName === "string")
+      .map(pr => `#${pr.number} ${redact(String(pr.headRefName)).slice(0, 80)} → ` +
+        `${redact(String(pr.baseRefName ?? "main")).slice(0, 80)}`)
+      .slice(0, 10);
+    await safeMkdir(home, stateDir);
+    await safeWriteFile(home, cachePath, JSON.stringify({ fetchedAt: now, lines } satisfies PrCache));
+    return { lines };
+  } catch {
+    if (cache) return { lines: cache.lines, staleMs: now - cache.fetchedAt };
+    return "unavailable";
+  }
 }
