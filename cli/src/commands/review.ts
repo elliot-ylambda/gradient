@@ -61,7 +61,9 @@ function renderedText(
       ? rendered.command
       : rendered.kind === "rule-print"
         ? rendered.text
-        : `.claude/settings.local.json (merged on approve)\n${rendered.settingsPatch}`;
+        : rendered.kind === "playbook-line"
+          ? `gradient.md (committed) → ## ${rendered.section === "rules" ? "Rules" : "Workflows"}\n${rendered.line}`
+          : `.claude/settings.local.json (merged on approve)\n${rendered.settingsPatch}`;
   return `[${target}]\n${body}`;
 }
 
