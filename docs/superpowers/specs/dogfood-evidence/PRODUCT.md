@@ -46,9 +46,10 @@ actually published.
 
 2. The suite builds and packs `gradient.md`, installs that tarball into a fresh
    consumer project with an empty npm cache and the lockfile-pinned production
-   graph copied from the installed dependencies, then invokes the installed
-   executable. Passing by importing or symlinking the source checkout in place
-   does not count as packaged proof.
+   graph staged from the installed dependencies, then invokes the installed
+   executable. Dependency lifecycle scripts are removed from the sandbox copies
+   before installation. Passing by importing, mutating, or symlinking the source
+   checkout in place does not count as packaged proof.
 
 3. The suite runs in a newly created project and Gradient home. It never reads
    or writes the contributor's real Gradient configuration, state, installed

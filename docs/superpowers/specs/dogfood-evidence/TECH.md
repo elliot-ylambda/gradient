@@ -57,11 +57,14 @@ flowchart LR
   temporary sandbox, builds a tarball with lifecycle scripts disabled, installs
   it into a fresh consumer, invokes `dist/bin.js` with `process.execPath`, and
   removes the sandbox unless `--keep` is set.
-- Derive the production dependency directories from lockfile v3 and pass them
-  as explicit `--install-links` inputs beside the candidate tarball. Install
-  with `--offline` into an empty task-local npm cache, then assert each package
-  is a copied directory. This prevents a warm contributor cache from masking a
-  clean-runner failure without importing or symlinking the source checkout.
+- Derive the production dependency directories from lockfile v3, copy them
+  into the disposable sandbox, and remove package lifecycle scripts from those
+  staging manifests before passing them as explicit `--install-links` inputs
+  beside the candidate tarball. Install with `--offline` into an empty
+  task-local npm cache, then assert each package is a copied directory and the
+  source package manifest is byte-identical. This prevents a warm contributor
+  cache or a dependency `prepare` script from masking or mutating a clean
+  runner without importing or symlinking the source checkout.
 - Override npm's inherited dry-run setting only for the disposable pack/install
   children. This makes `npm publish --dry-run` execute a real local composition
   gate even though the outer publication remains a simulation.
