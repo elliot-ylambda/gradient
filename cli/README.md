@@ -169,7 +169,21 @@ and its five implementation plans under `docs/superpowers/plans/`.
 npm install
 npm test         # vitest
 npm run build    # tsc → dist/
+npm run dogfood  # packed install → 18 synthetic end-to-end scenario groups
 ```
+
+`GRADIENT_HOME=/absolute/path` is an optional isolation override for CI,
+portable test environments, and dogfooding. It redirects Gradient's config,
+state, installed-skill, and assistant-history roots without changing the
+process's system home; repository artifacts still belong to the current
+project. With the variable unset, all paths behave as before.
+
+`npm run dogfood -- --output ../artifacts/dogfood` writes `report.json`,
+`report.md`, and a self-contained `report.html`. The run uses invented
+transcripts and deterministic local backend stand-ins, so it never reads real
+history or spends model credits. The repository
+[dogfood guide](../docs/dogfood.md) separates this automated proof from the
+opt-in live checks that require a human or real OS integration.
 
 ## Releasing
 
@@ -177,6 +191,8 @@ npm run build    # tsc → dist/
 2. `npm run build:plugin` — regenerates `../plugin/bin/gradient.mjs` and syncs
    `../plugin/.claude-plugin/plugin.json`. Commit both with the bump
    (the version-sync test fails otherwise).
+3. `npm run dogfood` — require a fully passing packaged report. This also runs
+   from `prepublishOnly`, so a failed scenario aborts publication.
 
 ## License
 

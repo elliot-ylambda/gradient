@@ -4720,16 +4720,16 @@ var init_values = __esm({
 var sleep;
 var init_sleep = __esm({
   "node_modules/@anthropic-ai/sdk/internal/utils/sleep.mjs"() {
-    sleep = (ms, signal) => new Promise((resolve10) => {
+    sleep = (ms, signal) => new Promise((resolve11) => {
       if (signal?.aborted)
-        return resolve10();
+        return resolve11();
       const onAbort = () => {
         clearTimeout(timer);
-        resolve10();
+        resolve11();
       };
       const timer = setTimeout(() => {
         signal?.removeEventListener("abort", onAbort);
-        resolve10();
+        resolve11();
       }, ms);
       signal?.addEventListener("abort", onAbort, { once: true });
     });
@@ -6830,8 +6830,8 @@ var init_api_promise = __esm({
     init_parse2();
     APIPromise = class _APIPromise extends Promise {
       constructor(client, responsePromise, parseResponse = defaultParseResponse) {
-        super((resolve10) => {
-          resolve10(null);
+        super((resolve11) => {
+          resolve11(null);
         });
         this.responsePromise = responsePromise;
         this.parseResponse = parseResponse;
@@ -9327,16 +9327,16 @@ var init_async_queue = __esm({
         if (__classPrivateFieldGet(this, _AsyncQueue_closed, "f") || signal?.aborted) {
           return Promise.resolve({ done: true, value: void 0 });
         }
-        return new Promise((resolve10) => {
+        return new Promise((resolve11) => {
           const waiter = (r) => {
             signal?.removeEventListener("abort", onAbort);
-            resolve10(r);
+            resolve11(r);
           };
           const onAbort = () => {
             const idx = __classPrivateFieldGet(this, _AsyncQueue_waiters, "f").indexOf(waiter);
             if (idx >= 0)
               __classPrivateFieldGet(this, _AsyncQueue_waiters, "f").splice(idx, 1);
-            resolve10({ done: true, value: void 0 });
+            resolve11({ done: true, value: void 0 });
           };
           __classPrivateFieldGet(this, _AsyncQueue_waiters, "f").push(waiter);
           signal?.addEventListener("abort", onAbort, { once: true });
@@ -9931,13 +9931,13 @@ var init_json_schema = __esm({
 
 // node_modules/@anthropic-ai/sdk/internal/utils/promise.mjs
 function promiseWithResolvers() {
-  let resolve10;
+  let resolve11;
   let reject;
   const promise = new Promise((res, rej) => {
-    resolve10 = res;
+    resolve11 = res;
     reject = rej;
   });
-  return { promise, resolve: resolve10, reject };
+  return { promise, resolve: resolve11, reject };
 }
 var init_promise = __esm({
   "node_modules/@anthropic-ai/sdk/internal/utils/promise.mjs"() {
@@ -10536,7 +10536,7 @@ function betaGrepTool(ctx) {
   });
 }
 function runRipgrep(rg, pattern, searchPath, signal) {
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     const proc = cp.spawn(rg, ["-n", "--no-heading", "-e", pattern, "--", searchPath], {
       ...signal ? { signal } : {}
     });
@@ -10558,12 +10558,12 @@ function runRipgrep(rg, pattern, searchPath, signal) {
       if (signal?.aborted)
         return reject(new ToolError("grep: aborted"));
       if (truncated)
-        return resolve10(out + `
+        return resolve11(out + `
 [output truncated at ${GREP_OUTPUT_LIMIT} bytes]`);
       if (code === 0)
-        return resolve10(out);
+        return resolve11(out);
       if (code === 1)
-        return resolve10("no matches");
+        return resolve11("no matches");
       reject(new ToolError(`grep: rg failed: ${errOut || `exit ${code}`}`));
     });
     proc.on("error", (e) => {
@@ -10740,8 +10740,8 @@ var init_node = __esm({
 `;
         __classPrivateFieldGet(this, _BashSession_proc, "f").stdin.write(wrapped);
         if (__classPrivateFieldGet(this, _BashSession_buf, "f").indexOf(sentinel2) < 0) {
-          const { promise: sentinelSeen, resolve: resolve10 } = promiseWithResolvers();
-          __classPrivateFieldSet(this, _BashSession_waiting, { sentinel: sentinel2, resolve: resolve10 }, "f");
+          const { promise: sentinelSeen, resolve: resolve11 } = promiseWithResolvers();
+          __classPrivateFieldSet(this, _BashSession_waiting, { sentinel: sentinel2, resolve: resolve11 }, "f");
           let timer;
           let onAbort;
           try {
@@ -12481,12 +12481,12 @@ var init_BetaMessageStream = __esm({
           }
           return this._emit("error", new AnthropicError(String(error)));
         });
-        __classPrivateFieldSet(this, _BetaMessageStream_connectedPromise, new Promise((resolve10, reject) => {
-          __classPrivateFieldSet(this, _BetaMessageStream_resolveConnectedPromise, resolve10, "f");
+        __classPrivateFieldSet(this, _BetaMessageStream_connectedPromise, new Promise((resolve11, reject) => {
+          __classPrivateFieldSet(this, _BetaMessageStream_resolveConnectedPromise, resolve11, "f");
           __classPrivateFieldSet(this, _BetaMessageStream_rejectConnectedPromise, reject, "f");
         }), "f");
-        __classPrivateFieldSet(this, _BetaMessageStream_endPromise, new Promise((resolve10, reject) => {
-          __classPrivateFieldSet(this, _BetaMessageStream_resolveEndPromise, resolve10, "f");
+        __classPrivateFieldSet(this, _BetaMessageStream_endPromise, new Promise((resolve11, reject) => {
+          __classPrivateFieldSet(this, _BetaMessageStream_resolveEndPromise, resolve11, "f");
           __classPrivateFieldSet(this, _BetaMessageStream_rejectEndPromise, reject, "f");
         }), "f");
         __classPrivateFieldGet(this, _BetaMessageStream_connectedPromise, "f").catch(() => {
@@ -12656,11 +12656,11 @@ var init_BetaMessageStream = __esm({
        *   const message = await stream.emitted('message') // rejects if the stream errors
        */
       emitted(event) {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve11, reject) => {
           __classPrivateFieldSet(this, _BetaMessageStream_catchingPromiseCreated, true, "f");
           if (event !== "error")
             this.once("error", reject);
-          this.once(event, resolve10);
+          this.once(event, resolve11);
         });
       }
       async done() {
@@ -13022,7 +13022,7 @@ var init_BetaMessageStream = __esm({
               if (done) {
                 return { value: void 0, done: true };
               }
-              return new Promise((resolve10, reject) => readQueue.push({ resolve: resolve10, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: void 0, done: true });
+              return new Promise((resolve11, reject) => readQueue.push({ resolve: resolve11, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: void 0, done: true });
             }
             const chunk = pushQueue.shift();
             return { value: chunk, done: false };
@@ -15242,12 +15242,12 @@ var init_MessageStream = __esm({
           }
           return this._emit("error", new AnthropicError(String(error)));
         });
-        __classPrivateFieldSet(this, _MessageStream_connectedPromise, new Promise((resolve10, reject) => {
-          __classPrivateFieldSet(this, _MessageStream_resolveConnectedPromise, resolve10, "f");
+        __classPrivateFieldSet(this, _MessageStream_connectedPromise, new Promise((resolve11, reject) => {
+          __classPrivateFieldSet(this, _MessageStream_resolveConnectedPromise, resolve11, "f");
           __classPrivateFieldSet(this, _MessageStream_rejectConnectedPromise, reject, "f");
         }), "f");
-        __classPrivateFieldSet(this, _MessageStream_endPromise, new Promise((resolve10, reject) => {
-          __classPrivateFieldSet(this, _MessageStream_resolveEndPromise, resolve10, "f");
+        __classPrivateFieldSet(this, _MessageStream_endPromise, new Promise((resolve11, reject) => {
+          __classPrivateFieldSet(this, _MessageStream_resolveEndPromise, resolve11, "f");
           __classPrivateFieldSet(this, _MessageStream_rejectEndPromise, reject, "f");
         }), "f");
         __classPrivateFieldGet(this, _MessageStream_connectedPromise, "f").catch(() => {
@@ -15417,11 +15417,11 @@ var init_MessageStream = __esm({
        *   const message = await stream.emitted('message') // rejects if the stream errors
        */
       emitted(event) {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve11, reject) => {
           __classPrivateFieldSet(this, _MessageStream_catchingPromiseCreated, true, "f");
           if (event !== "error")
             this.once("error", reject);
-          this.once(event, resolve10);
+          this.once(event, resolve11);
         });
       }
       async done() {
@@ -15742,7 +15742,7 @@ var init_MessageStream = __esm({
               if (done) {
                 return { value: void 0, done: true };
               }
-              return new Promise((resolve10, reject) => readQueue.push({ resolve: resolve10, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: void 0, done: true });
+              return new Promise((resolve11, reject) => readQueue.push({ resolve: resolve11, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: void 0, done: true });
             }
             const chunk = pushQueue.shift();
             return { value: chunk, done: false };
@@ -20556,6 +20556,7 @@ ${HELP}`);
         const r = await init({
           installSkill: !flags["no-skill"],
           sessionScan: !!flags["session-scan"],
+          home: io.home,
           projectDir,
           targets: initTargets(flags.target)
         });
@@ -20666,13 +20667,13 @@ ${c.muted("session-start scan:")} ${r.sessionScanInstalled}`
         return 0;
       }
       case "remove": {
-        const ok = await remove(projectDir, positionals[0]);
+        const ok = await remove(projectDir, positionals[0], { home: io.home });
         log(ok ? `${c.ok("removed")} ${terminalSafeLine2(positionals[0])}` : c.coral(`no such artifact: ${terminalSafeLine2(positionals[0])}`));
         return ok ? 0 : 1;
       }
       case "migrate": {
         const dryRun = !!flags["dry-run"];
-        const result = await migrate(projectDir, { dryRun });
+        const result = await migrate(projectDir, { dryRun, home: io.home });
         for (const name of result.migrated) {
           log(`${c.ok(dryRun ? "would migrate" : "migrated")} ${name}`);
         }
@@ -20683,14 +20684,14 @@ ${c.muted("session-start scan:")} ${r.sessionScanInstalled}`
       case "recall": {
         const action = positionals[0];
         if (action === "on" || action === "off") {
-          const result = await setRecall(action === "on", projectDir);
+          const result = await setRecall(action === "on", projectDir, io.home);
           log(
             result.installed ? `${c.ok("recall hook installed")} ${c.muted(result.settingsPath)}` : `${c.muted("recall hook removed:")} ${result.settingsPath}`
           );
           return 0;
         }
         if (action === "status") {
-          const status = await recallStatus(projectDir);
+          const status = await recallStatus(projectDir, io.home);
           const built = status.builtAt ? ` (built ${status.builtAt})` : "";
           log(
             `${c.muted("recall:")} ${status.installed ? c.ok("on") : "off"}  ` + c.dim(`index: ${status.entries} artifacts${built}`)
@@ -20703,7 +20704,7 @@ ${c.muted("session-start scan:")} ${r.sessionScanInstalled}`
         }
         try {
           const input = await readStdin();
-          const result = await recallHook(input);
+          const result = await recallHook(input, { home: io.home });
           if (result.context) {
             log(JSON.stringify({
               hookSpecificOutput: {
@@ -20718,7 +20719,7 @@ ${c.muted("session-start scan:")} ${r.sessionScanInstalled}`
       }
       case "stats": {
         log(banner(VERSION2));
-        const r = await stats(projectDir, { onSkip: log });
+        const r = await stats(projectDir, { home: io.home, onSkip: log });
         log(c.dim(`coverage: ${r.covered}/${r.total} patterns automated (${r.coveragePct}%)`));
         if (r.capped) log(c.dim("stats input cap reached; adoption covers the bounded recent corpus"));
         log(c.dim(`session-start scan: ${r.sessionScanEnabled ? "on" : "off"}`));
@@ -20740,7 +20741,7 @@ ${c.muted("session-start scan:")} ${r.sessionScanInstalled}`
       }
       case "insights": {
         log(banner(VERSION2));
-        const report = await insights({ projectDir, user: !!flags.user });
+        const report = await insights({ projectDir, user: !!flags.user, home: io.home });
         const metrics = report.metrics;
         log(c.dim(report.label));
         if (report.capped) log(c.dim("insights input cap reached; metrics cover the bounded recent corpus"));
@@ -20769,14 +20770,14 @@ ${c.bold("Instruction effectiveness")}`);
         return 0;
       }
       case "recap": {
-        const text = await recap(projectDir);
+        const text = await recap(projectDir, { home: io.home });
         if (text) log(text);
         return 0;
       }
       case "continuity": {
         const action = positionals[0] ?? "status";
         if (action === "on" || action === "off") {
-          const result = await setContinuity(action === "on", projectDir);
+          const result = await setContinuity(action === "on", projectDir, { home: io.home });
           log(
             result.on ? `${c.ok("continuity hooks installed")} ${c.muted(result.settingsPath)}` : `${c.muted("continuity hooks removed:")} ${result.settingsPath}`
           );
@@ -20786,7 +20787,7 @@ ${c.bold("Instruction effectiveness")}`);
           log(c.coral(`unknown continuity action: ${action} (use on|off|status)`));
           return 2;
         }
-        const status = await continuityStatus(projectDir);
+        const status = await continuityStatus(projectDir, { home: io.home });
         log(
           `${c.muted("checkpoint (PreCompact):")} ${status.checkpoint ? c.ok("on") : "off"}   ${c.muted("recap (SessionStart):")} ${status.recap ? c.ok("on") : "off"}`
         );
@@ -20802,7 +20803,7 @@ ${c.bold("Instruction effectiveness")}`);
           log(c.coral("bundle hooks are disabled pending recipient-side consent; omit --with-hooks"));
           return 2;
         }
-        const result = await bundleCommand(projectDir, name, { withHooks: !!flags["with-hooks"] });
+        const result = await bundleCommand(projectDir, name, { withHooks: !!flags["with-hooks"], home: io.home });
         const displayDir = terminalSafePath(result.dir);
         log(
           displayDir ? `${c.ok("bundle written")} ${c.muted(displayDir)}` : c.ok("bundle written (path contains control characters; executable command omitted)")
@@ -20841,7 +20842,7 @@ ${c.dim("try it:")} claude --plugin-dir ${posixShellQuote(displayDir)}`);
       case "checkpoint": {
         try {
           const input = await readStdin();
-          await checkpoint(input, projectDir);
+          await checkpoint(input, projectDir, void 0, { home: io.home });
         } catch {
         }
         return 0;
@@ -20857,7 +20858,7 @@ ${c.dim("try it:")} claude --plugin-dir ${posixShellQuote(displayDir)}`);
       case "autopilot": {
         const arg = positionals[0] ?? "status";
         if (arg === "off" || arg === "nudge") {
-          const r = await setAutopilotMode(arg, projectDir);
+          const r = await setAutopilotMode(arg, projectDir, { home: io.home });
           log(banner(VERSION2));
           log(`${c.muted("autopilot:")} ${c.bold(r.mode)}`);
           log(
@@ -20869,7 +20870,7 @@ ${c.dim("try it:")} claude --plugin-dir ${posixShellQuote(displayDir)}`);
           log(c.coral(`unknown autopilot mode: ${arg} (use off|nudge|status)`));
           return 2;
         }
-        const s = await autopilotStatus(projectDir);
+        const s = await autopilotStatus(projectDir, { home: io.home });
         log(banner(VERSION2));
         log(`${c.muted("mode:")} ${c.bold(s.mode)}${s.effectiveMode !== s.mode ? c.dim(` \u2192 ${s.effectiveMode} here (clamped by project gradient.md)`) : ""}`);
         log(`${c.muted("budget:")} ${s.budget} judge attempts/session${s.effectiveBudget !== s.budget ? c.dim(` \u2192 ${s.effectiveBudget} here (clamped by project gradient.md)`) : ""}`);
@@ -20887,7 +20888,7 @@ ${c.dim("try it:")} claude --plugin-dir ${posixShellQuote(displayDir)}`);
       case "respond": {
         try {
           const input = await readStdin();
-          const r = await respond(input);
+          const r = await respond(input, { home: io.home });
           if (r.decision === "block") log(JSON.stringify({ decision: "block", reason: r.reason }));
         } catch {
         }
@@ -20991,8 +20992,13 @@ Usage:
 
 // src/bin.ts
 import { realpathSync as realpathSync3 } from "node:fs";
+import { resolve as resolve10 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var STDIN_MAX_CHARS = 1e6;
+function gradientHomeFromEnv(env = process.env) {
+  const configured = env.GRADIENT_HOME?.trim();
+  return configured ? resolve10(configured) : void 0;
+}
 async function readStdinJson2() {
   if (process.stdin.isTTY) return {};
   let data = "";
@@ -21068,11 +21074,12 @@ function isEntrypoint(moduleUrl, argv1) {
   }
 }
 if (isEntrypoint(import.meta.url, process.argv[1])) {
-  runBinary(process.argv.slice(2)).then((code) => {
+  runBinary(process.argv.slice(2), { home: gradientHomeFromEnv() }).then((code) => {
     process.exitCode = code;
   });
 }
 export {
+  gradientHomeFromEnv,
   isEntrypoint,
   runBinary
 };

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isEntrypoint, runBinary } from "./bin.js";
+import { gradientHomeFromEnv, isEntrypoint, runBinary } from "./bin.js";
 import { saveRecallIndex } from "./core/recall.js";
 import { projectKey, saveConfig } from "./config.js";
 import { notify } from "./commands/notify.js";
@@ -13,6 +13,15 @@ vi.mock("./commands/notify.js", () => ({ notify: vi.fn(async () => {}) }));
 vi.mock("./commands/sessionStart.js", () => ({ sessionStart: vi.fn(async (_dir, deps) => deps.write?.("surface")) }));
 
 describe("binary bootstrap", () => {
+  it("resolves an optional Gradient home without changing the default", () => {
+    expect(gradientHomeFromEnv({})).toBeUndefined();
+    expect(gradientHomeFromEnv({ GRADIENT_HOME: "   " })).toBeUndefined();
+    expect(gradientHomeFromEnv({ GRADIENT_HOME: "/tmp/gradient-dogfood" }))
+      .toBe("/tmp/gradient-dogfood");
+    expect(gradientHomeFromEnv({ GRADIENT_HOME: "gradient-dogfood" }))
+      .toBe(resolve("gradient-dogfood"));
+  });
+
   it("recognizes npm's symlinked bin path as the entrypoint", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-bin-link-"));
     const target = join(dir, "bin.js");

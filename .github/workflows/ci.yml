@@ -59,3 +59,13 @@ jobs:
         run: git diff --exit-code -- ../plugin/.claude-plugin/plugin.json ../plugin/bin/gradient.mjs
       - name: Smoke-test the bundled CLI
         run: node ../plugin/bin/gradient.mjs --version
+      - name: Run the packaged dogfood release gate
+        run: npm run dogfood -- --output ../artifacts/dogfood
+      - name: Upload dogfood evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradient-dogfood-${{ github.sha }}
+          path: artifacts/dogfood
+          if-no-files-found: warn
+          retention-days: 14

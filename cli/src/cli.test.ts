@@ -395,9 +395,9 @@ describe("recall dispatch", () => {
     vi.mocked(recallHook).mockResolvedValueOnce({ context: "use the installed skill" });
     const lines: string[] = [];
     const input = { prompt: "prepare this pull request for shipping", cwd: "/repo" };
-    const code = await main(["recall"], { log: line => lines.push(line), readStdin: async () => input });
+    const code = await main(["recall"], { home: "/home", log: line => lines.push(line), readStdin: async () => input });
     expect(code).toBe(0);
-    expect(vi.mocked(recallHook)).toHaveBeenCalledWith(input);
+    expect(vi.mocked(recallHook)).toHaveBeenCalledWith(input, { home: "/home" });
     expect(lines).toEqual([
       JSON.stringify({
         hookSpecificOutput: {
@@ -417,14 +417,14 @@ describe("recall dispatch", () => {
 
   it("manages on, off, and status explicitly", async () => {
     vi.mocked(setRecall).mockClear();
-    expect(await main(["recall", "on"], { log: () => {} })).toBe(0);
-    expect(await main(["recall", "off"], { log: () => {} })).toBe(0);
-    expect(vi.mocked(setRecall)).toHaveBeenNthCalledWith(1, true, expect.any(String));
-    expect(vi.mocked(setRecall)).toHaveBeenNthCalledWith(2, false, expect.any(String));
+    expect(await main(["recall", "on"], { home: "/home", log: () => {} })).toBe(0);
+    expect(await main(["recall", "off"], { home: "/home", log: () => {} })).toBe(0);
+    expect(vi.mocked(setRecall)).toHaveBeenNthCalledWith(1, true, expect.any(String), "/home");
+    expect(vi.mocked(setRecall)).toHaveBeenNthCalledWith(2, false, expect.any(String), "/home");
 
     const lines: string[] = [];
-    expect(await main(["recall", "status"], { log: line => lines.push(line) })).toBe(0);
-    expect(vi.mocked(recallStatus)).toHaveBeenCalled();
+    expect(await main(["recall", "status"], { home: "/home", log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(recallStatus)).toHaveBeenCalledWith(expect.any(String), "/home");
     expect(lines.join("\n")).toContain("2 artifacts");
   });
 
@@ -439,7 +439,8 @@ describe("stats adoption rendering", () => {
   it("shows uses, last use, retypes caught, and the removal nudge", async () => {
     vi.mocked(stats).mockClear();
     const lines: string[] = [];
-    expect(await main(["stats"], { log: line => lines.push(line) })).toBe(0);
+    expect(await main(["stats"], { home: "/home", log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(stats)).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ home: "/home" }));
     const output = lines.join("\n");
     expect(output).toContain("adoption:");
     expect(output).toContain("0 use(s) · ≈0m saved · last never · 0 retype(s) caught");
@@ -455,8 +456,8 @@ describe("insights dispatch", () => {
 
     vi.mocked(insights).mockClear();
     const lines: string[] = [];
-    expect(await main(["insights", "--user"], { log: line => lines.push(line) })).toBe(0);
-    expect(vi.mocked(insights)).toHaveBeenCalledWith({ projectDir: expect.any(String), user: true });
+    expect(await main(["insights", "--user"], { home: "/home", log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(insights)).toHaveBeenCalledWith({ projectDir: expect.any(String), user: true, home: "/home" });
     expect(lines.join("\n")).toContain("prompts");
     expect(lines.join("\n")).toContain("gradient autopilot nudge");
     expect(lines.join("\n")).toContain("Instruction effectiveness");
@@ -481,14 +482,14 @@ describe("continuity dispatch", () => {
     expect(help.join("\n")).toContain("gradient continuity <on|off|status>");
 
     vi.mocked(setContinuity).mockClear();
-    expect(await main(["continuity", "on"], { log: () => {} })).toBe(0);
-    expect(await main(["continuity", "off"], { log: () => {} })).toBe(0);
-    expect(vi.mocked(setContinuity)).toHaveBeenNthCalledWith(1, true, expect.any(String));
-    expect(vi.mocked(setContinuity)).toHaveBeenNthCalledWith(2, false, expect.any(String));
+    expect(await main(["continuity", "on"], { home: "/home", log: () => {} })).toBe(0);
+    expect(await main(["continuity", "off"], { home: "/home", log: () => {} })).toBe(0);
+    expect(vi.mocked(setContinuity)).toHaveBeenNthCalledWith(1, true, expect.any(String), { home: "/home" });
+    expect(vi.mocked(setContinuity)).toHaveBeenNthCalledWith(2, false, expect.any(String), { home: "/home" });
 
     const lines: string[] = [];
-    expect(await main(["continuity", "status"], { log: line => lines.push(line) })).toBe(0);
-    expect(vi.mocked(continuityStatus)).toHaveBeenCalled();
+    expect(await main(["continuity", "status"], { home: "/home", log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(continuityStatus)).toHaveBeenCalledWith(expect.any(String), { home: "/home" });
     expect(lines.join("\n")).toContain("checkpoint (PreCompact):");
   });
 

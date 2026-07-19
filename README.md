@@ -368,6 +368,20 @@ add to a repository alongside the generated plugin directory.
 cd cli && npm install && npm test && npm run build
 ```
 
+Run the packaged synthetic dogfood release gate and open its inspectable HTML
+evidence:
+
+```bash
+cd cli
+npm run dogfood -- --output ../artifacts/dogfood
+open ../artifacts/dogfood/report.html # macOS; use your browser elsewhere
+```
+
+The gate installs the npm tarball into a disposable consumer and exercises all
+advertised commands plus the internal hook targets without reading real history
+or calling a real model. See [Dogfooding and release evidence](docs/dogfood.md)
+for the 18-scenario matrix and the separate opt-in live checklist.
+
 ## Status
 
 The current public npm release is `gradient.md@0.4.0`. The product is published
@@ -430,6 +444,8 @@ v2 phases are implemented.
 - Codex Stage 2 and cost plan: [`docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md`](docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md)
 - Review clarification and attention design: [`docs/superpowers/specs/2026-07-09-gradient-review-clarify-design.md`](docs/superpowers/specs/2026-07-09-gradient-review-clarify-design.md)
 - Review clarification and attention plan: [`docs/superpowers/plans/2026-07-09-gradient-review-clarify.md`](docs/superpowers/plans/2026-07-09-gradient-review-clarify.md)
+- Dogfood evidence product spec: [`docs/superpowers/specs/dogfood-evidence/PRODUCT.md`](docs/superpowers/specs/dogfood-evidence/PRODUCT.md)
+- Dogfood evidence technical design: [`docs/superpowers/specs/dogfood-evidence/TECH.md`](docs/superpowers/specs/dogfood-evidence/TECH.md)
 
 ## License
 
