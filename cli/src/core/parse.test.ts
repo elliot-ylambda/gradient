@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseLines, parseFile, parseDialogueLines } from "./parse.js";
+import { parseLines, parseFile, parseDialogueLines, parseToolEventLines } from "./parse.js";
 
 const userString = JSON.stringify({
   type: "user", isSidechain: false, sessionId: "s1", cwd: "/p/x",
@@ -116,5 +116,115 @@ describe("parseDialogueLines", () => {
       ["assistant", question],
       ["user", "pnpm"],
     ]);
+  });
+});
+
+const toolUse = (id: string, name: string, input: Record<string, unknown>, sessionId = "s1") =>
+  JSON.stringify({
+    type: "assistant",
+    sessionId,
+    timestamp: "2026-07-01T00:00:00Z",
+    message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] },
+  });
+
+const toolResult = (id: string, isError: boolean, content: unknown, sessionId = "s1") =>
+  JSON.stringify({
+    type: "user",
+    sessionId,
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: id, is_error: isError, content }],
+    },
+  });
+
+describe("parseToolEventLines", () => {
+  it("pairs bash tool_use with its result and keeps a redacted error head", () => {
+    const { events } = parseToolEventLines([
+      toolUse("t1", "Bash", { command: "npm test" }),
+      toolResult("t1", true, "FAIL src/x.test.ts\n  expected 1 to be 2"),
+    ]);
+    expect(events).toEqual([{
+      ts: "2026-07-01T00:00:00Z",
+      sessionId: "s1",
+      kind: "bash",
+      command: "npm test",
+      isError: true,
+      errorHead: "FAIL src/x.test.ts",
+    }]);
+  });
+
+  it("emits edit events from Edit/Write/NotebookEdit and ignores other tools", () => {
+    const { events } = parseToolEventLines([
+      toolUse("t1", "Edit", { file_path: "/p/src/a.ts" }),
+      toolUse("t2", "Read", { file_path: "/p/src/a.ts" }),
+      toolUse("t3", "Write", { file_path: "/p/src/b.ts" }),
+      toolUse("t4", "NotebookEdit", { notebook_path: "/p/notebook.ipynb" }),
+    ]);
+    expect(events.map(event => event.kind)).toEqual(["edit", "edit", "edit"]);
+    expect(events.map(event => event.file)).toEqual([
+      "/p/src/a.ts",
+      "/p/src/b.ts",
+      "/p/notebook.ipynb",
+    ]);
+  });
+
+  it("skips unpaired bash uses and sidechains", () => {
+    const sidechainToolUse = JSON.stringify({
+      type: "assistant",
+      isSidechain: true,
+      sessionId: "s1",
+      message: {
+        content: [{ type: "tool_use", id: "t9", name: "Bash", input: { command: "ls" } }],
+      },
+    });
+    const { events } = parseToolEventLines([
+      toolUse("t1", "Bash", { command: "npm test" }),
+      sidechainToolUse,
+    ]);
+    expect(events).toEqual([]);
+  });
+
+  it("collapses multi-line commands to their first line", () => {
+    const { events } = parseToolEventLines([
+      toolUse("t1", "Bash", { command: "make dev \\\n  EXTRA=1" }),
+      toolResult("t1", false, "ok"),
+    ]);
+    expect(events[0].command).toBe("make dev \\");
+  });
+
+  it("pairs duplicate tool ids only within their session", () => {
+    const { events } = parseToolEventLines([
+      toolUse("t1", "Bash", { command: "npm test" }, "s1"),
+      toolUse("t1", "Bash", { command: "npm run lint" }, "s2"),
+      toolResult("t1", false, "ok", "s1"),
+      toolResult("t1", true, "lint failed", "s2"),
+    ]);
+    expect(events.map(event => [event.sessionId, event.command, event.isError])).toEqual([
+      ["s1", "npm test", false],
+      ["s2", "npm run lint", true],
+    ]);
+  });
+
+  it("caps each session at 400 events and reports drops", () => {
+    const lines: string[] = [];
+    for (let index = 0; index < 405; index++) {
+      lines.push(
+        toolUse(`t${index}`, "Bash", { command: `echo ${index}` }),
+        toolResult(`t${index}`, false, "ok"),
+      );
+    }
+    const { events, dropped } = parseToolEventLines(lines);
+    expect(events).toHaveLength(400);
+    expect(dropped).toBe(5);
+    expect(events[0].command).toBe("echo 5");
+  });
+
+  it("redacts secrets in string and block-array error heads", () => {
+    const { events } = parseToolEventLines([
+      toolUse("t1", "Bash", { command: "deploy" }),
+      toolResult("t1", true, [{ type: "text", text: "token=sk-ant-api03-abcdef1234567890\ntrace" }]),
+    ]);
+    expect(events[0].errorHead).not.toContain("sk-ant-");
+    expect(events[0].errorHead).toContain("[REDACTED]");
   });
 });

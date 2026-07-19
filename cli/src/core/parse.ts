@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
-import type { Assistant, Role, Turn } from "./types.js";
+import { redact } from "./security.js";
+import type { Assistant, Role, ToolEvent, Turn } from "./types.js";
 
 export const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 export const MAX_PARSED_TURNS_PER_FILE = 20_000;
@@ -31,6 +32,14 @@ async function readTranscriptTail(path: string): Promise<string> {
 }
 
 interface RawBlock { type?: string; text?: string }
+interface RawToolBlock extends RawBlock {
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  tool_use_id?: string;
+  is_error?: boolean;
+  content?: unknown;
+}
 interface RawQuestion { question?: string }
 interface RawToolUseResult {
   questions?: RawQuestion[];
@@ -126,6 +135,112 @@ export function parseLines(lines: string[], maxTurns = MAX_PARSED_TURNS_PER_FILE
 
 export async function parseFile(path: string): Promise<Turn[]> {
   return parseLines((await readTranscriptTail(path)).split(/\r?\n/));
+}
+
+const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
+const PER_SESSION_EVENT_CAP = 400;
+const ERROR_HEAD_MAX = 120;
+
+function firstLine(value: unknown): string {
+  let text = "";
+  if (typeof value === "string") {
+    text = value;
+  } else if (Array.isArray(value)) {
+    text = value.map(block => {
+      if (typeof block === "string") return block;
+      if (!block || typeof block !== "object") return "";
+      const candidate = block as { text?: unknown; content?: unknown };
+      if (typeof candidate.text === "string") return candidate.text;
+      return typeof candidate.content === "string" ? candidate.content : "";
+    }).join("\n");
+  }
+  return text.split(/\r?\n/).find(line => line.trim())?.trim() ?? "";
+}
+
+/** Extract the deliberately small tool-activity surface used by tool mining.
+ * Bash calls are emitted only after their result is paired; edit calls have
+ * no useful result and are emitted at invocation time. */
+export function parseToolEventLines(lines: string[]): { events: ToolEvent[]; dropped: number } {
+  const pending = new Map<string, ToolEvent>();
+  const perSession = new Map<string, ToolEvent[]>();
+  let dropped = 0;
+
+  const push = (event: ToolEvent): void => {
+    const events = perSession.get(event.sessionId) ?? [];
+    if (events.length >= PER_SESSION_EVENT_CAP) {
+      events.shift();
+      dropped++;
+    }
+    events.push(event);
+    perSession.set(event.sessionId, events);
+  };
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let raw: Raw;
+    try {
+      raw = JSON.parse(line) as Raw;
+    } catch {
+      continue;
+    }
+    if (raw.isSidechain) continue;
+    const content = raw.message?.content;
+    if (!Array.isArray(content)) continue;
+
+    const sessionId = (raw.sessionId ?? "?").slice(0, 200);
+    for (const block of content as RawToolBlock[]) {
+      if (raw.type === "assistant" && block.type === "tool_use" && block.id) {
+        if (block.name === "Bash") {
+          const commandValue = block.input?.command;
+          const command = (typeof commandValue === "string" ? commandValue : "")
+            .split(/\r?\n/, 1)[0]
+            .replace(/\s+/g, " ")
+            .trim();
+          if (command) {
+            pending.set(`${sessionId}:${block.id}`, {
+              ts: (raw.timestamp ?? "").slice(0, 100),
+              sessionId,
+              kind: "bash",
+              command,
+            });
+          }
+          continue;
+        }
+
+        if (EDIT_TOOLS.has(block.name ?? "")) {
+          const fileValue = block.input?.file_path ?? block.input?.notebook_path;
+          const file = typeof fileValue === "string" ? fileValue.slice(0, 1_000) : "";
+          push({
+            ts: (raw.timestamp ?? "").slice(0, 100),
+            sessionId,
+            kind: "edit",
+            ...(file ? { file } : {}),
+          });
+        }
+        continue;
+      }
+
+      if (raw.type === "user" && block.type === "tool_result" && block.tool_use_id) {
+        const key = `${sessionId}:${block.tool_use_id}`;
+        const event = pending.get(key);
+        if (!event) continue;
+        pending.delete(key);
+        const isError = block.is_error === true;
+        const errorHead = isError ? redact(firstLine(block.content)).slice(0, ERROR_HEAD_MAX) : "";
+        push({
+          ...event,
+          isError,
+          ...(errorHead ? { errorHead } : {}),
+        });
+      }
+    }
+  }
+
+  return { events: [...perSession.values()].flat(), dropped };
+}
+
+export async function parseToolEventsFile(path: string): Promise<{ events: ToolEvent[]; dropped: number }> {
+  return parseToolEventLines((await readTranscriptTail(path)).split(/\r?\n/));
 }
 
 export interface DialogueTurn {
