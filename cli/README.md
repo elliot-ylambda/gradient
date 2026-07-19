@@ -65,6 +65,12 @@ an already-applied artifact appears again, re-apply the reviewed suggestion and
 remove the old manifest entry with `gradient remove <name>`. Gradient never
 rewrites or deletes existing artifacts as part of this migration.
 
+Also starting in 0.6, `gradient session-start` prints the single
+highest-leverage pending suggestion before its detached rescan, instead of
+running silently. Existing installs keep the old silent `gradient scan
+--detach` hook exactly as configured until they rerun `gradient init
+--session-scan`, which migrates it to `gradient session-start` in place.
+
 Configure `"targets": ["claude-code", "codex"]` to fan approved skills out to
 both assistants. The default remains `["claude-code"]`. Mechanical Claude Code
 skills use `"cheapSkillModel": "haiku"` by default; set it to `""` to disable
@@ -74,9 +80,10 @@ Skills `name` and `description` metadata.
 `gradient init --session-scan` installs a fail-open `SessionStart` hook. It
 prints at most one high-leverage cached suggestion, then launches a detached
 bounded scan; startup never waits on the scan. Interactive bare `gradient`
-shows up to three pending suggestions from a fresh cache (and rescans recent
-user-scope history when the cache is stale). Explicit `gradient help` and
-non-interactive bare invocations remain script-safe help output.
+shows up to three pending suggestions straight from the cache when it's
+fresh — under a day old — and refreshes it first (rescanning recent
+user-scope history) otherwise. Explicit `gradient help` and non-interactive
+bare invocations remain script-safe help output.
 
 `gradient recall on` installs an LLM-free `UserPromptSubmit` hook in
 `.claude/settings.local.json`. Its private user-cache index covers project and
