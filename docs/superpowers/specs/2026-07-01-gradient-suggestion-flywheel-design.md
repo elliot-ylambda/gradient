@@ -392,3 +392,12 @@ House style: pure units, injected deps, no network.
   reading `.claude/commands/` from disk).
 - Post-merge similarity threshold for §3.5 (start at the cluster
   `simThreshold` 0.6? measure on the lgtm fixture family).
+
+## Amendment — 2026-07-18
+
+Main moved substantially (auto-responder, 0.4.0) while implementation was in flight. Two spec components are superseded by designs that landed on main and are amended rather than implemented as written:
+
+- **§ Corrections → CLAUDE.md**: gradient never edits CLAUDE.md (landed decision, `emit/rule.ts`). Corrections synthesize into the existing `rule` payload → standalone `.claude/rules/gradient-<name>.md` files with provenance markers, manifest-tracked and removable. The managed-block CLAUDE.md mechanism is dropped.
+- **§ usage.json**: main counts adoption live from transcripts (`core/usage.ts` + adoption ledger + 30-day `suggestRemoval`). No usage.json; the flywheel's "prove it" step instead adds realized minutes-saved to `gradient stats` from live counts × leverage constants.
+
+All other components (leverage ranking, stable signature-derived ids, temporal loop/hook evidence, dismissal subset rule, session-start surfacing, mirror) stand as specified. See the plan's Revision log for the task-level mapping.
