@@ -8,6 +8,7 @@ import { installHook } from "./settings.js";
 import { remove } from "../commands/remove.js";
 import type { Suggestion } from "./types.js";
 import { approvalMatches, loadArtifactApprovals } from "./approvals.js";
+import { loadPlaybookPin, pinState, parseProjectPlaybook } from "./playbook.js";
 
 const base = { id: "x", title: "t", rationale: "r", evidence: { count: 3, sessions: 2 }, confidence: "high" as const };
 
@@ -316,5 +317,45 @@ describe("applySuggestion", () => {
     );
     expect(commands).toEqual(["afplay /System/Library/Sounds/Ping.aiff"]);
     expect(await loadManifest(dir)).toEqual([]);
+  });
+});
+
+describe("applySuggestion project-playbook", () => {
+  const pbSuggestion = (id = "abc123"): Suggestion => ({
+    id, name: "pb-build-after-tests", title: "Build after tests",
+    rationale: "seen often", evidence: { count: 4, sessions: 3 }, confidence: "high",
+    payload: { type: "project-playbook", section: "workflows", text: "After tests pass, run make build." },
+  });
+
+  it("creates gradient.md from the template and pins the prose", async () => {
+    const proj = await mkdtemp(join(tmpdir(), "grad-apply-pb-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-apply-home-"));
+    const result = await applySuggestion(pbSuggestion(), proj, { home });
+    const written = await readFile(join(proj, "gradient.md"), "utf8");
+    expect(written).toContain("- After tests pass, run make build. <!-- gradient:abc123 -->");
+    expect(result.writes[0].path).toBe(join(proj, "gradient.md"));
+    const pin = await loadPlaybookPin(proj, home);
+    expect(pin).not.toBeNull();
+    expect(pinState(parseProjectPlaybook(written), pin)).toBe("pinned");
+  });
+
+  it("appends into an existing hand-written file without touching other lines", async () => {
+    const proj = await mkdtemp(join(tmpdir(), "grad-apply-pb2-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-apply-home2-"));
+    await writeFile(join(proj, "gradient.md"), "---\nautopilot:\n  max-mode: nudge\n---\n## Rules\n- hand rule\n\n## Workflows\n");
+    await applySuggestion(pbSuggestion(), proj, { home });
+    const written = await readFile(join(proj, "gradient.md"), "utf8");
+    expect(written).toContain("max-mode: nudge");
+    expect(written).toContain("- hand rule");
+    expect(written).toContain("<!-- gradient:abc123 -->");
+  });
+
+  it("re-apply is a no-op on the file", async () => {
+    const proj = await mkdtemp(join(tmpdir(), "grad-apply-pb3-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-apply-home3-"));
+    await applySuggestion(pbSuggestion(), proj, { home });
+    const once = await readFile(join(proj, "gradient.md"), "utf8");
+    await applySuggestion(pbSuggestion(), proj, { home });
+    expect(await readFile(join(proj, "gradient.md"), "utf8")).toBe(once);
   });
 });
