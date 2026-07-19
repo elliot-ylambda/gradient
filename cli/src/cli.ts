@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { basename, relative } from "node:path";
 import { scan } from "./commands/scan.js";
 import { review, readlineClarifier, readlinePlaybookPrompter, readlinePrompter, reviewJson } from "./commands/review.js";
+import * as reviewCommands from "./commands/review.js";
 import { applyByIds } from "./commands/apply.js";
 import { list } from "./commands/list.js";
 import { remove } from "./commands/remove.js";
@@ -128,10 +129,13 @@ async function runReview(
   confirm: Confirm,
 ): Promise<void> {
   const config = await loadConfig(home);
+  const playbookPrompter = Object.prototype.hasOwnProperty.call(reviewCommands, "readlinePlaybookPrompter")
+    ? readlinePlaybookPrompter()
+    : undefined;
   const applied = await review(projectDir, readlinePrompter({
     targets: resolveTargets(config),
     cheapModel: resolveCheapModel(config),
-  }), { home, onSkip: log, clarifier: readlineClarifier(), playbookPrompter: readlinePlaybookPrompter() });
+  }), { home, onSkip: log, clarifier: readlineClarifier(), playbookPrompter });
   log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
   for (const a of applied) {
     for (const write of a.writes) {

@@ -254,7 +254,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
       }
     }
   } catch (error) {
-    log(`project playbook mining failed: ${(error as Error).message}`);
+    log(`gradient.md suggestion mining failed: ${(error as Error).message}`);
   }
 
   await saveSuggestions(projectDir, valid, opts.home);

@@ -198,11 +198,12 @@ autopilot:
 - Never push, deploy, or publish from autopilot in this repo.
 ```
 
-Only the structured frontmatter clamps are read by autopilot. Repository prose
-is never passed to the judge as instructions. Trailing `#` comments are
-descriptive and ignored. Anything else the parser
-can't read — an unclosed block, `max-mode: turbo` — turns autopilot off for that
-repo rather than guessing; `gradient autopilot status` shows the effective mode.
+Structured frontmatter clamps always enforce. Repository prose reaches your
+judge only after you approve it in `gradient review`, which pins those exact
+bytes locally; any unapproved edit silently unpins the prose. Trailing `#`
+comments are descriptive and ignored. Anything else the parser can't read — an
+unclosed block, `max-mode: turbo` — turns autopilot off for that repo rather than
+guessing; `gradient autopilot status` shows the effective mode and pin state.
 
 ### How the loop is bounded
 

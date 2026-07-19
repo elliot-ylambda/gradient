@@ -201,6 +201,7 @@ async function prepareArtifacts(
 
   for (const entry of entries) {
     if (entry.type === "skill") continue;
+    if (entry.type === "playbook-entry") continue; // already lives in the committed gradient.md
     if (!entry.path) {
       skipped.add(entry.name);
       continue;

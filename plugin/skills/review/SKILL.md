@@ -7,8 +7,11 @@ description: Review and apply gradient's cached suggestions — the workflows mi
 
        node "${CLAUDE_PLUGIN_ROOT}/bin/gradient.mjs" review --json
 
-2. Present each one: name, title, type, evidence count/sessions, confidence,
-   and a one-line summary of what applying would write.
+   Read the result as `{ projectPlaybook, suggestions }`. Surface the
+   committed `gradient.md` pin state; `unpinned` or `changed` requires the user
+   to use the interactive terminal review before its prose can reach the judge.
+2. Present each suggestion: name, title, type, evidence count/sessions,
+   confidence, and a one-line summary of what applying would write.
 3. Let the user choose. **Never apply without an explicit user choice in this
    conversation.**
 4. For each approved id:

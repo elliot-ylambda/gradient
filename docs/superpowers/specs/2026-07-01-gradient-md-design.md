@@ -12,6 +12,10 @@
 > Shipped behavior is locked in by `judge.test.ts` ("does not create a
 > repository playbook section") and `respond.test.ts` ("repository prose
 > never reaches the judge prompt or emitted nudge").
+> Superseded in part by
+> [`2026-07-18-project-suggestions-design.md`](./2026-07-18-project-suggestions-design.md):
+> prose now reaches the judge when the local user has pinned those exact
+> bytes via `gradient review`.
 
 **Date:** 2026-07-01
 **Status:** Implemented and released

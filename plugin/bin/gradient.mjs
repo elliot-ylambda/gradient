@@ -292,7 +292,7 @@ var init_sleep = __esm({
 var VERSION;
 var init_version = __esm({
   "node_modules/@anthropic-ai/sdk/version.mjs"() {
-    VERSION = "0.111.0";
+    VERSION = "0.112.3";
   }
 });
 
@@ -9932,6 +9932,317 @@ var init_skills2 = __esm({
   }
 });
 
+// node_modules/@anthropic-ai/sdk/resources/beta/tunnels/certificates.mjs
+var Certificates;
+var init_certificates = __esm({
+  "node_modules/@anthropic-ai/sdk/resources/beta/tunnels/certificates.mjs"() {
+    init_resource();
+    init_pagination();
+    init_headers();
+    init_path();
+    Certificates = class extends APIResource {
+      /**
+       * The Tunnels API is in research preview. It requires the
+       * `anthropic-beta: mcp-tunnels-2026-06-22` header and may change without a
+       * deprecation period. It supersedes the Admin API endpoints at
+       * `/v1/organizations/tunnels`, which remain available during a migration window.
+       *
+       * Registers a public CA certificate on a tunnel. Anthropic verifies the gateway's
+       * server certificate against this CA when it terminates the inner TLS session. A
+       * tunnel holds at most two non-archived certificates.
+       *
+       * @example
+       * ```ts
+       * const betaTunnelCertificate =
+       *   await client.beta.tunnels.certificates.create(
+       *     'tunnel_id',
+       *     { ca_certificate_pem: 'ca_certificate_pem' },
+       *   );
+       * ```
+       */
+      create(tunnelID, params, options) {
+        const { betas, ...body } = params;
+        return this._client.post(path`/v1/tunnels/${tunnelID}/certificates?beta=true`, {
+          body,
+          ...options,
+          headers: buildHeaders([
+            { "anthropic-beta": [...betas ?? [], "mcp-tunnels-2026-06-22"].toString() },
+            options?.headers
+          ])
+        });
+      }
+      /**
+       * The Tunnels API is in research preview. It requires the
+       * `anthropic-beta: mcp-tunnels-2026-06-22` header and may change without a
+       * deprecation period. It supersedes the Admin API endpoints at
+       * `/v1/organizations/tunnels`, which remain available during a migration window.
+       *
+       * Fetches a tunnel certificate by ID.
+       *
+       * @example
+       * ```ts
+       * const betaTunnelCertificate =
+       *   await client.beta.tunnels.certificates.retrieve(
+       *     'certificate_id',
+       *     { tunnel_id: 'tunnel_id' },
+       *   );
+       * ```
+       */
+      retrieve(certificateID, params, options) {
+        const { tunnel_id, betas } = params;
+        return this._client.get(path`/v1/tunnels/${tunnel_id}/certificates/${certificateID}?beta=true`, {
+          ...options,
+          headers: buildHeaders([
+            { "anthropic-beta": [...betas ?? [], "mcp-tunnels-2026-06-22"].toString() },
+            options?.headers
+          ])
+        });
+      }
+      /**
+       * The Tunnels API is in research preview. It requires the
+       * `anthropic-beta: mcp-tunnels-2026-06-22` header and may change without a
+       * deprecation period. It supersedes the Admin API endpoints at
+       * `/v1/organizations/tunnels`, which remain available during a migration window.
+       *
+       * Lists the certificates registered on a tunnel. Archived certificates are
+       * excluded unless include_archived is set.
+       *
+       * @example
+       * ```ts
+       * // Automatically fetches more pages as needed.
+       * for await (const betaTunnelCertificate of client.beta.tunnels.certificates.list(
+       *   'tunnel_id',
+       * )) {
+       *   // ...
+       * }
+       * ```
+       */
+      list(tunnelID, params = {}, options) {
+        const { betas, ...query } = params ?? {};
+        return this._client.getAPIList(path`/v1/tunnels/${tunnelID}/certificates?beta=true`, PageCursor, {
+          query,
+          ...options,
+          headers: buildHeaders([
+            { "anthropic-beta": [...betas ?? [], "mcp-tunnels-2026-06-22"].toString() },
+            options?.headers
+          ])
+        });
+      }
+      /**
+       * The Tunnels API is in research preview. It requires the
+       * `anthropic-beta: mcp-tunnels-2026-06-22` header and may change without a
+       * deprecation period. It supersedes the Admin API endpoints at
+       * `/v1/organizations/tunnels`, which remain available during a migration window.
+       *
+       * Archives a tunnel certificate, removing it from the set Anthropic trusts for the
+       * tunnel. The certificate record is retained. Archiving the last non-archived
+       * certificate is permitted; the tunnel rejects MCP traffic until a new certificate
+       * is added.
+       *
+       * @example
+       * ```ts
+       * const betaTunnelCertificate =
+       *   await client.beta.tunnels.certificates.archive(
+       *     'certificate_id',
+       *     { tunnel_id: 'tunnel_id' },
+       *   );
+       * ```
+       */
+      archive(certificateID, params, options) {
+        const { tunnel_id, betas } = params;
+        return this._client.post(path`/v1/tunnels/${tunnel_id}/certificates/${certificateID}/archive?beta=true`, {
+          ...options,
+          headers: buildHeaders([
+            { "anthropic-beta": [...betas ?? [], "mcp-tunnels-2026-06-22"].toString() },
+            options?.headers
+          ])
+        });
+      }
+    };
+  }
+});
+
+// node_modules/@anthropic-ai/sdk/resources/beta/tunnels/tunnels.mjs
+var Tunnels;
+var init_tunnels = __esm({
+  "node_modules/@anthropic-ai/sdk/resources/beta/tunnels/tunnels.mjs"() {
+    init_resource();
+    init_certificates();
+    init_certificates();
+    init_pagination();
+    init_headers();
+    init_path();
+    Tunnels = class extends APIResource {
+      constructor() {
+        super(...arguments);
+        this.certificates = new Certificates(this._client);
+      }
+      /**
+       * The Tunnels API is in research preview. It requires the
+       * `anthropic-beta: mcp-tunnels-2026-06-22` header and may change without a
+       * deprecation period. It supersedes the Admin API endpoints at
+       * `/v1/organizations/tunnels`, which remain available during a migration window.
+       *
+       * Creates a tunnel. Creation allocates a fresh hostname and provisions the tunnel;
+       * it is not idempotent. The new tunnel rejects MCP traffic until at least one CA
+       * certificate is added.
+       *
+       * @example
+       * ```ts
+       * const betaTunnel = await client.beta.tunnels.create();
+       * ```
+       */
+      create(params, options) {
+        const { betas, ...body } = params;
+        return this._client.post("/v1/tunnels?beta=true", {
+          body,
+          ...options,
+          headers: buildHeaders([
+            { "anthropic-beta": [...betas ?? [], "mcp-tunnels-2026-06-22"].toString() },
+            options?.headers
+          ])
+        });
+      }
+      /**
+       * The Tunnels API is in research preview. It requires the
+       * `anthropic-beta: mcp-tunnels-2026-06-22` header and may change without a
+       * deprecation period. It supersedes the Admin API endpoints at
+       * `/v1/organizations/tunnels`, which remain available during a migration window.
+       *
+       * Fetches a tunnel by ID.
+       *
+       * @example
+       * ```ts
+       * const betaTunnel = await client.beta.tunnels.retrieve(
+       *   'tunnel_id',
+       * );
+       * ```
+       */
+      retrieve(tunnelID, params = {}, options) {
+        const { betas } = params ?? {};
+        return this._client.get(path`/v1/tunnels/${tunnelID}?beta=true`, {
+          ...options,
+          headers: buildHeaders([
+            { "anthropic-beta": [...betas ?? [], "mcp-tunnels-2026-06-22"].toString() },
+            options?.headers
+          ])
+        });
+      }
+      /**
+       * The Tunnels API is in research preview. It requires the
+       * `anthropic-beta: mcp-tunnels-2026-06-22` header and may change without a
+       * deprecation period. It supersedes the Admin API endpoints at
+       * `/v1/organizations/tunnels`, which remain available during a migration window.
+       *
+       * Lists tunnels. Results are ordered by creation time, newest first; archived
+       * tunnels are excluded unless include_archived is set.
+       *
+       * @example
+       * ```ts
+       * // Automatically fetches more pages as needed.
+       * for await (const betaTunnel of client.beta.tunnels.list()) {
+       *   // ...
+       * }
+       * ```
+       */
+      list(params = {}, options) {
+        const { betas, ...query } = params ?? {};
+        return this._client.getAPIList("/v1/tunnels?beta=true", PageCursor, {
+          query,
+          ...options,
+          headers: buildHeaders([
+            { "anthropic-beta": [...betas ?? [], "mcp-tunnels-2026-06-22"].toString() },
+            options?.headers
+          ])
+        });
+      }
+      /**
+       * The Tunnels API is in research preview. It requires the
+       * `anthropic-beta: mcp-tunnels-2026-06-22` header and may change without a
+       * deprecation period. It supersedes the Admin API endpoints at
+       * `/v1/organizations/tunnels`, which remain available during a migration window.
+       *
+       * Archives a tunnel. Archival is irreversible: every non-archived certificate on
+       * the tunnel is archived in the same operation, the hostname is retired and never
+       * re-allocated, and the tunnel token is invalidated. Retrying against an
+       * already-archived tunnel returns the existing record unchanged.
+       *
+       * @example
+       * ```ts
+       * const betaTunnel = await client.beta.tunnels.archive(
+       *   'tunnel_id',
+       * );
+       * ```
+       */
+      archive(tunnelID, params = {}, options) {
+        const { betas } = params ?? {};
+        return this._client.post(path`/v1/tunnels/${tunnelID}/archive?beta=true`, {
+          ...options,
+          headers: buildHeaders([
+            { "anthropic-beta": [...betas ?? [], "mcp-tunnels-2026-06-22"].toString() },
+            options?.headers
+          ])
+        });
+      }
+      /**
+       * The Tunnels API is in research preview. It requires the
+       * `anthropic-beta: mcp-tunnels-2026-06-22` header and may change without a
+       * deprecation period. It supersedes the Admin API endpoints at
+       * `/v1/organizations/tunnels`, which remain available during a migration window.
+       *
+       * Reveals a tunnel's connector token. The value is fetched live on each call;
+       * Anthropic does not store it. Repeated calls return the same value until the
+       * token is rotated. Exposed as POST so the token does not appear in intermediary
+       * access logs.
+       *
+       * @example
+       * ```ts
+       * const betaTunnelToken =
+       *   await client.beta.tunnels.revealToken('tunnel_id');
+       * ```
+       */
+      revealToken(tunnelID, params = {}, options) {
+        const { betas } = params ?? {};
+        return this._client.post(path`/v1/tunnels/${tunnelID}/reveal_token?beta=true`, {
+          ...options,
+          headers: buildHeaders([
+            { "anthropic-beta": [...betas ?? [], "mcp-tunnels-2026-06-22"].toString() },
+            options?.headers
+          ])
+        });
+      }
+      /**
+       * The Tunnels API is in research preview. It requires the
+       * `anthropic-beta: mcp-tunnels-2026-06-22` header and may change without a
+       * deprecation period. It supersedes the Admin API endpoints at
+       * `/v1/organizations/tunnels`, which remain available during a migration window.
+       *
+       * Rotates a tunnel's connector token. Rotation invalidates the current token for
+       * new connections and returns a fresh value; established connections are not
+       * severed. A connector restarted after rotation must use the new value.
+       *
+       * @example
+       * ```ts
+       * const betaTunnelToken =
+       *   await client.beta.tunnels.rotateToken('tunnel_id');
+       * ```
+       */
+      rotateToken(tunnelID, params, options) {
+        const { betas, ...body } = params;
+        return this._client.post(path`/v1/tunnels/${tunnelID}/rotate_token?beta=true`, {
+          body,
+          ...options,
+          headers: buildHeaders([
+            { "anthropic-beta": [...betas ?? [], "mcp-tunnels-2026-06-22"].toString() },
+            options?.headers
+          ])
+        });
+      }
+    };
+    Tunnels.Certificates = Certificates;
+  }
+});
+
 // node_modules/@anthropic-ai/sdk/resources/beta/vaults/credentials.mjs
 var Credentials;
 var init_credentials2 = __esm({
@@ -10290,6 +10601,8 @@ var init_beta = __esm({
     init_sessions();
     init_skills2();
     init_skills2();
+    init_tunnels();
+    init_tunnels();
     init_vaults();
     init_vaults();
     Beta = class extends APIResource {
@@ -10309,6 +10622,7 @@ var init_beta = __esm({
         this.webhooks = new Webhooks(this._client);
         this.userProfiles = new UserProfiles(this._client);
         this.dreams = new Dreams(this._client);
+        this.tunnels = new Tunnels(this._client);
       }
     };
     Beta.Models = Models;
@@ -10325,6 +10639,7 @@ var init_beta = __esm({
     Beta.Webhooks = Webhooks;
     Beta.UserProfiles = UserProfiles;
     Beta.Dreams = Dreams;
+    Beta.Tunnels = Tunnels;
   }
 });
 
@@ -13533,7 +13848,7 @@ async function detect(cands, llm, opts = {}) {
 
 // src/core/validate.ts
 var KNOWN_SUBCOMMANDS = /* @__PURE__ */ new Set(["checkpoint", "scan", "recap", "notify"]);
-var TYPES = /* @__PURE__ */ new Set(["command", "loop", "hook", "rule"]);
+var TYPES = /* @__PURE__ */ new Set(["command", "loop", "hook", "rule", "project-playbook"]);
 var CONFIDENCES = /* @__PURE__ */ new Set(["high", "inferred", "flagged"]);
 var HOOK_EVENTS = /* @__PURE__ */ new Set(["PreCompact", "SessionStart", "Notification"]);
 var NOTIFICATION_MATCHER = "permission_prompt|idle_prompt";
@@ -13610,6 +13925,17 @@ function validateSuggestion(x) {
     if (payload.ruleName !== s.name) throw new Error("ruleName must match suggestion.name");
     if (!validText(payload.text, 2e3) || payload.text.trim().length === 0) {
       throw new Error("rule payload needs safe bounded text");
+    }
+  }
+  if (payload.type === "project-playbook") {
+    if (payload.section !== "rules" && payload.section !== "workflows") {
+      throw new Error("project-playbook payload section must be rules|workflows");
+    }
+    if (!validOneLine(payload.text, 500)) {
+      throw new Error("project-playbook payload needs safe bounded one-line text");
+    }
+    if (payload.text.includes("<!--") || payload.text.includes("-->")) {
+      throw new Error("project-playbook text must not contain comment markers");
     }
   }
   if (s.clarify !== void 0) {
@@ -14675,13 +15001,13 @@ import { homedir as homedir8 } from "node:os";
 import { join as join16 } from "node:path";
 
 // src/core/apply.ts
-import { isAbsolute as isAbsolute10, join as join14, resolve as resolve9 } from "node:path";
+import { isAbsolute as isAbsolute10, join as join15, resolve as resolve9 } from "node:path";
 
 // src/core/manifest.ts
 import { isAbsolute as isAbsolute9, join as join12, relative as relative5, resolve as resolve8 } from "node:path";
 var MANIFEST_MAX_BYTES = 1e6;
 var MANIFEST_MAX_ENTRIES = 1e3;
-var ARTIFACT_TYPES = /* @__PURE__ */ new Set(["command", "loop", "hook", "skill", "rule"]);
+var ARTIFACT_TYPES = /* @__PURE__ */ new Set(["command", "loop", "hook", "skill", "rule", "playbook-entry"]);
 var ASSISTANTS2 = /* @__PURE__ */ new Set(["claude-code", "codex"]);
 function gradientDir(projectDir) {
   return join12(projectDir, ".gradient");
@@ -14711,6 +15037,8 @@ function expectedRelativePath(type, name, target) {
       return `.claude/commands/${name}.md`;
     case "rule":
       return `.claude/rules/gradient-${name}.md`;
+    case "playbook-entry":
+      return "gradient.md";
     case "loop":
     case "hook":
       return null;
@@ -14929,6 +15257,73 @@ function emitCodexRule(s) {
   };
 }
 
+// src/core/playbook-splice.ts
+var SECTION_HEADINGS = {
+  rules: "## Rules",
+  workflows: "## Workflows"
+};
+var PROJECT_PLAYBOOK_TEMPLATE = `# gradient.md \u2014 repo automation contract
+
+## Rules
+
+## Workflows
+`;
+function entryTag(suggestionId2) {
+  return `<!-- gradient:${suggestionId2} -->`;
+}
+function spliceLine(existing, section, line, suggestionId2) {
+  const base = existing ?? PROJECT_PLAYBOOK_TEMPLATE;
+  if (base.includes(entryTag(suggestionId2))) return base;
+  const heading = SECTION_HEADINGS[section];
+  const lines = base.split("\n");
+  const headingIndex = lines.findIndex((candidate) => candidate.trim() === heading);
+  if (headingIndex === -1) {
+    const separator = base === "" || base.endsWith("\n") ? "" : "\n";
+    return `${base}${separator}
+${heading}
+
+${line}
+`;
+  }
+  let end = lines.length;
+  for (let i = headingIndex + 1; i < lines.length; i++) {
+    if (/^#{1,6}\s/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  let last = headingIndex;
+  for (let i = headingIndex + 1; i < end; i++) {
+    if (lines[i].trim() !== "") last = i;
+  }
+  if (last === headingIndex) lines.splice(headingIndex + 1, 0, "", line);
+  else lines.splice(last + 1, 0, line);
+  return lines.join("\n");
+}
+function removeTaggedLine(content, suggestionId2) {
+  const tag = entryTag(suggestionId2);
+  const lines = content.split("\n");
+  const index = lines.findIndex((candidate) => candidate.includes(tag));
+  if (index === -1) return null;
+  lines.splice(index, 1);
+  return lines.join("\n");
+}
+function proseDiff(pinned, current) {
+  const pinnedLines = pinned.split("\n");
+  const currentSet = new Set(current.split("\n"));
+  const pinnedSet = new Set(pinnedLines);
+  const removed = pinnedLines.filter((l) => !currentSet.has(l) && l.trim() !== "");
+  const added = current.split("\n").filter((l) => !pinnedSet.has(l) && l.trim() !== "");
+  return [...removed.map((l) => `- ${l}`), ...added.map((l) => `+ ${l}`)].join("\n");
+}
+
+// src/core/emit/project-playbook.ts
+function emitProjectPlaybook(s) {
+  if (s.payload.type !== "project-playbook") throw new Error("emitProjectPlaybook needs a project-playbook payload");
+  const text = redact(s.payload.text).replace(/[\r\n\t]+/g, " ").trim().slice(0, 500);
+  return { section: s.payload.section, line: `- ${text} ${entryTag(s.id)}` };
+}
+
 // src/core/emit/index.ts
 function emit(s, opts = {}) {
   const assistant = opts.assistant ?? "claude-code";
@@ -14952,6 +15347,8 @@ function emit(s, opts = {}) {
       const result = emitRule(s);
       return "path" in result ? { kind: "rule", ...result } : { kind: "rule-print", text: result.printed };
     }
+    case "project-playbook":
+      return { kind: "playbook-line", ...emitProjectPlaybook(s) };
   }
 }
 
@@ -14961,7 +15358,7 @@ import { homedir as homedir6 } from "node:os";
 import { join as join13 } from "node:path";
 var APPROVAL_LEDGER_MAX_BYTES = 1e6;
 var APPROVAL_LEDGER_MAX_ENTRIES = 1e3;
-var ARTIFACT_TYPES2 = /* @__PURE__ */ new Set(["command", "loop", "hook", "skill", "rule"]);
+var ARTIFACT_TYPES2 = /* @__PURE__ */ new Set(["command", "loop", "hook", "skill", "rule", "playbook-entry"]);
 var ASSISTANTS3 = /* @__PURE__ */ new Set(["claude-code", "codex"]);
 var ARTIFACT_SAFETY_VERSION = 1;
 function approvalLedgerPath(projectDir, home) {
@@ -15053,140 +15450,10 @@ async function revokeArtifactApproval(projectDir, name, home) {
   );
 }
 
-// src/core/apply.ts
-async function trackedTarget(projectDir, suggestion, target, path5) {
-  const resolvedTarget = resolve9(path5);
-  return (await loadManifest(projectDir)).find((entry) => {
-    if (entry.name !== suggestion.name || manifestTarget(entry) !== target || !entry.path) return false;
-    const entryPath = isAbsolute10(entry.path) ? entry.path : join14(projectDir, entry.path);
-    return resolve9(entryPath) === resolvedTarget;
-  });
-}
-function normalizeTargets(value) {
-  const raw = value ?? ["claude-code"];
-  const out = [];
-  for (const target of raw) {
-    if (target !== "claude-code" && target !== "codex") throw new Error(`unsupported assistant target: ${String(target)}`);
-    if (!out.includes(target)) out.push(target);
-  }
-  if (out.length === 0 || out.length > 2) throw new Error("apply requires one or two assistant targets");
-  return out;
-}
-async function applySuggestion(suggestion, projectDir, opts = {}) {
-  validateSuggestion(suggestion);
-  if (suggestion.confidence === "flagged") {
-    throw new Error("refusing to apply an unresolved flagged suggestion; resolve it through gradient review first");
-  }
-  const targets = normalizeTargets(opts.targets);
-  const writes = [];
-  const skippedTargets = [];
-  const failures = [];
-  let printed;
-  for (const target of targets) {
-    if (target === "codex" && suggestion.payload.type !== "command" && suggestion.payload.type !== "rule") {
-      skippedTargets.push(target);
-      continue;
-    }
-    try {
-      const result = emit(suggestion, {
-        target: opts.emitTarget,
-        assistant: target,
-        cheapModel: opts.cheapModel
-      });
-      let type;
-      let written = "";
-      let approvalContent;
-      let previousContent;
-      let created = false;
-      let installedHook;
-      if (result.kind === "command" || result.kind === "skill" || result.kind === "rule") {
-        const abs = join14(projectDir, result.path);
-        const assistantRoot = target === "codex" ? ".agents" : ".claude";
-        assertInside(join14(projectDir, assistantRoot), abs);
-        const tracked = await trackedTarget(projectDir, suggestion, target, abs);
-        if (tracked) {
-          previousContent = await safeReadFile(projectDir, abs, { maxBytes: 1e6 });
-          if (!artifactHasMarker(previousContent, tracked)) {
-            throw new Error(`refusing to overwrite artifact without matching gradient provenance: ${abs}`);
-          }
-          await safeWriteFile(projectDir, abs, result.content, { mode: 384 });
-        } else {
-          try {
-            await safeWriteFile(projectDir, abs, result.content, { exclusive: true, mode: 384 });
-            created = true;
-          } catch (error) {
-            if (error.code === "EEXIST") {
-              throw new Error(`refusing to overwrite untracked artifact: ${abs}`);
-            }
-            throw error;
-          }
-        }
-        written = abs;
-        approvalContent = result.content;
-        type = result.kind;
-      } else if (result.kind === "loop") {
-        type = "loop";
-      } else if (result.kind === "rule-print") {
-        type = "rule";
-      } else {
-        if (suggestion.payload.type !== "hook") throw new Error("hook artifact requires a hook payload");
-        const command = `gradient ${suggestion.payload.subcommand}`;
-        const settingsFile = await installHook(projectDir, suggestion.payload.event, command, {
-          ...suggestion.payload.matcher !== void 0 ? { matcher: suggestion.payload.matcher } : {}
-        });
-        installedHook = { event: suggestion.payload.event, command, settingsFile };
-        type = "hook";
-      }
-      const entry = {
-        name: suggestion.name,
-        type,
-        path: written,
-        createdAt: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
-        suggestionId: suggestion.id,
-        ...target === "codex" ? { target } : {},
-        ...installedHook ? { hook: { event: installedHook.event, command: installedHook.command } } : {}
-      };
-      try {
-        if (written && approvalContent) {
-          await recordArtifactApproval(projectDir, entry, approvalContent, opts.home);
-        }
-        await addEntry(projectDir, entry);
-      } catch (error) {
-        if (written) {
-          if (created) await safeUnlink(projectDir, written).catch(() => void 0);
-          else if (previousContent !== void 0) {
-            await safeWriteFile(projectDir, written, previousContent, { mode: 384 }).catch(() => void 0);
-          }
-        }
-        if (installedHook) {
-          await removeHook(projectDir, installedHook.event, installedHook.command).catch(() => void 0);
-        }
-        throw error;
-      }
-      if (written) writes.push({ target, path: written });
-      else if (installedHook) writes.push({ target, path: installedHook.settingsFile });
-      const targetPrinted = result.kind === "loop" ? result.command : result.kind === "rule-print" ? result.text : void 0;
-      if (targetPrinted) printed = [printed, targetPrinted].filter(Boolean).join("\n");
-    } catch (error) {
-      failures.push({ target, error: error.message });
-    }
-  }
-  if (failures.length > 0 && writes.length === 0 && !printed) {
-    throw new Error(failures.map((failure) => `${failure.target}: ${failure.error}`).join("; "));
-  }
-  return {
-    suggestion,
-    writes,
-    skippedTargets,
-    failures,
-    written: writes[0]?.path,
-    printed
-  };
-}
-
 // src/core/playbook.ts
-import { join as join15 } from "node:path";
+import { join as join14 } from "node:path";
 import { homedir as homedir7 } from "node:os";
+import { createHash as createHash4 } from "node:crypto";
 var MINED_START = "<!-- gradient:mined:start -->";
 var MINED_END = "<!-- gradient:mined:end -->";
 var PLAYBOOK_MAX_CHAINS = 5;
@@ -15207,7 +15474,7 @@ ${MINED_END}
 - Prefer standing down over guessing.
 `;
 function playbookPath(home) {
-  return join15(home ?? homedir7(), ".config", "gradient", "gradient.md");
+  return join14(home ?? homedir7(), ".config", "gradient", "gradient.md");
 }
 function isNudge(s) {
   return s.payload.type === "loop" && !s.payload.cadence;
@@ -15270,7 +15537,7 @@ function clampMode(a, b) {
   return MODE_RANK[a] <= MODE_RANK[b] ? a : b;
 }
 function projectPlaybookPath(cwd) {
-  return join15(cwd, "gradient.md");
+  return join14(cwd, "gradient.md");
 }
 var isMode = (v) => v === "off" || v === "nudge" || v === "full";
 function stripComment(v) {
@@ -15323,6 +15590,199 @@ async function loadProjectPlaybook(cwd) {
     if (err.code === "ENOENT") return null;
     return { prose: "", clamps: { malformed: true } };
   }
+}
+var PIN_FILE_MAX_BYTES = 3e5;
+function playbookPinPath(projectDir, home) {
+  return join14(projectCacheDir(projectDir, home), "playbook-pin.json");
+}
+function proseHash(prose) {
+  return createHash4("sha256").update(prose, "utf8").digest("hex");
+}
+async function loadPlaybookPin(projectDir, home) {
+  const userHome = home ?? homedir7();
+  try {
+    const parsed = JSON.parse(await safeReadFile(
+      userHome,
+      playbookPinPath(projectDir, userHome),
+      { maxBytes: PIN_FILE_MAX_BYTES }
+    ));
+    if (!parsed || typeof parsed !== "object" || typeof parsed.hash !== "string" || !/^[a-f0-9]{64}$/.test(parsed.hash) || typeof parsed.prose !== "string" || proseHash(parsed.prose) !== parsed.hash || typeof parsed.pinnedAt !== "string") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+async function savePlaybookPin(projectDir, prose, home, now) {
+  const userHome = home ?? homedir7();
+  const pin = {
+    hash: proseHash(prose),
+    prose,
+    pinnedAt: (now ?? (() => (/* @__PURE__ */ new Date()).toISOString()))()
+  };
+  await safeWriteFile(userHome, playbookPinPath(projectDir, userHome), `${JSON.stringify(pin, null, 2)}
+`, { mode: 384 });
+}
+function pinState(project2, pin) {
+  if (project2 === null) return "none";
+  if (pin === null) return "unpinned";
+  return proseHash(project2.prose) === pin.hash ? "pinned" : "changed";
+}
+function pinnedProse(project2, pin) {
+  return pinState(project2, pin) === "pinned" && project2 !== null ? project2.prose : "";
+}
+
+// src/core/apply.ts
+async function trackedTarget(projectDir, suggestion, target, path5) {
+  const resolvedTarget = resolve9(path5);
+  return (await loadManifest(projectDir)).find((entry) => {
+    if (entry.name !== suggestion.name || manifestTarget(entry) !== target || !entry.path) return false;
+    const entryPath = isAbsolute10(entry.path) ? entry.path : join15(projectDir, entry.path);
+    return resolve9(entryPath) === resolvedTarget;
+  });
+}
+function normalizeTargets(value) {
+  const raw = value ?? ["claude-code"];
+  const out = [];
+  for (const target of raw) {
+    if (target !== "claude-code" && target !== "codex") throw new Error(`unsupported assistant target: ${String(target)}`);
+    if (!out.includes(target)) out.push(target);
+  }
+  if (out.length === 0 || out.length > 2) throw new Error("apply requires one or two assistant targets");
+  return out;
+}
+async function applySuggestion(suggestion, projectDir, opts = {}) {
+  validateSuggestion(suggestion);
+  if (suggestion.confidence === "flagged") {
+    throw new Error("refusing to apply an unresolved flagged suggestion; resolve it through gradient review first");
+  }
+  const targets = normalizeTargets(opts.targets);
+  const writes = [];
+  const skippedTargets = [];
+  const failures = [];
+  let printed;
+  for (const target of targets) {
+    if (target === "codex" && suggestion.payload.type !== "command" && suggestion.payload.type !== "rule") {
+      skippedTargets.push(target);
+      continue;
+    }
+    try {
+      const result = emit(suggestion, {
+        target: opts.emitTarget,
+        assistant: target,
+        cheapModel: opts.cheapModel
+      });
+      let type;
+      let written = "";
+      let approvalContent;
+      let previousContent;
+      let created = false;
+      let installedHook;
+      if (result.kind === "command" || result.kind === "skill" || result.kind === "rule") {
+        const abs = join15(projectDir, result.path);
+        const assistantRoot = target === "codex" ? ".agents" : ".claude";
+        assertInside(join15(projectDir, assistantRoot), abs);
+        const tracked = await trackedTarget(projectDir, suggestion, target, abs);
+        if (tracked) {
+          previousContent = await safeReadFile(projectDir, abs, { maxBytes: 1e6 });
+          if (!artifactHasMarker(previousContent, tracked)) {
+            throw new Error(`refusing to overwrite artifact without matching gradient provenance: ${abs}`);
+          }
+          await safeWriteFile(projectDir, abs, result.content, { mode: 384 });
+        } else {
+          try {
+            await safeWriteFile(projectDir, abs, result.content, { exclusive: true, mode: 384 });
+            created = true;
+          } catch (error) {
+            if (error.code === "EEXIST") {
+              throw new Error(`refusing to overwrite untracked artifact: ${abs}`);
+            }
+            throw error;
+          }
+        }
+        written = abs;
+        approvalContent = result.content;
+        type = result.kind;
+      } else if (result.kind === "playbook-line") {
+        const abs = join15(projectDir, "gradient.md");
+        let existingContent = null;
+        try {
+          existingContent = await safeReadFile(projectDir, abs, { maxBytes: 256e3 });
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+        const next = spliceLine(existingContent, result.section, result.line, suggestion.id);
+        if (next !== existingContent) {
+          await safeWriteFile(projectDir, abs, next, { mode: 420 });
+        }
+        created = existingContent === null;
+        previousContent = existingContent ?? void 0;
+        written = abs;
+        approvalContent = result.line;
+        type = "playbook-entry";
+      } else if (result.kind === "loop") {
+        type = "loop";
+      } else if (result.kind === "rule-print") {
+        type = "rule";
+      } else {
+        if (suggestion.payload.type !== "hook") throw new Error("hook artifact requires a hook payload");
+        const command = `gradient ${suggestion.payload.subcommand}`;
+        const settingsFile = await installHook(projectDir, suggestion.payload.event, command, {
+          ...suggestion.payload.matcher !== void 0 ? { matcher: suggestion.payload.matcher } : {}
+        });
+        installedHook = { event: suggestion.payload.event, command, settingsFile };
+        type = "hook";
+      }
+      const entry = {
+        name: suggestion.name,
+        type,
+        path: written,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
+        suggestionId: suggestion.id,
+        ...target === "codex" ? { target } : {},
+        ...installedHook ? { hook: { event: installedHook.event, command: installedHook.command } } : {}
+      };
+      try {
+        if (written && approvalContent) {
+          await recordArtifactApproval(projectDir, entry, approvalContent, opts.home);
+        }
+        await addEntry(projectDir, entry);
+      } catch (error) {
+        if (written) {
+          if (created) await safeUnlink(projectDir, written).catch(() => void 0);
+          else if (previousContent !== void 0) {
+            await safeWriteFile(projectDir, written, previousContent, { mode: 384 }).catch(() => void 0);
+          }
+        }
+        if (installedHook) {
+          await removeHook(projectDir, installedHook.event, installedHook.command).catch(() => void 0);
+        }
+        throw error;
+      }
+      if (type === "playbook-entry" && written) {
+        const current = await safeReadFile(projectDir, written, { maxBytes: 256e3 });
+        await savePlaybookPin(projectDir, parseProjectPlaybook(current).prose, opts.home);
+      }
+      if (written) writes.push({ target, path: written });
+      else if (installedHook) writes.push({ target, path: installedHook.settingsFile });
+      const targetPrinted = result.kind === "loop" ? result.command : result.kind === "rule-print" ? result.text : void 0;
+      if (targetPrinted) printed = [printed, targetPrinted].filter(Boolean).join("\n");
+    } catch (error) {
+      failures.push({ target, error: error.message });
+    }
+  }
+  if (failures.length > 0 && writes.length === 0 && !printed) {
+    throw new Error(failures.map((failure) => `${failure.target}: ${failure.error}`).join("; "));
+  }
+  return {
+    suggestion,
+    writes,
+    skippedTargets,
+    failures,
+    written: writes[0]?.path,
+    printed
+  };
 }
 
 // src/commands/apply.ts
@@ -15621,7 +16081,7 @@ function mineAnswerCandidates(pairs) {
 }
 
 // src/core/attention.ts
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 import { constants as constants7 } from "node:fs";
 import { open as open8 } from "node:fs/promises";
 var ATTENTION_MIN_GAP_MS = 3e5;
@@ -15727,7 +16187,7 @@ async function mineAttention(files, readFn = readTranscript) {
 }
 function attentionSuggestion(stats2) {
   return {
-    id: createHash4("sha256").update("attention:notify").digest("hex").slice(0, 12),
+    id: createHash5("sha256").update("attention:notify").digest("hex").slice(0, 12),
     name: "notify-when-waiting",
     title: "Desktop ping when Claude Code is waiting on you",
     rationale: `You left Claude waiting \u22655 minutes ${stats2.gaps} time(s) across ${stats2.sessions} sessions (median ${stats2.medianMinutes} min). A Notification hook can ping your desktop instead.`,
@@ -15741,6 +16201,66 @@ function attentionSuggestion(stats2) {
       description: "Desktop notification when Claude needs input"
     }
   };
+}
+
+// src/core/project-suggest.ts
+import { createHash as createHash6 } from "node:crypto";
+var PROJECT_MIN_COUNT = 3;
+var PROJECT_MIN_SESSIONS = 2;
+var CONSTRAINT_RE = /^(never|don't|do not|always|avoid|only|must|stop)\b/i;
+function isConstraintShaped(text) {
+  return CONSTRAINT_RE.test(text.trim());
+}
+function suggestionId(seed) {
+  return createHash6("sha256").update(`project-playbook:${seed}`).digest("hex").slice(0, 12);
+}
+function oneLine(text) {
+  return text.replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, 480);
+}
+function chainWorkflowSuggestion(chain, assistantBySession) {
+  if (chain.count < PROJECT_MIN_COUNT || chain.sessions < PROJECT_MIN_SESSIONS) return null;
+  const [first, second, third] = chain.steps.map((step) => oneLine(step).slice(0, 120));
+  if (!first || !second) return null;
+  const text = oneLine(
+    `After "${first}", the typical next step is "${second}"${third ? ` then "${third}"` : ""}.`
+  );
+  const pooled = [...new Set(chain.sessionIds.map((id) => assistantBySession.get(id) ?? "claude-code"))];
+  return {
+    id: suggestionId(`workflow:${chain.steps.join("\u2192")}`),
+    name: sanitizeName(`pb-after-${first}`),
+    title: `Repo workflow: ${first} \u2192 ${second}`.slice(0, 200),
+    rationale: `This sequence recurs in this repo (${chain.count}\xD7 across ${chain.sessions} sessions); committing it lets every approving teammate's judge know the typical next step.`,
+    evidence: { count: chain.count, sessions: chain.sessions, assistants: pooled },
+    confidence: "inferred",
+    payload: { type: "project-playbook", section: "workflows", text }
+  };
+}
+function nudgeRuleSuggestion(s) {
+  if (!isNudge(s) || s.payload.type !== "loop") return null;
+  if (s.evidence.count < PROJECT_MIN_COUNT || s.evidence.sessions < PROJECT_MIN_SESSIONS) return null;
+  const text = oneLine(s.payload.instruction);
+  if (!isConstraintShaped(text)) return null;
+  return {
+    id: suggestionId(`rule:${text}`),
+    name: sanitizeName(`pb-rule-${text.slice(0, 24)}`),
+    title: `Repo rule: ${text}`.slice(0, 200),
+    rationale: `You repeat this constraint in this repo (${s.evidence.count}\xD7 across ${s.evidence.sessions} sessions); committing it lets every approving teammate's judge stand down accordingly.`,
+    evidence: s.evidence,
+    confidence: "inferred",
+    payload: { type: "project-playbook", section: "rules", text }
+  };
+}
+function mineProjectPlaybook(suggestions, chains, assistantBySession) {
+  const out = /* @__PURE__ */ new Map();
+  for (const chain of chains) {
+    const s = chainWorkflowSuggestion(chain, assistantBySession);
+    if (s) out.set(s.id, s);
+  }
+  for (const s of suggestions) {
+    const rule = nudgeRuleSuggestion(s);
+    if (rule) out.set(rule.id, rule);
+  }
+  return [...out.values()];
 }
 
 // src/commands/scan.ts
@@ -15906,6 +16426,20 @@ async function scan(opts, deps = {}) {
   } catch (error) {
     log(`attention check failed: ${error.message}`);
   }
+  try {
+    if (opts.scope === "project") {
+      const projectSuggestions = mineProjectPlaybook(valid, sequence.chains, assistantBySession);
+      for (const suggestion of projectSuggestions) {
+        validateSuggestion(suggestion);
+        valid.push(suggestion);
+      }
+      if (projectSuggestions.length > 0) {
+        log(`${projectSuggestions.length} suggestion(s) for the committed gradient.md`);
+      }
+    }
+  } catch (error) {
+    log(`gradient.md suggestion mining failed: ${error.message}`);
+  }
   await saveSuggestions(projectDir, valid, opts.home);
   log(`found ${valid.length} suggestions \u2192 cached`);
   await refreshRecallIndex(projectDir, opts.home);
@@ -15913,6 +16447,16 @@ async function scan(opts, deps = {}) {
 }
 
 // src/commands/review.ts
+var review_exports = {};
+__export(review_exports, {
+  readlineClarifier: () => readlineClarifier,
+  readlinePlaybookPrompter: () => readlinePlaybookPrompter,
+  readlinePrompter: () => readlinePrompter,
+  resolveClarify: () => resolveClarify,
+  review: () => review,
+  reviewJson: () => reviewJson,
+  suggestionPreview: () => suggestionPreview
+});
 import { createInterface as createInterface2 } from "node:readline/promises";
 function resolveClarify(suggestion, label) {
   const clarify = suggestion.clarify;
@@ -15943,7 +16487,8 @@ function renderedText(suggestion, target, emitTarget, cheapModel) {
   }
   const rendered = emit(suggestion, { target: emitTarget, assistant: target, cheapModel });
   const body = rendered.kind === "command" || rendered.kind === "skill" || rendered.kind === "rule" ? `${rendered.path}
-${rendered.content}` : rendered.kind === "loop" ? rendered.command : rendered.kind === "rule-print" ? rendered.text : `.claude/settings.local.json (merged on approve)
+${rendered.content}` : rendered.kind === "loop" ? rendered.command : rendered.kind === "rule-print" ? rendered.text : rendered.kind === "playbook-line" ? `gradient.md (committed) \u2192 ## ${rendered.section === "rules" ? "Rules" : "Workflows"}
+${rendered.line}` : `.claude/settings.local.json (merged on approve)
 ${rendered.settingsPatch}`;
   return `[${target}]
 ${body}`;
@@ -15952,6 +16497,17 @@ function suggestionPreview(suggestion, emitTarget, opts = {}) {
   return (opts.targets ?? ["claude-code"]).map((target) => renderedText(suggestion, target, emitTarget, opts.cheapModel)).join("\n\n");
 }
 async function review(projectDir, prompt, opts = {}) {
+  const project2 = await loadProjectPlaybook(projectDir);
+  if (project2 && opts.playbookPrompter) {
+    const pin = await loadPlaybookPin(projectDir, opts.home);
+    const state = pinState(project2, pin);
+    if (state === "unpinned" || state === "changed") {
+      const diff = state === "unpinned" ? project2.prose.split("\n").filter((l) => l.trim() !== "").map((l) => `+ ${l}`).join("\n") : proseDiff(pin.prose, project2.prose);
+      if (await opts.playbookPrompter(stripUnsafeControls(diff), state) === "approve") {
+        await savePlaybookPin(projectDir, project2.prose, opts.home);
+      }
+    }
+  }
   const suggestions = await loadSuggestions(projectDir, opts);
   const config = await loadConfig(opts.home);
   const emitTarget = config.emitTarget ?? "skill";
@@ -16013,6 +16569,17 @@ function readlineClarifier() {
     return clarify.options[index]?.label ?? null;
   };
 }
+function readlinePlaybookPrompter() {
+  return async (diff, state) => {
+    const rl = createInterface2({ input: process.stdin, output: process.stdout });
+    process.stdout.write(state === "unpinned" ? "\nThis repo's gradient.md is not yet approved as judge context for you:\n" : "\nThis repo's gradient.md changed since you approved it:\n");
+    process.stdout.write(`${diff}
+`);
+    const answer = (await rl.question("  approve it for your autopilot judge? [a]pprove [s]kip \u203A ")).trim().toLowerCase();
+    rl.close();
+    return answer === "a" ? "approve" : "skip";
+  };
+}
 function readlinePrompter(_opts = {}) {
   return async (suggestion, index, total, preview) => {
     const rl = createInterface2({ input: process.stdin, output: process.stdout });
@@ -16036,10 +16603,15 @@ ${stripUnsafeControls(preview)}
   };
 }
 async function reviewJson(projectDir, home) {
+  let projectPlaybook = "none";
   try {
-    return JSON.stringify(await loadSuggestions(projectDir, { home }), null, 2);
+    projectPlaybook = pinState(await loadProjectPlaybook(projectDir), await loadPlaybookPin(projectDir, home));
   } catch {
-    return "[]";
+  }
+  try {
+    return JSON.stringify({ projectPlaybook, suggestions: await loadSuggestions(projectDir, { home }) }, null, 2);
+  } catch {
+    return JSON.stringify({ projectPlaybook, suggestions: [] }, null, 2);
   }
 }
 
@@ -16054,8 +16626,10 @@ import { dirname as dirname5, join as join17 } from "node:path";
 async function remove(projectDir, name, opts = {}) {
   const entries = (await loadManifest(projectDir)).filter((entry) => entry.name === name);
   if (entries.length === 0) return false;
+  const playbookEntries = entries.filter((entry) => entry.type === "playbook-entry");
+  const fileEntries = entries.filter((entry) => entry.type !== "playbook-entry");
   const existing = [];
-  for (const entry of entries) {
+  for (const entry of fileEntries) {
     if (!entry.path) continue;
     const path5 = expectedArtifactPath(projectDir, entry);
     const root = manifestTarget(entry) === "codex" ? ".agents" : ".claude";
@@ -16071,6 +16645,18 @@ async function remove(projectDir, name, opts = {}) {
       if (error.code !== "ENOENT") throw error;
     }
   }
+  for (const entry of playbookEntries) {
+    const path5 = expectedArtifactPath(projectDir, entry);
+    await assertNoSymlinkPath(projectDir, path5, { includeTarget: false });
+    try {
+      const content = await safeReadFile(projectDir, path5, { maxBytes: 256e3 });
+      if (!content.includes(entryTag(entry.suggestionId))) {
+        throw new Error(`refusing to remove playbook entry without its provenance tag: ${path5}`);
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
   for (const artifact of existing) {
     await safeUnlink(projectDir, artifact.path);
     if (artifact.skill) {
@@ -16081,7 +16667,20 @@ async function remove(projectDir, name, opts = {}) {
       }
     }
   }
-  for (const entry of entries) {
+  for (const entry of playbookEntries) {
+    const path5 = expectedArtifactPath(projectDir, entry);
+    try {
+      const content = await safeReadFile(projectDir, path5, { maxBytes: 256e3 });
+      const next = removeTaggedLine(content, entry.suggestionId);
+      if (next !== null) {
+        await safeWriteFile(projectDir, path5, next, { mode: 420 });
+        await savePlaybookPin(projectDir, parseProjectPlaybook(next).prose, opts.home);
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  for (const entry of fileEntries) {
     if (entry.type === "hook" && entry.hook) {
       await removeHook(projectDir, entry.hook.event, entry.hook.command);
     }
@@ -16361,7 +16960,7 @@ async function explain(projectDir, idOrName, opts = {}) {
 }
 
 // src/core/state.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 import { lstat as lstat7, opendir as opendir4 } from "node:fs/promises";
 import { join as join20 } from "node:path";
 import { homedir as homedir12 } from "node:os";
@@ -16377,7 +16976,7 @@ function freshState() {
 }
 function fileFor(sessionId, home) {
   const normalized = sessionId.replace(/[^A-Za-z0-9_-]/g, "_") || "unknown";
-  const safe = normalized.length <= 100 ? normalized : `${normalized.slice(0, 40)}-${createHash5("sha256").update(sessionId).digest("hex").slice(0, 24)}`;
+  const safe = normalized.length <= 100 ? normalized : `${normalized.slice(0, 40)}-${createHash7("sha256").update(sessionId).digest("hex").slice(0, 24)}`;
   return join20(stateDir(home), `${safe}.json`);
 }
 function validState(value) {
@@ -16466,11 +17065,15 @@ async function latestState(home) {
 var JUDGE_TIMEOUT_MS = 45e3;
 var MAX_RESPONSE_CHARS = 2e3;
 var MAX_WHY_CHARS = 500;
-function buildJudgePrompt(mode, playbook, _projectPlaybook, tail) {
+function buildJudgePrompt(mode, playbook, projectPlaybook, tail) {
   const system = "You are the user's auto-responder for a Claude Code session that just stopped. Decide whether the work is actually done or Claude stopped early. If work is unfinished and Claude is not waiting on the user, reply with the nudge this user would send, in their own phrasing (see YOUR PLAYBOOK). If Claude asked the user a genuine question, or the work is done, stand down." + (mode === "full" ? " You may also answer routine questions and, when a task is complete, start this user's typical next step per the playbooks. Stand down on anything irreversible or destructive (pushes, deploys, deletions, spending) unless both playbooks' Rules explicitly allow it." : "") + ' Respond ONLY with JSON: {"action":"continue"|"stand_down","response":"<what to send>","why":"<one line>"}. action "continue" requires a non-empty response; omit response when standing down.';
+  const projectBlock = projectPlaybook.trim() ? `PROJECT PLAYBOOK (this repo):
+${projectPlaybook}
+
+` : "";
   return {
     system,
-    prompt: `YOUR PLAYBOOK:
+    prompt: projectBlock + `YOUR PLAYBOOK:
 ${playbook}
 
 TRANSCRIPT TAIL:
@@ -16578,12 +17181,14 @@ async function respond(input, deps = {}) {
     if (!backend) return allow;
     const tail = redact(renderTail(lines));
     const playbook = redact(await loadPlaybook(deps.home)).slice(0, PLAYBOOK_CAP);
+    const pin = await loadPlaybookPin(input.cwd, deps.home);
+    const projectProse = redact(pinnedProse(project2, pin)).slice(0, PLAYBOOK_CAP);
     state.attempts += 1;
     state.lastFingerprint = fp;
     await saveState(input.session_id, state, deps.home);
     const decision = await judge(
       backend,
-      buildJudgePrompt(effectiveMode, playbook, "", tail),
+      buildJudgePrompt(effectiveMode, playbook, projectProse, tail),
       { timeoutMs: deps.timeoutMs }
     );
     const ts = (deps.now ?? (() => (/* @__PURE__ */ new Date()).toISOString()))();
@@ -16669,6 +17274,7 @@ async function autopilotStatus(projectDir, opts = {}) {
     playbookExists,
     projectPlaybookPath: projectPlaybookPath(projectDir),
     projectPlaybookExists: project2 !== null,
+    projectPlaybookPin: pinState(project2, await loadPlaybookPin(projectDir, opts.home)),
     projectMalformed,
     hookInstalled: await hookInstalled(projectDir, "Stop", RESPOND_HOOK_COMMAND),
     recent: latest?.state.log.slice(-STATUS_RECENT) ?? []
@@ -16832,6 +17438,8 @@ function kindLabel(type) {
       return c.blue(type);
     case "rule":
       return c.blue(type);
+    case "playbook-entry":
+      return c.blue("gradient.md");
   }
 }
 function banner(version) {
@@ -17373,6 +17981,7 @@ async function prepareArtifacts(projectDir, home) {
   }
   for (const entry of entries) {
     if (entry.type === "skill") continue;
+    if (entry.type === "playbook-entry") continue;
     if (!entry.path) {
       skipped.add(entry.name);
       continue;
@@ -17580,10 +18189,11 @@ function initTargets(flag) {
 }
 async function runReview(projectDir, home, log, confirm) {
   const config = await loadConfig(home);
+  const playbookPrompter = Object.prototype.hasOwnProperty.call(review_exports, "readlinePlaybookPrompter") ? readlinePlaybookPrompter() : void 0;
   const applied = await review(projectDir, readlinePrompter({
     targets: resolveTargets(config),
     cheapModel: resolveCheapModel(config)
-  }), { home, onSkip: log, clarifier: readlineClarifier() });
+  }), { home, onSkip: log, clarifier: readlineClarifier(), playbookPrompter });
   log(`
 ${c.ok(`applied ${applied.length} suggestion(s).`)}`);
   for (const a of applied) {
@@ -17972,6 +18582,7 @@ ${c.dim("try it:")} claude --plugin-dir ${posixShellQuote(displayDir)}`);
         log(
           `${c.muted("project gradient.md:")} ${s.projectPlaybookExists ? s.projectPlaybookPath + (s.projectMalformed ? c.coral(" (malformed \u2014 autopilot off here)") : "") : c.dim("none in this repo")}`
         );
+        log(`${c.muted("project gradient.md pin:")} ${s.projectPlaybookExists ? s.projectPlaybookPin : "none"}`);
         log(`${c.muted("stop hook here:")} ${s.hookInstalled ? c.ok("installed") : "not installed"}`);
         for (const e of s.recent) {
           log(`  ${c.dim(e.ts)} ${e.action === "continue" ? c.ok("continued") : c.muted("stood down")}  ${c.dim(e.why)}`);
