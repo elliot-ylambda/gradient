@@ -1,10 +1,14 @@
 # gradient — Claude Code Plugin Distribution — Implementation Plan
 
+**Status:** Complete (2026-07-18). The shipped bundle uses `cli/src/bin.ts`
+as its entrypoint so latency-sensitive hook commands stay on the lightweight
+dispatcher and the full CLI is loaded only when needed.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Package gradient itself as a Claude Code plugin — hook-free manifest, committed single-file CLI bundle, four skills, and a repo-as-marketplace — so `/plugin install gradient` becomes the recommended onboarding. Spec: `docs/superpowers/specs/2026-07-06-gradient-plugin-design.md`.
 
-**Architecture:** A new top-level `plugin/` directory holds the manifest, four SKILL.md files, and `bin/gradient.mjs` (an esbuild bundle of `cli/src/cli.ts`, committed because marketplace installs pull from git). A root `.claude-plugin/marketplace.json` makes the GitHub repo itself addable as a marketplace. The only CLI change is `gradient review --json` (non-interactive suggestion listing for the review skill). Tests live in `cli/` with the existing vitest setup and reach up into `plugin/` by path.
+**Architecture:** A new top-level `plugin/` directory holds the manifest, four SKILL.md files, and `bin/gradient.mjs` (an esbuild bundle of `cli/src/bin.ts`, committed because marketplace installs pull from git). A root `.claude-plugin/marketplace.json` makes the GitHub repo itself addable as a marketplace. The only CLI change is `gradient review --json` (non-interactive suggestion listing for the review skill). Tests live in `cli/` with the existing vitest setup and reach up into `plugin/` by path.
 
 **Tech Stack:** TypeScript (ESM, `.js` import suffixes), Node ≥ 20, vitest, esbuild (new **devDependency**, pinned). Zero new runtime dependencies.
 

@@ -1,6 +1,4 @@
-#!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { pathToFileURL } from "node:url";
 import { basename, relative } from "node:path";
 import { scan } from "./commands/scan.js";
 import { review, readlineClarifier, readlinePrompter, reviewJson } from "./commands/review.js";
@@ -612,9 +610,4 @@ async function readStdinJson(): Promise<Record<string, unknown>> {
   } catch {
     return {};
   }
-}
-
-// Entry point when run as a binary.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2)).then((code) => process.exit(code));
 }

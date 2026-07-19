@@ -1,5 +1,6 @@
 {
   "name": "gradient",
+  "description": "Turn repeated Claude Code workflows into reviewed, reusable automations.",
   "owner": { "name": "ylambda" },
   "plugins": [
     {
