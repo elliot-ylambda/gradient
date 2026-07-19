@@ -103,6 +103,7 @@ function validateConfig(value: unknown): Config {
   validateAutopilotProjects(config.autopilotProjects);
   validateProjectList(config.recallProjects, "recallProjects");
   validateProjectList(config.continuityProjects, "continuityProjects");
+  validateProjectList(config.boardProjects, "boardProjects");
   if (config.ignorePatterns !== undefined && (
     !Array.isArray(config.ignorePatterns) || config.ignorePatterns.length > 20 ||
     config.ignorePatterns.some(pattern => typeof pattern !== "string" || pattern.length > 200 || /[\u0000-\u001f\u007f-\u009f]/.test(pattern))

@@ -22,6 +22,7 @@ import { loadConfig, resolveCheapModel, resolveTargets } from "./config.js";
 import { VERSION } from "./version.js";
 import { insights, writeInsightsHtml } from "./commands/insights.js";
 import { continuityStatus, setContinuity } from "./commands/continuity.js";
+import { boardDigest, boardRefresh, boardShow, setBoard } from "./commands/board.js";
 import { recap } from "./commands/recap.js";
 import { bundleCommand } from "./commands/bundle.js";
 import { notify } from "./commands/notify.js";
@@ -59,6 +60,7 @@ Usage:
                                 behavior report + what to automate next
   gradient continuity <on|off|status>
                                 checkpoint before compaction, recap on resume
+  gradient board [on|off]       what other sessions are doing in this repo
   gradient bundle <name>
                                 package approved artifacts as a plugin
   gradient autopilot <off|nudge>
@@ -89,6 +91,7 @@ export function parseCliArgs(argv: string[]): {
       json: { type: "boolean" },
       "dry-run": { type: "boolean" },
       html: { type: "boolean" },
+      verbose: { type: "boolean" },
       "with-hooks": { type: "boolean" },
       target: { type: "string" },
     },
@@ -527,6 +530,46 @@ export async function main(
           `${c.muted("checkpoint (PreCompact):")} ${status.checkpoint ? c.ok("on") : "off"}   ` +
           `${c.muted("recap (SessionStart):")} ${status.recap ? c.ok("on") : "off"}`,
         );
+        return 0;
+      }
+      case "board": {
+        const action = positionals[0] ?? "show";
+        if (action === "on" || action === "off") {
+          const result = await setBoard(action === "on", projectDir);
+          log(
+            result.on
+              ? `${c.ok("board hooks installed")} ${c.muted(result.settingsPath)}`
+              : `${c.muted("board hooks removed:")} ${result.settingsPath}`,
+          );
+          return 0;
+        }
+        if (action === "digest" || action === "refresh") {
+          // Hook targets: fail open, and keep stdout empty unless there is a digest/delta.
+          try {
+            const input = await readStdin();
+            const text = action === "digest"
+              ? await boardDigest(input as { session_id?: unknown }, projectDir)
+              : await boardRefresh(input as { session_id?: unknown }, projectDir);
+            if (text) log(text);
+          } catch {
+            // A board failure must never block a session.
+          }
+          return 0;
+        }
+        if (action !== "show") {
+          log(c.coral(`unknown board action: ${action} (use on|off)`));
+          return 2;
+        }
+        // Manual command: loud errors, and --verbose surfaces skipped-transcript warnings (spec §7).
+        // CLAUDE_SESSION_ID is set for Bash commands run inside a Claude Code session, so
+        // `gradient board` typed via `!` still marks the caller's own session as (you).
+        const warnings: string[] = [];
+        const selfId = process.env.CLAUDE_SESSION_ID;
+        log(await boardShow(projectDir, {
+          ...(selfId ? { selfSessionId: selfId } : {}),
+          ...(flags.verbose ? { onWarn: (m: string) => warnings.push(m) } : {}),
+        }));
+        for (const warning of warnings) log(c.dim(warning));
         return 0;
       }
       case "bundle": {

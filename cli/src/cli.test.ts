@@ -608,3 +608,22 @@ describe("bundle dispatch", () => {
     expect(lines.join("\n")).not.toContain("claude --plugin-dir");
   });
 });
+
+it("board: help lists it, unknown action exits 2, hook targets stay silent without consent", async () => {
+  const lines: string[] = [];
+  const log = (s: string) => { lines.push(s); };
+  const home = await mkdtemp(join(tmpdir(), "gradient-cli-home-"));
+
+  expect(await main(["--help"], { log, home })).toBe(0);
+  expect(lines.join("\n")).toContain("gradient board");
+
+  expect(await main(["board", "bogus"], { log, home })).toBe(2);
+
+  // Hook target without consent: exit 0, no output — never breaks a session.
+  lines.length = 0;
+  const code = await main(["board", "digest"], {
+    log, home, readStdin: async () => ({ session_id: "s1" }),
+  });
+  expect(code).toBe(0);
+  expect(lines).toEqual([]);
+});
