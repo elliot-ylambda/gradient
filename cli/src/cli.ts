@@ -431,6 +431,10 @@ export async function main(
         log(`  ${c.bold("prompts")} ${metrics.prompts}   ${c.bold("nudges")} ${metrics.nudges}   ${c.bold("interrupts")} ${metrics.interrupts}`);
         log(`  ${c.bold("context deaths")} ${metrics.continuations}   ${c.bold("compacts")} ${metrics.compacts}   ${c.bold("error pastes")} ${metrics.errorPastes}`);
         log(`  ${c.bold("model switches")} ${metrics.modelSwitches}   ${c.bold("effort switches")} ${metrics.effortSwitches}`);
+        log(
+          `  ${c.bold("in-session failure loops")} ${report.toolActivity.failureLoops}   ` +
+          `${c.bold("post-edit rituals")} ${report.toolActivity.postEditRituals}`,
+        );
         if ((report.costs ?? []).length > 0) {
           log(`\n${c.bold("cost of unautomated habits")}`);
           for (const cost of report.costs ?? []) log(`  ${c.violet("→")} ${cost.line}`);

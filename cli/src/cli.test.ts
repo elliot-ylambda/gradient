@@ -57,6 +57,7 @@ vi.mock("./commands/insights.js", () => ({
       effortSwitches: 2,
       errorPastes: 5,
     },
+    toolActivity: { failureLoops: 2, postEditRituals: 1 },
     recommendations: [{ metric: "nudges", line: "try: gradient autopilot nudge" }],
     costs: [{ metric: "nudges", tokens: 120, prompts: 11, line: "≈120 tokens · 11 nudge prompts" }],
     instructionEffectiveness: [{
@@ -386,6 +387,8 @@ describe("insights dispatch", () => {
     expect(lines.join("\n")).toContain("gradient autopilot nudge");
     expect(lines.join("\n")).toContain("Instruction effectiveness");
     expect(lines.join("\n")).toContain("Always use pnpm");
+    expect(lines.join("\n")).toContain("in-session failure loops");
+    expect(lines.join("\n")).toContain("post-edit rituals");
   });
 
   it("writes and reports the self-contained HTML view when requested", async () => {

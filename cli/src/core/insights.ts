@@ -23,6 +23,11 @@ export interface InsightsMetrics {
   errorPastes: number;
 }
 
+export interface ToolActivityMetrics {
+  failureLoops: number;
+  postEditRituals: number;
+}
+
 export function computeMetrics(turns: Turn[], ignore: RegExp[] = []): InsightsMetrics {
   const metrics: InsightsMetrics = {
     prompts: 0,
@@ -246,6 +251,7 @@ export function renderInsightsHtml(report: {
   recommendations: Recommendation[];
   costs?: CostRow[];
   instructionEffectiveness?: InstructionTally[];
+  toolActivity?: ToolActivityMetrics;
 }): string {
   const metrics = report.metrics;
   const rows: Array<[string, number]> = [
@@ -257,6 +263,10 @@ export function renderInsightsHtml(report: {
     ["error pastes", metrics.errorPastes],
     ["model switches", metrics.modelSwitches],
     ["effort switches", metrics.effortSwitches],
+    ...(report.toolActivity ? [
+      ["in-session failure loops", report.toolActivity.failureLoops] as [string, number],
+      ["post-edit rituals", report.toolActivity.postEditRituals] as [string, number],
+    ] : []),
   ];
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>gradient insights</title>
 <style>

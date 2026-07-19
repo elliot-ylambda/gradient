@@ -3,7 +3,7 @@ import { access, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { insights, writeInsightsHtml } from "./insights.js";
-import type { Turn } from "../core/types.js";
+import type { ToolEvent, Turn } from "../core/types.js";
 import { saveInstructionAudit } from "../core/audit.js";
 
 let dir: string;
@@ -23,6 +23,32 @@ const nudgeTurns: Turn[] = Array.from({ length: 12 }, (_, index) => ({
 }));
 
 describe("insights", () => {
+  it("reports detector-backed failure loops and post-edit rituals", async () => {
+    const failures: ToolEvent[] = [
+      { ts: "2026-07-01T00:00:00Z", sessionId: "f1", kind: "bash", command: "npm test", isError: true },
+      { ts: "2026-07-01T00:01:00Z", sessionId: "f1", kind: "bash", command: "npm test", isError: true },
+      { ts: "2026-07-02T00:00:00Z", sessionId: "f2", kind: "bash", command: "npm test", isError: true },
+    ];
+    const rituals: ToolEvent[] = [];
+    for (let index = 0; index < 15; index++) {
+      const sessionId = `r${index % 3}`;
+      rituals.push(
+        { ts: `2026-07-03T00:${String(index).padStart(2, "0")}:00Z`, sessionId, kind: "edit", file: "src/a.ts" },
+        { ts: `2026-07-03T00:${String(index).padStart(2, "0")}:30Z`, sessionId, kind: "bash", command: "npm run lint", isError: false },
+      );
+    }
+    const report = await insights(
+      { projectDir: dir, home },
+      {
+        collectFn: async () => ["f"],
+        parseFn: async () => [],
+        parseToolEventsFn: async () => ({ events: [...failures, ...rituals], dropped: 0 }),
+      },
+    );
+    expect(report.toolActivity).toEqual({ failureLoops: 1, postEditRituals: 1 });
+    expect(report.recommendations.map(item => item.line).join("\n")).toContain("gradient scan, then gradient review");
+  });
+
   it("loads at most 15 instruction-effectiveness rows from the private audit cache", async () => {
     const tallies = Array.from({ length: 20 }, (_, index) => ({
       file: "CLAUDE.md",

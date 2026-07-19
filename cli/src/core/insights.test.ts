@@ -170,6 +170,7 @@ describe("renderInsightsHtml", () => {
     },
     recommendations: [{ metric: "nudges", line: "try <gradient autopilot nudge> & friends" }],
     costs: [{ metric: "nudges" as const, tokens: 123, prompts: 3, line: "≈123 tokens · 3 nudges" }],
+    toolActivity: { failureLoops: 2, postEditRituals: 1 },
   };
 
   it("is self-contained and escapes dynamic content", () => {
@@ -181,5 +182,7 @@ describe("renderInsightsHtml", () => {
     expect(html).toContain("project scope");
     expect(html).toContain("cost of unautomated habits");
     expect(html).toContain("≈123 tokens");
+    expect(html).toContain("in-session failure loops");
+    expect(html).toContain("post-edit rituals");
   });
 });
