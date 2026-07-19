@@ -42,11 +42,13 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/bin.js',0o755)\"",
     "build:plugin": "node scripts/build-plugin.mjs",
+    "dogfood:run": "node scripts/dogfood.mjs",
+    "dogfood": "npm run build && npm run build:plugin && node scripts/dogfood.mjs",
     "smoke:bin": "node scripts/smoke-bin.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "prepublishOnly": "npm test && npm run build && npm run smoke:bin"
+    "prepublishOnly": "npm test && npm run build && npm run build:plugin && npm run smoke:bin && npm run dogfood:run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3"

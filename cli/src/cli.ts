@@ -283,6 +283,7 @@ export async function main(
         const r = await init({
           installSkill: !flags["no-skill"],
           sessionScan: !!flags["session-scan"],
+          home: io.home,
           projectDir,
           targets: initTargets(flags.target),
         });
@@ -392,13 +393,13 @@ export async function main(
         return 0;
       }
       case "remove": {
-        const ok = await remove(projectDir, positionals[0]);
+        const ok = await remove(projectDir, positionals[0], { home: io.home });
         log(ok ? `${c.ok("removed")} ${terminalSafeLine(positionals[0])}` : c.coral(`no such artifact: ${terminalSafeLine(positionals[0])}`));
         return ok ? 0 : 1;
       }
       case "migrate": {
         const dryRun = !!flags["dry-run"];
-        const result = await migrate(projectDir, { dryRun });
+        const result = await migrate(projectDir, { dryRun, home: io.home });
         for (const name of result.migrated) {
           log(`${c.ok(dryRun ? "would migrate" : "migrated")} ${name}`);
         }
@@ -409,7 +410,7 @@ export async function main(
       case "recall": {
         const action = positionals[0];
         if (action === "on" || action === "off") {
-          const result = await setRecall(action === "on", projectDir);
+          const result = await setRecall(action === "on", projectDir, io.home);
           log(
             result.installed
               ? `${c.ok("recall hook installed")} ${c.muted(result.settingsPath)}`
@@ -418,7 +419,7 @@ export async function main(
           return 0;
         }
         if (action === "status") {
-          const status = await recallStatus(projectDir);
+          const status = await recallStatus(projectDir, io.home);
           const built = status.builtAt ? ` (built ${status.builtAt})` : "";
           log(
             `${c.muted("recall:")} ${status.installed ? c.ok("on") : "off"}  ` +
@@ -435,7 +436,7 @@ export async function main(
         // unless returning the structured additionalContext payload.
         try {
           const input = await readStdin();
-          const result = await recallHook(input as RecallHookInput);
+          const result = await recallHook(input as RecallHookInput, { home: io.home });
           if (result.context) {
             log(JSON.stringify({
               hookSpecificOutput: {
@@ -451,7 +452,7 @@ export async function main(
       }
       case "stats": {
         log(banner(VERSION));
-        const r = await stats(projectDir, { onSkip: log });
+        const r = await stats(projectDir, { home: io.home, onSkip: log });
         log(c.dim(`coverage: ${r.covered}/${r.total} patterns automated (${r.coveragePct}%)`));
         if (r.capped) log(c.dim("stats input cap reached; adoption covers the bounded recent corpus"));
         log(c.dim(`session-start scan: ${r.sessionScanEnabled ? "on" : "off"}`));
@@ -478,7 +479,7 @@ export async function main(
       }
       case "insights": {
         log(banner(VERSION));
-        const report = await insights({ projectDir, user: !!flags.user });
+        const report = await insights({ projectDir, user: !!flags.user, home: io.home });
         const metrics = report.metrics;
         log(c.dim(report.label));
         if (report.capped) log(c.dim("insights input cap reached; metrics cover the bounded recent corpus"));
@@ -506,14 +507,14 @@ export async function main(
         return 0;
       }
       case "recap": {
-        const text = await recap(projectDir);
+        const text = await recap(projectDir, { home: io.home });
         if (text) log(text);
         return 0;
       }
       case "continuity": {
         const action = positionals[0] ?? "status";
         if (action === "on" || action === "off") {
-          const result = await setContinuity(action === "on", projectDir);
+          const result = await setContinuity(action === "on", projectDir, { home: io.home });
           log(
             result.on
               ? `${c.ok("continuity hooks installed")} ${c.muted(result.settingsPath)}`
@@ -525,7 +526,7 @@ export async function main(
           log(c.coral(`unknown continuity action: ${action} (use on|off|status)`));
           return 2;
         }
-        const status = await continuityStatus(projectDir);
+        const status = await continuityStatus(projectDir, { home: io.home });
         log(
           `${c.muted("checkpoint (PreCompact):")} ${status.checkpoint ? c.ok("on") : "off"}   ` +
           `${c.muted("recap (SessionStart):")} ${status.recap ? c.ok("on") : "off"}`,
@@ -535,7 +536,7 @@ export async function main(
       case "board": {
         const action = positionals[0] ?? "show";
         if (action === "on" || action === "off") {
-          const result = await setBoard(action === "on", projectDir);
+          const result = await setBoard(action === "on", projectDir, { home: io.home });
           log(
             result.on
               ? `${c.ok("board hooks installed")} ${c.muted(result.settingsPath)}`
@@ -548,8 +549,8 @@ export async function main(
           try {
             const input = await readStdin();
             const text = action === "digest"
-              ? await boardDigest(input as { session_id?: unknown }, projectDir)
-              : await boardRefresh(input as { session_id?: unknown }, projectDir);
+              ? await boardDigest(input as { session_id?: unknown }, projectDir, { home: io.home })
+              : await boardRefresh(input as { session_id?: unknown }, projectDir, { home: io.home });
             if (text) log(text);
           } catch {
             // A board failure must never block a session.
@@ -566,6 +567,7 @@ export async function main(
         const warnings: string[] = [];
         const selfId = process.env.CLAUDE_SESSION_ID;
         log(await boardShow(projectDir, {
+          home: io.home,
           ...(selfId ? { selfSessionId: selfId } : {}),
           ...(flags.verbose ? { onWarn: (m: string) => warnings.push(m) } : {}),
         }));
@@ -582,7 +584,7 @@ export async function main(
           log(c.coral("bundle hooks are disabled pending recipient-side consent; omit --with-hooks"));
           return 2;
         }
-        const result = await bundleCommand(projectDir, name, { withHooks: !!flags["with-hooks"] });
+        const result = await bundleCommand(projectDir, name, { withHooks: !!flags["with-hooks"], home: io.home });
         const displayDir = terminalSafePath(result.dir);
         log(
           displayDir
@@ -625,7 +627,7 @@ export async function main(
         // should receive recap context only from the explicit recap hook.
         try {
           const input = await readStdin();
-          await checkpoint(input as { transcript_path?: string }, projectDir);
+          await checkpoint(input as { transcript_path?: string }, projectDir, undefined, { home: io.home });
         } catch {
           // Fail open: compaction proceeds without a checkpoint.
         }
@@ -644,7 +646,7 @@ export async function main(
       case "autopilot": {
         const arg = positionals[0] ?? "status";
         if (arg === "off" || arg === "nudge") {
-          const r = await setAutopilotMode(arg, projectDir); // narrowed to AutopilotMode by the condition
+          const r = await setAutopilotMode(arg, projectDir, { home: io.home }); // narrowed to AutopilotMode by the condition
           log(banner(VERSION));
           log(`${c.muted("autopilot:")} ${c.bold(r.mode)}`);
           log(
@@ -658,7 +660,7 @@ export async function main(
           log(c.coral(`unknown autopilot mode: ${arg} (use off|nudge|status)`));
           return 2;
         }
-        const s = await autopilotStatus(projectDir);
+        const s = await autopilotStatus(projectDir, { home: io.home });
         log(banner(VERSION));
         log(`${c.muted("mode:")} ${c.bold(s.mode)}${s.effectiveMode !== s.mode ? c.dim(` → ${s.effectiveMode} here (clamped by project gradient.md)`) : ""}`);
         log(`${c.muted("budget:")} ${s.budget} judge attempts/session${s.effectiveBudget !== s.budget ? c.dim(` → ${s.effectiveBudget} here (clamped by project gradient.md)`) : ""}`);
@@ -680,7 +682,7 @@ export async function main(
         // block JSON (exit code 2 / stderr would be injected into Claude).
         try {
           const input = await readStdin();
-          const r = await respond(input as StopHookInput);
+          const r = await respond(input as StopHookInput, { home: io.home });
           if (r.decision === "block") log(JSON.stringify({ decision: "block", reason: r.reason }));
         } catch {
           // fail-open: the stop stands

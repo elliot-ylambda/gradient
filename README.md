@@ -369,10 +369,26 @@ add to a repository alongside the generated plugin directory.
 cd cli && npm install && npm test && npm run build
 ```
 
+Run the packaged synthetic dogfood release gate and open its inspectable HTML
+evidence:
+
+```bash
+cd cli
+npm run dogfood -- --output ../artifacts/dogfood
+open ../artifacts/dogfood/report.html # macOS; use your browser elsewhere
+```
+
+The gate installs the npm tarball into a disposable consumer and exercises all
+advertised commands plus the internal hook targets without reading real history
+or calling a real model. See [Dogfooding and release evidence](docs/dogfood.md)
+for the 19-scenario matrix and the separate opt-in live checklist.
+
 ## Status
 
-The current public npm release is `gradient.md@0.4.0`. The product is published
-on npm's `latest` channel; it is a pre-1.0 release, not a beta-tagged build.
+The checked-in version in [`cli/package.json`](cli/package.json) is the release
+candidate. Published builds use npm's `latest` channel; Gradient is pre-1.0,
+not a beta-tagged build. Maintainers can run `make release-check` to verify that
+npm, the GitHub release, and the deployed site all agree after publishing.
 
 Phase A of the v2 funnel makes both ends of mining more honest: continuation
 summaries, task notifications, configured injectors, and template floods are
@@ -437,6 +453,8 @@ v2 phases are implemented.
 - Codex Stage 2 and cost plan: [`docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md`](docs/superpowers/plans/2026-07-09-gradient-codex-stage2-cost.md)
 - Review clarification and attention design: [`docs/superpowers/specs/2026-07-09-gradient-review-clarify-design.md`](docs/superpowers/specs/2026-07-09-gradient-review-clarify-design.md)
 - Review clarification and attention plan: [`docs/superpowers/plans/2026-07-09-gradient-review-clarify.md`](docs/superpowers/plans/2026-07-09-gradient-review-clarify.md)
+- Dogfood evidence product spec: [`docs/superpowers/specs/dogfood-evidence/PRODUCT.md`](docs/superpowers/specs/dogfood-evidence/PRODUCT.md)
+- Dogfood evidence technical design: [`docs/superpowers/specs/dogfood-evidence/TECH.md`](docs/superpowers/specs/dogfood-evidence/TECH.md)
 
 ## License
 

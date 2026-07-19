@@ -17,6 +17,7 @@ import { clarifiedWorkflowBody } from "./core/detect.js";
 import { scan } from "./commands/scan.js";
 import { sessionStart } from "./commands/sessionStart.js";
 import { mirror } from "./commands/mirror.js";
+import { boardDigest, boardRefresh, boardShow, setBoard } from "./commands/board.js";
 
 vi.mock("./commands/scan.js", () => ({ scan: vi.fn(async () => []) }));
 vi.mock("./core/spawn.js", () => ({ spawnDetached: vi.fn() }));
@@ -97,6 +98,15 @@ vi.mock("./commands/bundle.js", () => ({
 }));
 vi.mock("./commands/notify.js", () => ({
   notify: vi.fn(async () => {}),
+}));
+vi.mock("./commands/board.js", () => ({
+  boardDigest: vi.fn(async () => null),
+  boardRefresh: vi.fn(async () => null),
+  boardShow: vi.fn(async () => "gradient board — 0 other sessions in this repo"),
+  setBoard: vi.fn(async (on: boolean) => ({
+    on,
+    settingsPath: "/repo/.claude/settings.local.json",
+  })),
 }));
 
 describe("parseCliArgs", () => {
@@ -404,9 +414,9 @@ describe("recall dispatch", () => {
     vi.mocked(recallHook).mockResolvedValueOnce({ context: "use the installed skill" });
     const lines: string[] = [];
     const input = { prompt: "prepare this pull request for shipping", cwd: "/repo" };
-    const code = await main(["recall"], { log: line => lines.push(line), readStdin: async () => input });
+    const code = await main(["recall"], { home: "/home", log: line => lines.push(line), readStdin: async () => input });
     expect(code).toBe(0);
-    expect(vi.mocked(recallHook)).toHaveBeenCalledWith(input);
+    expect(vi.mocked(recallHook)).toHaveBeenCalledWith(input, { home: "/home" });
     expect(lines).toEqual([
       JSON.stringify({
         hookSpecificOutput: {
@@ -426,14 +436,14 @@ describe("recall dispatch", () => {
 
   it("manages on, off, and status explicitly", async () => {
     vi.mocked(setRecall).mockClear();
-    expect(await main(["recall", "on"], { log: () => {} })).toBe(0);
-    expect(await main(["recall", "off"], { log: () => {} })).toBe(0);
-    expect(vi.mocked(setRecall)).toHaveBeenNthCalledWith(1, true, expect.any(String));
-    expect(vi.mocked(setRecall)).toHaveBeenNthCalledWith(2, false, expect.any(String));
+    expect(await main(["recall", "on"], { home: "/home", log: () => {} })).toBe(0);
+    expect(await main(["recall", "off"], { home: "/home", log: () => {} })).toBe(0);
+    expect(vi.mocked(setRecall)).toHaveBeenNthCalledWith(1, true, expect.any(String), "/home");
+    expect(vi.mocked(setRecall)).toHaveBeenNthCalledWith(2, false, expect.any(String), "/home");
 
     const lines: string[] = [];
-    expect(await main(["recall", "status"], { log: line => lines.push(line) })).toBe(0);
-    expect(vi.mocked(recallStatus)).toHaveBeenCalled();
+    expect(await main(["recall", "status"], { home: "/home", log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(recallStatus)).toHaveBeenCalledWith(expect.any(String), "/home");
     expect(lines.join("\n")).toContain("2 artifacts");
   });
 
@@ -448,7 +458,8 @@ describe("stats adoption rendering", () => {
   it("shows uses, last use, retypes caught, and the removal nudge", async () => {
     vi.mocked(stats).mockClear();
     const lines: string[] = [];
-    expect(await main(["stats"], { log: line => lines.push(line) })).toBe(0);
+    expect(await main(["stats"], { home: "/home", log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(stats)).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ home: "/home" }));
     const output = lines.join("\n");
     expect(output).toContain("adoption:");
     expect(output).toContain("0 use(s) · last never · 0 retype(s) caught");
@@ -504,8 +515,8 @@ describe("insights dispatch", () => {
 
     vi.mocked(insights).mockClear();
     const lines: string[] = [];
-    expect(await main(["insights", "--user"], { log: line => lines.push(line) })).toBe(0);
-    expect(vi.mocked(insights)).toHaveBeenCalledWith({ projectDir: expect.any(String), user: true });
+    expect(await main(["insights", "--user"], { home: "/home", log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(insights)).toHaveBeenCalledWith({ projectDir: expect.any(String), user: true, home: "/home" });
     expect(lines.join("\n")).toContain("prompts");
     expect(lines.join("\n")).toContain("gradient autopilot nudge");
     expect(lines.join("\n")).toContain("Instruction effectiveness");
@@ -530,14 +541,14 @@ describe("continuity dispatch", () => {
     expect(help.join("\n")).toContain("gradient continuity <on|off|status>");
 
     vi.mocked(setContinuity).mockClear();
-    expect(await main(["continuity", "on"], { log: () => {} })).toBe(0);
-    expect(await main(["continuity", "off"], { log: () => {} })).toBe(0);
-    expect(vi.mocked(setContinuity)).toHaveBeenNthCalledWith(1, true, expect.any(String));
-    expect(vi.mocked(setContinuity)).toHaveBeenNthCalledWith(2, false, expect.any(String));
+    expect(await main(["continuity", "on"], { home: "/home", log: () => {} })).toBe(0);
+    expect(await main(["continuity", "off"], { home: "/home", log: () => {} })).toBe(0);
+    expect(vi.mocked(setContinuity)).toHaveBeenNthCalledWith(1, true, expect.any(String), { home: "/home" });
+    expect(vi.mocked(setContinuity)).toHaveBeenNthCalledWith(2, false, expect.any(String), { home: "/home" });
 
     const lines: string[] = [];
-    expect(await main(["continuity", "status"], { log: line => lines.push(line) })).toBe(0);
-    expect(vi.mocked(continuityStatus)).toHaveBeenCalled();
+    expect(await main(["continuity", "status"], { home: "/home", log: line => lines.push(line) })).toBe(0);
+    expect(vi.mocked(continuityStatus)).toHaveBeenCalledWith(expect.any(String), { home: "/home" });
     expect(lines.join("\n")).toContain("checkpoint (PreCompact):");
   });
 
@@ -609,7 +620,7 @@ describe("bundle dispatch", () => {
   });
 });
 
-it("board: help lists it, unknown action exits 2, hook targets stay silent without consent", async () => {
+it("board: lists the surface, isolates state, and keeps empty hook output silent", async () => {
   const lines: string[] = [];
   const log = (s: string) => { lines.push(s); };
   const home = await mkdtemp(join(tmpdir(), "gradient-cli-home-"));
@@ -619,11 +630,33 @@ it("board: help lists it, unknown action exits 2, hook targets stay silent witho
 
   expect(await main(["board", "bogus"], { log, home })).toBe(2);
 
+  vi.mocked(setBoard).mockClear();
+  expect(await main(["board", "on"], { log, home })).toBe(0);
+  expect(vi.mocked(setBoard)).toHaveBeenCalledWith(true, expect.any(String), { home });
+
   // Hook target without consent: exit 0, no output — never breaks a session.
   lines.length = 0;
+  vi.mocked(boardDigest).mockClear();
   const code = await main(["board", "digest"], {
     log, home, readStdin: async () => ({ session_id: "s1" }),
   });
   expect(code).toBe(0);
   expect(lines).toEqual([]);
+  expect(vi.mocked(boardDigest)).toHaveBeenCalledWith(
+    { session_id: "s1" }, expect.any(String), { home },
+  );
+
+  vi.mocked(boardRefresh).mockClear();
+  expect(await main(["board", "refresh"], {
+    log, home, readStdin: async () => ({ session_id: "s1" }),
+  })).toBe(0);
+  expect(vi.mocked(boardRefresh)).toHaveBeenCalledWith(
+    { session_id: "s1" }, expect.any(String), { home },
+  );
+
+  vi.mocked(boardShow).mockClear();
+  expect(await main(["board"], { log, home })).toBe(0);
+  expect(vi.mocked(boardShow)).toHaveBeenCalledWith(
+    expect.any(String), expect.objectContaining({ home }),
+  );
 });

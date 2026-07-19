@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface BinaryIo {
@@ -10,6 +11,14 @@ export interface BinaryIo {
 }
 
 const STDIN_MAX_CHARS = 1_000_000;
+
+/** Optional state-root override for isolated installs, CI, and dogfooding.
+ * A relative value is resolved from the invoking process's cwd so every
+ * downstream safe-fs boundary still receives an absolute root. */
+export function gradientHomeFromEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const configured = env.GRADIENT_HOME?.trim();
+  return configured ? resolve(configured) : undefined;
+}
 
 async function readStdinJson(): Promise<Record<string, unknown>> {
   if (process.stdin.isTTY) return {};
@@ -97,7 +106,7 @@ export function isEntrypoint(moduleUrl: string, argv1: string | undefined): bool
 }
 
 if (isEntrypoint(import.meta.url, process.argv[1])) {
-  runBinary(process.argv.slice(2)).then(code => {
+  runBinary(process.argv.slice(2), { home: gradientHomeFromEnv() }).then(code => {
     process.exitCode = code;
   });
 }
