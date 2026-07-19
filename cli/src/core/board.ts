@@ -345,3 +345,88 @@ export async function openPrs(
     return "unavailable";
   }
 }
+
+export interface BoardState {
+  root: string;
+  defaultBranch: string;
+  mainTip: string;
+  self?: BoardSession;
+  sessions: BoardSession[];
+  landed: string[];
+  ahead: number;
+  behind: number;
+  prs: PrResult;
+}
+
+export interface AssembleOptions extends DiscoverOptions {
+  selfSessionId?: string;
+  gh?: GhRunner;
+}
+
+export async function assembleBoard(
+  projectDir: string,
+  opts: AssembleOptions = {},
+): Promise<BoardState | null> {
+  const root = await resolveBoardRoot(projectDir);
+  if (!root) return null;
+  const repo = await collectRepoState(root, projectDir);
+  if (!repo) return null;
+  const discovered = [
+    ...(await discoverClaudeSessions(root, opts)),
+    ...(await discoverCodexSessions(root, opts)),
+  ].sort((a, b) => a.ageMs - b.ageMs);
+  const self = discovered.find(session => session.sessionId === opts.selfSessionId);
+  const sessions = discovered.filter(session => session.sessionId !== opts.selfSessionId);
+  const prs = await openPrs(root, opts);
+  return {
+    root,
+    defaultBranch: repo.defaultBranch,
+    mainTip: repo.mainTip,
+    ...(self ? { self } : {}),
+    sessions,
+    landed: repo.landed,
+    ahead: repo.ahead,
+    behind: repo.behind,
+    prs,
+  };
+}
+
+export function formatAge(ms: number): string {
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.round(minutes / 60)}h`;
+}
+
+export function renderDigest(state: BoardState): string {
+  const lines: string[] = [];
+  const count = state.sessions.length;
+  lines.push(`gradient board — ${count} other session${count === 1 ? "" : "s"} in this repo`);
+  for (const session of state.sessions) {
+    const checkout = session.worktree === "" ? "main checkout" : session.worktree;
+    const status = `${session.liveness} (${formatAge(session.ageMs)})`;
+    lines.push(`• ${session.agent} · ${session.branch ?? "?"} · ${checkout} · ${status}`);
+    if (session.editing.length > 0) lines.push(`  editing: ${session.editing.join(", ")}`);
+  }
+  if (state.self) {
+    const checkout = state.self.worktree === "" ? "main checkout" : state.self.worktree;
+    lines.push(`(you) ${state.self.agent} · ${state.self.branch ?? "?"} · ${checkout}`);
+  }
+  if (state.landed.length > 0) {
+    lines.push(`landed on ${state.defaultBranch} (24h): ${state.landed.join(", ")}`);
+  }
+  if (state.prs === "unavailable") {
+    lines.push("open PRs: (PR info unavailable)");
+  } else if (state.prs.lines.length > 0) {
+    const label = state.prs.staleMs === undefined
+      ? "open PRs"
+      : `open PRs (${formatAge(state.prs.staleMs)} ago)`;
+    lines.push(`${label}: ${state.prs.lines.join(", ")}`);
+  }
+  if (state.behind > 0) {
+    lines.push(
+      `heads-up: your branch is ${state.behind} commit${state.behind === 1 ? "" : "s"} ` +
+      `behind ${state.defaultBranch}`,
+    );
+  }
+  return lines.slice(0, DIGEST_LINE_CAP).join("\n");
+}

@@ -13,7 +13,9 @@ import {
   landedLine,
   locateRepo,
   openPrs,
+  renderDigest,
   resolveBoardRoot,
+  type BoardState,
 } from "./board.js";
 import { projectCacheDir } from "../config.js";
 import { encodeProjectDir } from "./collect.js";
@@ -253,5 +255,65 @@ describe("openPrs", () => {
     await openPrs("/repo/a", { home, now, gh: async () => payload });
     const later = await openPrs("/repo/a", { home, now: now + 12 * 60_000, gh: failing });
     expect(later).toEqual({ lines: ["#18 codex/release-cleanup → main"], staleMs: 12 * 60_000 });
+  });
+});
+
+function stateFixture(overrides: Partial<BoardState> = {}): BoardState {
+  return {
+    root: "/repo",
+    defaultBranch: "main",
+    mainTip: "a".repeat(40),
+    sessions: [{
+      agent: "codex", sessionId: "cx", branch: "codex/release-cleanup",
+      worktree: ".worktrees/release-cleanup", liveness: "live", ageMs: 3 * 60_000,
+      editing: ["cli/package.json", "Makefile"],
+    }, {
+      agent: "claude", sessionId: "cl", branch: "spec/plugin",
+      worktree: "", liveness: "idle", ageMs: 41 * 60_000, editing: [],
+    }],
+    landed: ["PR #16 spec/plugin"],
+    ahead: 0,
+    behind: 2,
+    prs: { lines: ["#18 codex/release-cleanup → main"] },
+    ...overrides,
+  };
+}
+
+describe("renderDigest", () => {
+  it("renders the spec's digest shape", () => {
+    expect(renderDigest(stateFixture())).toBe([
+      "gradient board — 2 other sessions in this repo",
+      "• codex · codex/release-cleanup · .worktrees/release-cleanup · live (3m)",
+      "  editing: cli/package.json, Makefile",
+      "• claude · spec/plugin · main checkout · idle (41m)",
+      "landed on main (24h): PR #16 spec/plugin",
+      "open PRs: #18 codex/release-cleanup → main",
+      "heads-up: your branch is 2 commits behind main",
+    ].join("\n"));
+  });
+
+  it("marks the caller's own session with (you)", () => {
+    const withSelf = stateFixture({
+      self: {
+        agent: "claude", sessionId: "me", branch: "spec/gradient-board",
+        worktree: "", liveness: "live", ageMs: 0, editing: [],
+      },
+    });
+    expect(renderDigest(withSelf)).toContain("(you) claude · spec/gradient-board · main checkout");
+  });
+
+  it("states PR unavailability and stale-cache age instead of omitting", () => {
+    expect(renderDigest(stateFixture({ prs: "unavailable", behind: 0 })))
+      .toContain("open PRs: (PR info unavailable)");
+    expect(renderDigest(stateFixture({ prs: { lines: ["#18 x → main"], staleMs: 12 * 60_000 } })))
+      .toContain("open PRs (12m ago): #18 x → main");
+  });
+
+  it("caps output at 25 lines", () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({
+      agent: "claude" as const, sessionId: `s${i}`, branch: `b${i}`,
+      worktree: "", liveness: "live" as const, ageMs: 60_000, editing: [],
+    }));
+    expect(renderDigest(stateFixture({ sessions: many })).split("\n").length).toBe(25);
   });
 });
