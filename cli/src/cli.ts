@@ -460,12 +460,13 @@ export async function main(
           log(c.dim("\nadoption:"));
           for (const artifact of r.adoption) {
             const lastUsed = artifact.lastUsed ? artifact.lastUsed.slice(0, 10) : "never";
+            const realized = artifact.realizedMinutesSaved > 0 ? ` · ≈${artifact.realizedMinutesSaved}m saved` : "";
             const removal = artifact.suggestRemoval
               ? c.coral(`  → unused 30d+, consider: gradient remove ${artifact.name}`)
               : "";
             log(
               `  ${c.bold(artifact.name)}  ` +
-              c.dim(`${artifact.uses} use(s) · ≈${artifact.realizedMinutesSaved}m saved · last ${lastUsed} · ${artifact.retypesCaught} retype(s) caught`) +
+              c.dim(`${artifact.uses} use(s)${realized} · last ${lastUsed} · ${artifact.retypesCaught} retype(s) caught`) +
               removal,
             );
           }

@@ -451,8 +451,48 @@ describe("stats adoption rendering", () => {
     expect(await main(["stats"], { log: line => lines.push(line) })).toBe(0);
     const output = lines.join("\n");
     expect(output).toContain("adoption:");
-    expect(output).toContain("0 use(s) · ≈0m saved · last never · 0 retype(s) caught");
+    expect(output).toContain("0 use(s) · last never · 0 retype(s) caught");
     expect(output).toContain("gradient remove dead");
+  });
+
+  it("omits the realized-savings clause for unused artifacts but shows it for real ones", async () => {
+    vi.mocked(stats).mockClear();
+    vi.mocked(stats).mockResolvedValueOnce({
+      total: 0,
+      covered: 0,
+      coveragePct: 0,
+      sessionScanEnabled: false,
+      capped: false,
+      patterns: [],
+      adoption: [
+        {
+          name: "dead",
+          type: "skill",
+          createdAt: "2026-05-01",
+          uses: 0,
+          lastUsed: undefined,
+          retypesCaught: 0,
+          realizedMinutesSaved: 0,
+          suggestRemoval: true,
+        },
+        {
+          name: "ship",
+          type: "command",
+          createdAt: "2026-06-01",
+          uses: 4,
+          lastUsed: "2026-07-10T00:00:00Z",
+          retypesCaught: 2,
+          realizedMinutesSaved: 6,
+          suggestRemoval: false,
+        },
+      ],
+    });
+    const lines: string[] = [];
+    expect(await main(["stats"], { log: line => lines.push(line) })).toBe(0);
+    const output = lines.join("\n");
+    expect(output).toContain("0 use(s) · last never · 0 retype(s) caught");
+    expect(output).not.toContain("≈0m saved");
+    expect(output).toContain("4 use(s) · ≈6m saved · last 2026-07-10 · 2 retype(s) caught");
   });
 });
 
