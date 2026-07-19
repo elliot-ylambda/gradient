@@ -196,10 +196,41 @@ export function candidateToCommand(c: Candidate): Suggestion {
   };
 }
 
+/** Locally reconstructed loop suggestion — no LLM involved. The instruction is
+ * rebuilt from the candidate the same way candidateToCommand rebuilds a
+ * command body: raw examples/signatures are never trusted as authored text.
+ * A candidate whose instruction reads as consequential never becomes an
+ * unattended loop; it falls back to the same guarded command a non-loop
+ * candidate would get. */
+export function candidateToLoop(c: Candidate): Suggestion {
+  const safeSignature = bounded(c.signature);
+  const safeExamples = c.examples.map(example => bounded(example, 2_000)).slice(0, 5);
+  const instruction = safeExamples[0] ?? safeSignature;
+  if (CONSEQUENTIAL_ACTION.test(instruction)) return candidateToCommand(c);
+
+  const name = sanitizeName(instruction.split(" ").slice(0, 3).join(" "));
+  const sourceSignatures = sourceSignaturesFor([c]);
+  return {
+    id: idFor(sourceSignatures, "loop"),
+    name,
+    title: deterministicTitle(c),
+    rationale: `Observed ${c.count}× across ${c.sessions} sessions; review is required before installation.`,
+    evidence: evidenceFor([c], "loop"),
+    confidence: c.confidence,
+    examples: safeExamples,
+    sourceSignatures,
+    payload: {
+      type: "loop",
+      instruction: `${AUTHORIZATION_GUARD} Reminder: ${instruction}`.slice(0, 2_000),
+      ...(c.cadence ? { cadence: bounded(c.cadence, 100) } : {}),
+    },
+  };
+}
+
 function degradeToCommands(cands: Candidate[]): Suggestion[] {
   return cands
     .filter(c => c.kind !== "answer" && c.confidence === "high")
-    .map(candidateToCommand)
+    .map(c => (c.kind === "loop" ? candidateToLoop(c) : candidateToCommand(c)))
     .sort(byLeverage);
 }
 
@@ -402,6 +433,19 @@ export async function detect(
       });
       ids.forEach(id => claimed.add(id));
       names.add(name);
+    }
+
+    // Deterministic evidence must not be lost when the model ignores a
+    // pre-marked loop candidate: it may still merge or override it (in which
+    // case it's already claimed above), but anything left unclaimed is
+    // appended locally, exactly as the degrade path would have emitted it.
+    for (const [id, candidate] of byId) {
+      if (candidate.kind !== "loop" || claimed.has(id)) continue;
+      const suggestion = candidateToLoop(candidate);
+      if (names.has(suggestion.name)) continue;
+      out.push(suggestion);
+      claimed.add(id);
+      names.add(suggestion.name);
     }
     return out.sort(byLeverage);
   } catch {

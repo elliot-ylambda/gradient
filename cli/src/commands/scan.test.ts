@@ -66,6 +66,52 @@ describe("scan", () => {
     expect(suggestions).toEqual([]);
   });
 
+  // Regression: a "continue"-style cluster with runs (maxRunLength 4, runSessions 3)
+  // becomes a loop suggestion with zero LLM involvement — markLoops must run on the
+  // real cluster/temporal output inside scan(), and the degrade path (backend: null)
+  // must turn the marked candidate into a loop suggestion.
+  it("marks a 'continue'-style cluster with runs as a loop suggestion in degraded (no-LLM) mode", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const at = (sessionId: string, times: string[]) =>
+      times.map(ts => ({ ts, project: "p", role: "user" as const, text: "continue", sessionId }));
+    const turns = [
+      ...at("s1", ["2026-06-01T10:00:00Z", "2026-06-01T10:05:00Z", "2026-06-01T10:10:00Z", "2026-06-01T10:15:00Z"]),
+      ...at("s2", ["2026-06-02T09:00:00Z", "2026-06-02T09:05:00Z"]),
+      ...at("s3", ["2026-06-03T09:00:00Z", "2026-06-03T09:05:00Z"]),
+    ];
+    const suggestions = await scan(
+      { scope: "all", projectPath: process.cwd(), home },
+      { backend: null, collectFn: async () => ["f"], parseFn: async () => ({ turns, events: [] }) },
+    );
+    const loopSuggestion = suggestions.find(s => s.payload.type === "loop");
+    expect(loopSuggestion).toBeDefined();
+  });
+
+  // Regression: 12 /compact events across 4 sessions produce the PreCompact hook
+  // suggestion in degraded (backend null) mode — hookFromEvents must be appended
+  // post-detect even when there's no LLM at all.
+  it("suggests the PreCompact checkpoint hook from /compact command events in degraded mode", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const events = ["s1", "s1", "s1", "s2", "s2", "s2", "s3", "s3", "s3", "s4", "s4", "s4"].map(sessionId => ({
+      ts: "2026-07-01T00:00:00Z", project: "p", sessionId, command: "/compact",
+    }));
+    const logs: string[] = [];
+    const suggestions = await scan(
+      { scope: "all", projectPath: process.cwd(), home },
+      {
+        backend: null,
+        collectFn: async () => ["f"],
+        parseFn: async () => ({ turns: [], events }),
+        log: message => logs.push(message),
+      },
+    );
+    const hookSuggestion = suggestions.find(s => s.payload.type === "hook" && s.payload.event === "PreCompact");
+    expect(hookSuggestion).toBeDefined();
+    expect(hookSuggestion?.payload).toMatchObject({ event: "PreCompact", subcommand: "checkpoint" });
+    const cached = JSON.parse(await readFile(suggestionsPath(process.cwd(), home), "utf8"));
+    expect(cached.some((s: { id: string }) => s.id === hookSuggestion?.id)).toBe(true);
+  });
+
   it("sends up to DEFAULT_DETECT_WINDOW candidates to the llm", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const logs: string[] = [];

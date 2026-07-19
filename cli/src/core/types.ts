@@ -69,6 +69,9 @@ export interface Candidate {
   confidence: Confidence;
   assistants?: Assistant[];
   temporal?: TemporalFeatures;
+  /** Set by classify.ts's markLoops when temporal.distinctDays crosses the
+   * schedule floor; a human-readable cadence ("daily" / "most weekdays"). */
+  cadence?: string;
 }
 
 /** Semantic content of a suggestion; emit/* formats it into an artifact. */

@@ -4,6 +4,7 @@ import {
   byLeverage,
   candidateRef,
   candidateToCommand,
+  candidateToLoop,
   clarifiedWorkflowBody,
   detect,
   idFor,
@@ -106,6 +107,38 @@ describe("candidateToCommand", () => {
   });
 });
 
+describe("candidateToLoop", () => {
+  it("derives a guarded loop suggestion from a loop-kind candidate", () => {
+    const loop: Candidate = { ...cand("run the test suite and report failures", 8), kind: "loop" };
+    const s = candidateToLoop(loop);
+    expect(s.payload.type).toBe("loop");
+    if (s.payload.type === "loop") {
+      expect(s.payload.instruction).toContain("no standing authorization");
+      expect(s.payload.instruction).toContain("run the test suite and report failures");
+    }
+  });
+
+  it("passes cadence through from the candidate", () => {
+    const loop: Candidate = { ...cand("check the dashboard", 8), kind: "loop", cadence: "daily" };
+    const s = candidateToLoop(loop);
+    expect(s.payload).toMatchObject({ type: "loop", cadence: "daily" });
+  });
+
+  it("falls back to a command payload when the instruction contains a consequential action", () => {
+    const loop: Candidate = { ...cand("deploy to production", 8), kind: "loop" };
+    const s = candidateToLoop(loop);
+    expect(s.payload.type).toBe("command");
+    expect(s).toEqual(candidateToCommand(loop));
+  });
+
+  it("redacts a signature everywhere in the loop suggestion", () => {
+    const loop: Candidate = { ...cand("ANTHROPIC_API_KEY=sk-ant-abc123 run the loop", 8), kind: "loop" };
+    const s = candidateToLoop(loop);
+    expect(JSON.stringify(s)).not.toContain("sk-ant-abc123");
+    expect(JSON.stringify(s)).toContain("[REDACTED]");
+  });
+});
+
 describe("buildDetectPrompt", () => {
   it("marks input as untrusted and uses opaque source IDs", () => {
     const source = cand("lgtm", 5);
@@ -138,6 +171,11 @@ describe("buildDetectPrompt", () => {
     const paste: Candidate = { ...cand("make dev", 3), kind: "paste" };
     expect(JSON.parse(buildDetectPrompt([paste]).prompt)[0].kind).toBe("paste");
     expect(JSON.parse(buildDetectPrompt([cand("lgtm", 3)]).prompt)[0].kind).toBeUndefined();
+  });
+
+  it("forwards kind for loop candidates so the model can see they're already classified", () => {
+    const loop: Candidate = { ...cand("run the smoke tests", 6), kind: "loop" };
+    expect(JSON.parse(buildDetectPrompt([loop]).prompt)[0].kind).toBe("loop");
   });
 
   it("redacts secrets and PII before sending candidates", () => {
@@ -475,6 +513,55 @@ describe("detect", () => {
     const out = await detect([lowLeverageCand(), highLeverageCand()], null, { limit: 1 });
     expect(out).toHaveLength(1);
     expect(out[0].evidence.count).toBe(5);
+  });
+
+  // Regression: a "continue"-style cluster with runs (maxRunLength 4, runSessions 3)
+  // becomes a loop suggestion with zero LLM involvement (backend null throughout).
+  it("emits a loop suggestion for an already loop-kind candidate in the degrade path", async () => {
+    const loop: Candidate = {
+      ...cand("continue", 8),
+      kind: "loop",
+      temporal: { maxRunLength: 4, runSessions: 3, medianGapMinutes: 5, distinctDays: 3, spanDays: 2 },
+    };
+    const out = await detect([loop], null);
+    expect(out).toHaveLength(1);
+    expect(out[0].payload.type).toBe("loop");
+    expect(out[0]).toEqual(candidateToLoop(loop));
+  });
+
+  it("appends candidateToLoop for a loop-kind candidate the model's response didn't claim", async () => {
+    const command = cand("merge main into this pr", 9);
+    const loop: Candidate = { ...cand("run the smoke tests", 6), kind: "loop" };
+    const llm = {
+      name: "fake",
+      available: async () => true,
+      complete: async ({ prompt }: { prompt: string }) => {
+        const wire = JSON.parse(prompt) as { id: string; signature: string }[];
+        const commandWire = wire.find(w => w.signature === "merge main into this pr")!;
+        return JSON.stringify({ suggestions: [{
+          sourceIds: [commandWire.id], name: "ship", confidence: "high",
+          payload: { type: "command", commandName: "ship" },
+        }] });
+      },
+    };
+    const out = await detect([command, loop], llm);
+    expect(out).toHaveLength(2);
+    const loopOut = out.find(s => s.payload.type === "loop");
+    expect(loopOut).toEqual(candidateToLoop(loop));
+  });
+
+  it("keeps kindsAreCompatible permitting a marked loop candidate the LLM calls a command", async () => {
+    const loop: Candidate = { ...cand("run the smoke tests", 6), kind: "loop" };
+    const llm = {
+      name: "fake", available: async () => true,
+      complete: async () => JSON.stringify({ suggestions: [{
+        sourceIds: [candidateRef(loop)], name: "smoke", confidence: "high",
+        payload: { type: "command", commandName: "smoke" },
+      }] }),
+    };
+    const out = await detect([loop], llm);
+    expect(out).toHaveLength(1);
+    expect(out[0].payload.type).toBe("command");
   });
 });
 

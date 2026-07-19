@@ -12,6 +12,7 @@ import { boundedPromptLimit, capByRecency, MAX_PROMPTS_HARD_CAP } from "../core/
 import { DEFAULT_DETECT_WINDOW, DEFAULT_MAX_PROMPTS } from "../core/scope.js";
 import { cluster, normalize } from "../core/cluster.js";
 import { annotateTemporal } from "../core/temporal.js";
+import { hookFromEvents, markLoops } from "../core/classify.js";
 import { mineSequences, SEQ_MAX_BIGRAMS } from "../core/sequence.js";
 import { boundedDetectLimit, detect } from "../core/detect.js";
 import { validateSuggestion } from "../core/validate.js";
@@ -101,8 +102,8 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const answerPairs = [] as ReturnType<typeof extractAnswerPairs>;
   const pairCap = Math.min(ANSWER_MAX_PAIRS, max);
   let turns: Turn[] = [];
-  // Accumulated for later tasks (deterministic hook suggestions from command
-  // evidence); not yet consumed within this pipeline.
+  // Accumulated for hookFromEvents (deterministic checkpoint-hook suggestion
+  // from command evidence), consumed after detect below.
   let events: CommandEvent[] = [];
   const userTurnCounts = new Map<string, number>();
   for (const file of claudeFiles) {
@@ -217,6 +218,10 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   // Runs are computed over the full kept stream, not clusterInput: a paste turn
   // sitting between two cluster members must break the run like any non-member.
   annotateTemporal(kept, allCandidates);
+  // Deterministic reclassification from temporal evidence alone — no LLM
+  // involved; must run before detect so a marked loop reaches both the
+  // degrade path and the model's view of candidate kind.
+  markLoops(allCandidates);
   log(`mining → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);
 
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });
@@ -233,6 +238,22 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     } catch (error) {
       log(`skipping invalid suggestion: ${(error as Error).message}`);
     }
+  }
+
+  // Deterministic checkpoint-hook proposal from raw /compact command evidence
+  // — independent of the LLM/backend, so it works in degraded mode too.
+  try {
+    const hookSuggestion = hookFromEvents(events);
+    if (hookSuggestion && !valid.some(suggestion => suggestion.id === hookSuggestion.id)) {
+      validateSuggestion(hookSuggestion);
+      valid.push(hookSuggestion);
+      log(
+        `compact: ${hookSuggestion.evidence.count} /compact invocation(s) across ` +
+        `${hookSuggestion.evidence.sessions} sessions — checkpoint hook suggested`,
+      );
+    }
+  } catch (error) {
+    log(`compact hook check failed: ${(error as Error).message}`);
   }
 
   // Attention notifications are Claude-specific lifecycle hooks. Mine only
