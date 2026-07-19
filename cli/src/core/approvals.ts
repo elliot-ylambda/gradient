@@ -9,7 +9,7 @@ import { manifestTarget } from "./manifest.js";
 
 const APPROVAL_LEDGER_MAX_BYTES = 1_000_000;
 const APPROVAL_LEDGER_MAX_ENTRIES = 1_000;
-const ARTIFACT_TYPES = new Set<ArtifactType>(["command", "loop", "hook", "skill", "rule"]);
+const ARTIFACT_TYPES = new Set<ArtifactType>(["command", "loop", "hook", "skill", "rule", "playbook-entry"]);
 const ASSISTANTS = new Set<Assistant>(["claude-code", "codex"]);
 
 /** Increment this whenever the generator's authority or content-safety

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadManifest, addEntry, removeEntries } from "./manifest.js";
+import { loadManifest, addEntry, removeEntries, expectedArtifactPath } from "./manifest.js";
 import type { ManifestEntry } from "./types.js";
 
 const entry = (name: string, target?: "claude-code" | "codex"): ManifestEntry => ({
@@ -60,5 +60,36 @@ describe("manifest", () => {
     await addEntry(dir, entry("ship", "codex"));
     expect(await removeEntries(dir, "ship")).toHaveLength(2);
     expect(await removeEntries(dir, "ghost")).toEqual([]);
+  });
+});
+
+describe("playbook-entry manifest entries", () => {
+  const tmpProject = () => mkdtemp(join(tmpdir(), "grad-manifest-"));
+
+  it("accepts a playbook-entry pointing at the repo gradient.md", async () => {
+    const dir = await tmpProject();
+    await addEntry(dir, {
+      name: "pb-build-after-tests", type: "playbook-entry", path: join(dir, "gradient.md"),
+      createdAt: "2026-07-18", suggestionId: "abc123",
+    });
+    const entries = await loadManifest(dir);
+    expect(entries[0].type).toBe("playbook-entry");
+    expect(expectedArtifactPath(dir, entries[0])).toBe(join(dir, "gradient.md"));
+  });
+
+  it("rejects a playbook-entry with any other path", async () => {
+    const dir = await tmpProject();
+    await expect(addEntry(dir, {
+      name: "pb-x", type: "playbook-entry", path: join(dir, ".claude", "rules", "x.md"),
+      createdAt: "2026-07-18", suggestionId: "abc124",
+    })).rejects.toThrow(/path does not match/);
+  });
+
+  it("rejects a codex-target playbook-entry", async () => {
+    const dir = await tmpProject();
+    await expect(addEntry(dir, {
+      name: "pb-y", type: "playbook-entry", path: join(dir, "gradient.md"),
+      createdAt: "2026-07-18", suggestionId: "abc125", target: "codex",
+    })).rejects.toThrow(/codex/);
   });
 });

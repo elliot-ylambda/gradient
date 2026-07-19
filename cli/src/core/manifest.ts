@@ -5,7 +5,7 @@ import { safeReadFile, safeWriteFile } from "./safeFs.js";
 
 const MANIFEST_MAX_BYTES = 1_000_000;
 const MANIFEST_MAX_ENTRIES = 1_000;
-const ARTIFACT_TYPES = new Set<ArtifactType>(["command", "loop", "hook", "skill", "rule"]);
+const ARTIFACT_TYPES = new Set<ArtifactType>(["command", "loop", "hook", "skill", "rule", "playbook-entry"]);
 const ASSISTANTS = new Set<Assistant>(["claude-code", "codex"]);
 
 export function gradientDir(projectDir: string): string {
@@ -41,6 +41,7 @@ function expectedRelativePath(type: ArtifactType, name: string, target: Assistan
     case "skill": return `.claude/skills/${name}/SKILL.md`;
     case "command": return `.claude/commands/${name}.md`;
     case "rule": return `.claude/rules/gradient-${name}.md`;
+    case "playbook-entry": return "gradient.md";
     case "loop":
     case "hook": return null;
   }
