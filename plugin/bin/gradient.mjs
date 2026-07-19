@@ -18470,32 +18470,34 @@ function readlinePlaybookPrompter() {
     return answer === "a" ? "approve" : "skip";
   };
 }
-function readlinePrompter(_opts = {}) {
+function readlinePrompter(opts = {}) {
   return async (suggestion, index, total, preview) => {
-    const rl = createInterface2({ input: process.stdin, output: process.stdout });
+    const input = opts.input ?? process.stdin;
+    const output = opts.output ?? process.stdout;
+    const rl = createInterface2({ input, output });
     const label = suggestion.payload.type;
     const leverage = suggestion.evidence.estMinutesSavedPerMonth;
-    process.stdout.write(
+    output.write(
       `
 (${index + 1}/${total})  ${terminalSafeLine(suggestion.name)} \xB7 ${label} \xB7 seen ${suggestion.evidence.count}\xD7` + (leverage !== void 0 ? ` \xB7 \u2248${leverage}m/month` : "") + ` \xB7 ${suggestion.confidence}
   ${terminalSafeLine(suggestion.title)}
 `
     );
     const firstExample = suggestion.examples?.[0];
-    if (firstExample) process.stdout.write(`  example: ${terminalSafeLine(firstExample)}
+    if (firstExample) output.write(`  example: ${terminalSafeLine(firstExample)}
 `);
     if (suggestion.payload.type === "hook" && suggestion.payload.command) {
-      process.stdout.write(
+      output.write(
         `  installs a ${terminalSafeLine(suggestion.payload.event)} hook (matcher: ${terminalSafeLine(suggestion.payload.matcher ?? "all tools")})
   that runs automatically: ${terminalSafeLine(suggestion.payload.command)}
 `
       );
     }
-    process.stdout.write(`
+    output.write(`
 ${stripUnsafeControls(preview)}
 `);
     if (isNudge(suggestion)) {
-      process.stdout.write("  tip: this is what autopilot automates \u2192 gradient autopilot nudge\n");
+      output.write("  tip: this is what autopilot automates \u2192 gradient autopilot nudge\n");
     }
     const answer = (await rl.question("  [a]pprove [s]kip [e]xplain [q]uit \u203A ")).trim().toLowerCase();
     rl.close();
@@ -20515,7 +20517,12 @@ async function main(argv, io = {}) {
   const confirm = io.confirm ?? readlineConfirm();
   if (argv.length === 0) {
     if (io.isTTY ?? process.stdout.isTTY === true) {
-      await mirror(process.cwd(), { home: io.home, write: log });
+      try {
+        await mirror(process.cwd(), { home: io.home, write: log });
+      } catch (e) {
+        log(c.coral(`gradient: ${terminalSafeLine2(e.message)}`));
+        return 1;
+      }
       return 0;
     }
     log(`${banner(VERSION2)}
@@ -20730,9 +20737,10 @@ ${c.muted("session-start scan:")} ${r.sessionScanInstalled}`
           log(c.dim("\nadoption:"));
           for (const artifact of r.adoption) {
             const lastUsed = artifact.lastUsed ? artifact.lastUsed.slice(0, 10) : "never";
+            const realized = artifact.realizedMinutesSaved > 0 ? ` \xB7 \u2248${artifact.realizedMinutesSaved}m saved` : "";
             const removal = artifact.suggestRemoval ? c.coral(`  \u2192 unused 30d+, consider: gradient remove ${artifact.name}`) : "";
             log(
-              `  ${c.bold(artifact.name)}  ` + c.dim(`${artifact.uses} use(s) \xB7 \u2248${artifact.realizedMinutesSaved}m saved \xB7 last ${lastUsed} \xB7 ${artifact.retypesCaught} retype(s) caught`) + removal
+              `  ${c.bold(artifact.name)}  ` + c.dim(`${artifact.uses} use(s)${realized} \xB7 last ${lastUsed} \xB7 ${artifact.retypesCaught} retype(s) caught`) + removal
             );
           }
         }
