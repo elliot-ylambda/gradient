@@ -89,4 +89,14 @@ describe("plugin skills", () => {
       expect(frontmatter(s)["disable-model-invocation"]).toBeUndefined();
     }
   });
+  it("includes the shipped insights report in the stats skill", () => {
+    const body = readFileSync(join(pluginDir, "skills", "stats", "SKILL.md"), "utf8");
+    expect(body).toContain('gradient.mjs" stats');
+    expect(body).toContain('gradient.mjs" insights');
+  });
+  it("describes reviewed hooks as installed settings, not printed patches", () => {
+    const body = readFileSync(join(pluginDir, "skills", "review", "SKILL.md"), "utf8");
+    expect(body).toContain("local settings path");
+    expect(body).not.toContain("hook patches");
+  });
 });

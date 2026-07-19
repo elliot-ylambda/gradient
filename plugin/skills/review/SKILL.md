@@ -15,6 +15,6 @@ description: Review and apply gradient's cached suggestions — the workflows mi
 
        node "${CLAUDE_PLUGIN_ROOT}/bin/gradient.mjs" apply <id>
 
-5. Report exactly what was written (paths) or printed (loop lines / hook
-   patches). To undo any artifact later:
+5. Report exactly what was written (including the local settings path for an
+   installed hook) or printed (loop lines). To undo any artifact later:
    `node "${CLAUDE_PLUGIN_ROOT}/bin/gradient.mjs" remove <name>`.
