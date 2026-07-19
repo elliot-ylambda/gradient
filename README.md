@@ -35,12 +35,26 @@ the same things everyone does in Claude Code:
 gradient/
   cli/    →  the gradient CLI (TypeScript / npx)
   docs/   →  design spec and implementation plan
+  skills/ →  reusable skills for Claude Code + Codex
 ```
 
 | Dir | What it is |
 |-----|------------|
 | [`cli/`](cli/) | The `gradient` CLI. Its local-first `scan` pipeline finds repeated workflows and emits approved artifacts. See [`cli/README.md`](cli/README.md). |
 | [`docs/`](docs/) | Design spec and implementation plan. |
+| [`skills/`](skills/) | Open-standard skills that work in Claude Code and Codex. |
+
+## Skills library
+
+The public skills library starts with [`vibe-security-check`](skills/vibe-security-check/SKILL.md), a defensive pre-launch audit for the auth, data, storage, spend, SSRF, payment, upload, and AI-tool guards commonly missing from rapidly built apps.
+
+Install it globally for both Claude Code and Codex:
+
+```bash
+npx skills add elliot-ylambda/gradient --skill vibe-security-check -g -a claude-code -a codex
+```
+
+See the [skills catalog](skills/) for usage and the full audit checklist.
 
 ## Quickstart (CLI)
 
