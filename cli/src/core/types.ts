@@ -17,8 +17,9 @@ export interface Clarify {
   chosen?: string;
 }
 
-/** One genuine user prompt after parse + filter. (The mining pipeline consumes
- * only user text; assistant turns are rendered by core/tail.ts for autopilot.) */
+/** One genuine user prompt after parse + filter. Tool activity is mined
+ * separately via parseToolEvents (ToolEvent below); assistant text is rendered
+ * by core/tail.ts for autopilot. */
 export interface Turn {
   ts: string;
   project: string;
@@ -32,9 +33,21 @@ export interface Turn {
   usageTokens?: number;
 }
 
+/** One tool invocation mined from a transcript. Only Bash and file-edit tools
+ * are extracted; outputs never exceed a redacted, bounded error head. */
+export interface ToolEvent {
+  ts: string;
+  sessionId: string;
+  kind: "bash" | "edit";
+  command?: string;
+  isError?: boolean;
+  errorHead?: string;
+  file?: string;
+}
+
 /** Pre-LLM grouping produced by cluster.ts (no model involved). */
 export interface Candidate {
-  kind: ArtifactType | "unknown" | "paste" | "answer" | "sequence";
+  kind: ArtifactType | "unknown" | "paste" | "answer" | "sequence" | "toolfail" | "ritual";
   signature: string;     // normalized key the cluster grouped on
   examples: string[];    // representative raw prompts
   count: number;
@@ -48,7 +61,7 @@ export interface Candidate {
 export type SuggestionPayload =
   | { type: "command"; commandName: string; body: string; triggers?: string[]; mechanical?: boolean }
   | { type: "loop"; instruction: string; cadence?: string }
-  | { type: "hook"; event: string; subcommand: string; description: string; matcher?: string }
+  | { type: "hook"; event: string; description: string; matcher?: string; subcommand?: string; command?: string }
   | { type: "rule"; target: "project" | "user"; ruleName: string; text: string };
 
 /** Post-LLM (or post-degradation), ready to present/emit. */
@@ -73,7 +86,7 @@ export interface ManifestEntry {
   /** Absent means claude-code for manifests written before multi-assistant support. */
   target?: Assistant;
   /** Installed hook artifacts record what to un-merge from settings on removal. */
-  hook?: { event: string; command: string };
+  hook?: { event: string; matcher?: string; command: string };
 }
 
 export interface Config {
@@ -107,6 +120,8 @@ export interface Config {
   targets?: Assistant[];
   /** Claude model frontmatter for mechanical skills. Empty disables it. Default "haiku". */
   cheapSkillModel?: string;
+  /** Mine tool events for failure loops and post-edit rituals. Absent = on. */
+  mineToolEvents?: boolean;
 }
 
 /** Autopilot authority ladder (spec §2 #1). */

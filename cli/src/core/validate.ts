@@ -5,7 +5,7 @@ import { sanitizeName, stripUnsafeControls } from "./security.js";
 export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan", "recap", "notify"]);
 const TYPES = new Set(["command", "loop", "hook", "rule"]);
 const CONFIDENCES = new Set(["high", "inferred", "flagged"]);
-const HOOK_EVENTS = new Set(["PreCompact", "SessionStart", "Notification"]);
+const HOOK_EVENTS = new Set(["PreCompact", "SessionStart", "Notification", "PostToolUse"]);
 const NOTIFICATION_MATCHER = "permission_prompt|idle_prompt";
 const TEXT_CAP = 8_000;
 
@@ -69,11 +69,35 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
     }
   }
   if (payload.type === "hook") {
-    if (!validText(payload.event, 50) || !validText(payload.subcommand, 50) ||
-      !HOOK_EVENTS.has(payload.event) || !KNOWN_SUBCOMMANDS.has(payload.subcommand)) {
-      throw new Error("hook payload needs event + subcommand");
+    if (!validText(payload.event, 50) || !HOOK_EVENTS.has(payload.event)) {
+      throw new Error("hook payload needs a supported event");
     }
-    if (!validHookTuple(payload)) throw new Error("hook event, matcher, and subcommand are not an approved combination");
+    const hasSubcommand = typeof payload.subcommand === "string";
+    const hasCommand = typeof payload.command === "string";
+    if (hasSubcommand === hasCommand) {
+      throw new Error("hook payload needs exactly one of subcommand | command");
+    }
+    if (hasSubcommand) {
+      if (!validText(payload.subcommand, 50) || !KNOWN_SUBCOMMANDS.has(payload.subcommand)) {
+        throw new Error("hook payload needs a supported subcommand");
+      }
+      if (!validHookTuple(payload)) throw new Error("hook event, matcher, and subcommand are not an approved combination");
+    } else {
+      if (payload.event !== "PostToolUse") throw new Error("command hooks support only PostToolUse");
+      const command = (payload.command as string).trim();
+      if (!command || command.length > 200 || /[\r\n]/.test(payload.command as string) ||
+        !validText(payload.command, 200)) {
+        throw new Error("hook command must be a non-empty single line of ≤ 200 chars");
+      }
+    }
+    if (payload.matcher !== undefined) {
+      if (typeof payload.matcher !== "string") throw new Error("hook matcher must be a string");
+      try {
+        new RegExp(payload.matcher);
+      } catch {
+        throw new Error(`invalid hook matcher: ${String(payload.matcher)}`);
+      }
+    }
     if (payload.description !== undefined && !validText(payload.description, 1_000)) {
       throw new Error("hook description must be safe bounded text");
     }
@@ -150,7 +174,13 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
 export function assertHookRunnable(s: Suggestion): void {
   if (s.payload.type !== "hook") return;
   const payload = s.payload as unknown as Record<string, unknown>;
-  if (!KNOWN_SUBCOMMANDS.has(s.payload.subcommand) || !validHookTuple(payload)) {
+  if (s.payload.command !== undefined) {
+    if (s.payload.event !== "PostToolUse") {
+      throw new Error(`command hooks support only PostToolUse: ${s.payload.event}`);
+    }
+    return;
+  }
+  if (s.payload.subcommand === undefined || !KNOWN_SUBCOMMANDS.has(s.payload.subcommand) || !validHookTuple(payload)) {
     throw new Error(
       `hook references an unsupported event/matcher/subcommand combination: ${s.payload.event}/${s.payload.subcommand}`,
     );

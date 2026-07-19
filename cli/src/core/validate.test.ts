@@ -59,6 +59,32 @@ describe("assertHookRunnable", () => {
   });
 });
 
+describe("hook payload: subcommand xor command", () => {
+  const hook = (payload: Record<string, unknown>, event = "PostToolUse") => ({
+    ...good,
+    payload: { type: "hook", event, description: "d", ...payload },
+  });
+
+  it("accepts the existing subcommand form", () => {
+    expect(() => validateSuggestion(hook({ subcommand: "checkpoint" }, "PreCompact"))).not.toThrow();
+  });
+
+  it("accepts a command form with matcher", () => {
+    expect(() => validateSuggestion(hook({
+      command: "npm run lint",
+      matcher: "Edit|Write|NotebookEdit",
+    }))).not.toThrow();
+  });
+
+  it("rejects both, neither, multi-line, oversized, and bad matcher", () => {
+    expect(() => validateSuggestion(hook({ subcommand: "scan", command: "npm t" }))).toThrow(/exactly one/);
+    expect(() => validateSuggestion(hook({}))).toThrow(/exactly one/);
+    expect(() => validateSuggestion(hook({ command: "a\nb" }))).toThrow(/single line/);
+    expect(() => validateSuggestion(hook({ command: "x".repeat(201) }))).toThrow(/single line/);
+    expect(() => validateSuggestion(hook({ command: "npm t", matcher: "[unclosed" }))).toThrow(/matcher/);
+  });
+});
+
 describe("optional suggestion fields", () => {
   it("accepts a complete clarification and rejects malformed options", () => {
     const clarify = {
