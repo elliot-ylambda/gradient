@@ -59,6 +59,14 @@ vi.mock("./commands/insights.js", () => ({
     },
     recommendations: [{ metric: "nudges", line: "try: gradient autopilot nudge" }],
     costs: [{ metric: "nudges", tokens: 120, prompts: 11, line: "≈120 tokens · 11 nudge prompts" }],
+    instructionEffectiveness: [{
+      file: "CLAUDE.md",
+      source: "project",
+      text: "Always use pnpm",
+      restatements: 3,
+      violations: 1,
+      lastSeen: "2026-07-01T00:00:00Z",
+    }],
   })),
   writeInsightsHtml: vi.fn(async () => "/repo/.gradient/insights.html"),
 }));
@@ -376,6 +384,8 @@ describe("insights dispatch", () => {
     expect(vi.mocked(insights)).toHaveBeenCalledWith({ projectDir: expect.any(String), user: true });
     expect(lines.join("\n")).toContain("prompts");
     expect(lines.join("\n")).toContain("gradient autopilot nudge");
+    expect(lines.join("\n")).toContain("Instruction effectiveness");
+    expect(lines.join("\n")).toContain("Always use pnpm");
   });
 
   it("writes and reports the self-contained HTML view when requested", async () => {

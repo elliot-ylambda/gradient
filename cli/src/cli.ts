@@ -29,6 +29,7 @@ import { notify } from "./commands/notify.js";
 import type { Assistant } from "./core/types.js";
 import { stripUnsafeControls } from "./core/security.js";
 import { readlineConfirm, type Confirm } from "./core/confirm.js";
+import { instructionEffectivenessLine } from "./core/insights.js";
 
 const HELP = `gradient — turn repeated Claude Code and Codex workflows into artifacts
 
@@ -435,6 +436,13 @@ export async function main(
         if ((report.costs ?? []).length > 0) {
           log(`\n${c.bold("cost of unautomated habits")}`);
           for (const cost of report.costs ?? []) log(`  ${c.violet("→")} ${cost.line}`);
+        }
+        if (report.instructionEffectiveness?.length) {
+          log(`\n${c.bold("Instruction effectiveness")}`);
+          for (const tally of report.instructionEffectiveness) {
+            log(`  ${c.violet("→")} ${instructionEffectivenessLine(tally)}`);
+          }
+          log(`  ${c.violet("→")} these instructions aren't holding — run gradient review to convert them`);
         }
         log("");
         for (const recommendation of report.recommendations) log(`  ${c.violet("→")} ${recommendation.line}`);

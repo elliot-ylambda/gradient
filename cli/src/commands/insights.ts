@@ -21,6 +21,7 @@ import { loadConfig, projectKey, resolveTargets } from "../config.js";
 import { adoptionFromTurns } from "./stats.js";
 import { gradientDir } from "../core/manifest.js";
 import { safeWriteFile } from "../core/safeFs.js";
+import { loadInstructionAudit, type InstructionTally } from "../core/audit.js";
 
 export interface InsightsReport {
   label: string;
@@ -29,6 +30,7 @@ export interface InsightsReport {
   recommendations: Recommendation[];
   costs: CostRow[];
   capped: boolean;
+  instructionEffectiveness?: InstructionTally[];
 }
 
 export const INSIGHTS_MAX_FILES = 2_000;
@@ -108,6 +110,13 @@ export async function insights(
   const costs = buildCostRows(analysisTurns, ignore);
   const avoided = await sumAutopilotAvoided(opts.home);
   const recallInstalled = await hookInstalled(opts.projectDir, "UserPromptSubmit", "gradient recall");
+  const auditSnapshot = opts.user ? null : await loadInstructionAudit(opts.projectDir, opts.home);
+  const instructionEffectiveness = auditSnapshot?.tallies
+    .filter(tally => tally.restatements + tally.violations > 0)
+    .sort((left, right) =>
+      (right.restatements + right.violations) - (left.restatements + left.violations) ||
+      left.text.localeCompare(right.text))
+    .slice(0, 15);
   let unusedArtifacts: string[] = [];
   if (!opts.user && analysisComplete && !capped) {
     try {
@@ -125,6 +134,7 @@ export async function insights(
     costs,
     avoided,
     capped,
+    ...(instructionEffectiveness?.length ? { instructionEffectiveness } : {}),
     recommendations: buildRecommendations(metrics, {
       autopilotMode: config.autopilotProjects?.[projectKey(opts.projectDir)],
       avoided,

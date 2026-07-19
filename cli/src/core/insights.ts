@@ -2,6 +2,7 @@ import type { Turn, AutopilotMode } from "./types.js";
 import { classifyPrompt } from "./filter.js";
 import { extractPasteKey, PASTE_MIN_COUNT } from "./paste.js";
 import { cleanupStale, listStateFiles, loadState } from "./state.js";
+import type { InstructionTally } from "./audit.js";
 
 const NUDGE_RE = /^(continue|go on|keep going|next|what'?s next|proceed|yes|y|ok|okay|do it|go|sure|yep|good|great|perfect|lgtm|looks good|approved?|ship it|sounds good)[.!?]*$/i;
 const TAG_RE = /<command-name>\/?([\w:-]+)<\/command-name>/i;
@@ -232,12 +233,19 @@ export function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+export function instructionEffectivenessLine(tally: InstructionTally): string {
+  const text = tally.text.length > 60 ? `${tally.text.slice(0, 59)}…` : tally.text;
+  const lastSeen = /^\d{4}-\d{2}-\d{2}/.test(tally.lastSeen) ? tally.lastSeen.slice(0, 10) : "unknown";
+  return `"${text}" · restated ${tally.restatements}× · violated ${tally.violations}× · last seen ${lastSeen}`;
+}
+
 export function renderInsightsHtml(report: {
   label: string;
   avoided: number;
   metrics: InsightsMetrics;
   recommendations: Recommendation[];
   costs?: CostRow[];
+  instructionEffectiveness?: InstructionTally[];
 }): string {
   const metrics = report.metrics;
   const rows: Array<[string, number]> = [
@@ -264,6 +272,9 @@ export function renderInsightsHtml(report: {
 <dl>${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${value}</dd>`).join("")}</dl>
 ${report.costs?.length ? `<h1>cost of unautomated habits</h1>
 <ul>${report.costs.map(cost => `<li>${escapeHtml(cost.line)}</li>`).join("")}</ul>` : ""}
+${report.instructionEffectiveness?.length ? `<h1>Instruction effectiveness</h1>
+<ul>${report.instructionEffectiveness.map(tally => `<li>${escapeHtml(instructionEffectivenessLine(tally))}</li>`).join("")}</ul>
+<p>These instructions aren't holding — run <code>gradient review</code> to convert them.</p>` : ""}
 <h1>next</h1>
 <ul>${report.recommendations.map(recommendation => `<li>${escapeHtml(recommendation.line)}</li>`).join("")}</ul>
 </body></html>\n`;
