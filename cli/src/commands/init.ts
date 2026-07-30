@@ -8,6 +8,7 @@ import { installHook } from "../core/settings.js";
 import type { LLMBackend } from "../llm/backend.js";
 import type { Assistant, Config } from "../core/types.js";
 import { safeReadFile, safeWriteFile } from "../core/safeFs.js";
+import { gradientHookCommand, isGradientHookFor } from "../core/hookBinary.js";
 
 export interface InitResult {
   backend: string;
@@ -93,8 +94,8 @@ export async function init(
 
   let sessionScanInstalled = false;
   if (opts.sessionScan) {
-    await installHook(opts.projectDir ?? process.cwd(), "SessionStart", "gradient session-start", {
-      replacing: ["gradient scan --detach"],
+    await installHook(opts.projectDir ?? process.cwd(), "SessionStart", gradientHookCommand("session-start"), {
+      replacing: ["gradient scan --detach", cmd => isGradientHookFor(cmd, "session-start")],
     });
     sessionScanInstalled = true;
   }

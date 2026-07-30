@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_HOOK_BINARY, resolveHookBinary, shellQuote } from "./hookBinary.js";
+import {
+  DEFAULT_HOOK_BINARY,
+  gradientHookCommand,
+  isGradientHookFor,
+  resolveHookBinary,
+  shellQuote,
+} from "./hookBinary.js";
 
 function dirWithGradient(): string {
   const dir = mkdtempSync(join(tmpdir(), "gradient-hookbin-"));
@@ -83,5 +89,50 @@ describe("shellQuote", () => {
 
   it("escapes embedded single quotes", () => {
     expect(shellQuote("/tmp/it's here/bin.js")).toBe(`'/tmp/it'\\''s here/bin.js'`);
+  });
+});
+
+describe("isGradientHookFor", () => {
+  it("matches every binary form gradient may have installed", () => {
+    for (const command of [
+      "gradient recall",
+      "/usr/bin/node /opt/gradient/dist/bin.js recall",
+      "'/usr/bin/node' '/Users/a b/gradient/bin.js' recall",
+      "npx -y gradient.md@0.6.1 recall",
+    ]) {
+      expect(isGradientHookFor(command, "recall")).toBe(true);
+    }
+  });
+
+  it("matches multi-word subcommands", () => {
+    expect(isGradientHookFor("/usr/bin/node /o/gradient/bin.js board digest", "board digest")).toBe(true);
+    expect(isGradientHookFor("/usr/bin/node /o/gradient/bin.js board refresh", "board digest")).toBe(false);
+  });
+
+  it("never claims a hook that is not gradient's", () => {
+    expect(isGradientHookFor("my-tool recall", "recall")).toBe(false);
+    expect(isGradientHookFor("npm run recall", "recall")).toBe(false);
+  });
+
+  it("does not match a different gradient subcommand", () => {
+    expect(isGradientHookFor("gradient notify", "recall")).toBe(false);
+  });
+});
+
+describe("gradientHookCommand", () => {
+  it("appends the subcommand to the resolved binary", () => {
+    const command = gradientHookCommand("checkpoint", {
+      env: { PATH: "/nonexistent" },
+      execPath: "/usr/bin/node",
+      scriptPath: "/opt/gradient/bin.js",
+    });
+    expect(command).toBe("/usr/bin/node /opt/gradient/bin.js checkpoint");
+    expect(isGradientHookFor(command, "checkpoint")).toBe(true);
+  });
+
+  it("round-trips through install and removal matching", () => {
+    const installed = gradientHookCommand("recall", { env: { PATH: dirWithGradient() } });
+    expect(installed).toBe("gradient recall");
+    expect(isGradientHookFor(installed, "recall")).toBe(true);
   });
 });

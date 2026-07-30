@@ -16,6 +16,7 @@ import {
 import { hookInstalled } from "../core/settings.js";
 import { loadConfig } from "../config.js";
 import { boardStateDir } from "../core/board.js";
+import { isGradientHookFor } from "../core/hookBinary.js";
 
 const execFileP = promisify(execFile);
 
@@ -38,13 +39,13 @@ describe("setBoard", () => {
 
     const result = await setBoard(true, repo, { home });
     expect(result.on).toBe(true);
-    expect(await hookInstalled(repo, "SessionStart", DIGEST_COMMAND)).toBe(true);
-    expect(await hookInstalled(repo, "UserPromptSubmit", REFRESH_COMMAND)).toBe(true);
+    expect(await hookInstalled(repo, "SessionStart", cmd => isGradientHookFor(cmd, "board digest"))).toBe(true);
+    expect(await hookInstalled(repo, "UserPromptSubmit", cmd => isGradientHookFor(cmd, "board refresh"))).toBe(true);
     expect((await loadConfig(home)).boardProjects).toEqual([repo]);
 
     const off = await setBoard(false, repo, { home });
     expect(off.on).toBe(false);
-    expect(await hookInstalled(repo, "SessionStart", DIGEST_COMMAND)).toBe(false);
+    expect(await hookInstalled(repo, "SessionStart", cmd => isGradientHookFor(cmd, "board digest"))).toBe(false);
     expect((await loadConfig(home)).boardProjects).toEqual([]);
     expect(existsSync(boardStateDir(repo, home))).toBe(false);
   });

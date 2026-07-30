@@ -6,6 +6,7 @@ import { setContinuity, continuityStatus } from "./continuity.js";
 import { recap } from "./recap.js";
 import { installHook } from "../core/settings.js";
 import { progressPath } from "./checkpoint.js";
+import { isGradientHookFor } from "../core/hookBinary.js";
 
 let dir: string;
 let home: string;
@@ -19,7 +20,8 @@ describe("continuity", () => {
   it("installs both hooks and removes only those hooks", async () => {
     await setContinuity(true, dir, { home });
     const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.local.json"), "utf8"));
-    expect(JSON.stringify(settings.hooks.PreCompact)).toContain("gradient checkpoint");
+    expect(settings.hooks.PreCompact[0].hooks.some(
+      (h: { command: string }) => isGradientHookFor(h.command, "checkpoint"))).toBe(true);
     expect(settings.hooks.SessionStart[0]).toMatchObject({ matcher: "resume|compact" });
     expect(await continuityStatus(dir, { home })).toEqual({ checkpoint: true, recap: true });
     await installHook(dir, "SessionStart", "other startup", { matcher: "startup" });

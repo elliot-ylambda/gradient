@@ -40,17 +40,25 @@ export function mergeHookIntoSettings(
   existing: Record<string, any>,
   event: string,
   command: string,
-  opts: { timeout?: number; matcher?: string; replacing?: string[] } = {},
+  opts: { timeout?: number; matcher?: string; replacing?: HookCommandMatch[] } = {},
 ): Record<string, any> {
   assertSettingsShape(existing, event);
   const out = { ...existing, hooks: { ...(existing.hooks ?? {}) } };
   let groups: HookGroup[] = (Array.isArray(out.hooks[event]) ? out.hooks[event] : [])
     .map((group: HookGroup) => ({ ...group, hooks: group.hooks.map(hook => ({ ...hook })) }));
 
-  const replacing = new Set((opts.replacing ?? []).filter(candidate => candidate !== command));
-  if (replacing.size > 0) {
+  // Predicates let an installer supersede its own earlier hook even when the
+  // command text changed (e.g. a bare `gradient` upgraded to a resolved path),
+  // which would otherwise leave two hooks for the same subcommand both firing.
+  const replacers = (opts.replacing ?? []).map(match =>
+    typeof match === "function" ? match : (candidate: string) => candidate === match);
+  if (replacers.length > 0) {
     groups = groups
-      .map(group => ({ ...group, hooks: group.hooks.filter(hook => !replacing.has(hook.command)) }))
+      .map(group => ({
+        ...group,
+        hooks: group.hooks.filter(hook =>
+          hook.command === command || !replacers.some(matches => matches(hook.command))),
+      }))
       .filter(group => group.hooks.length > 0);
   }
 
@@ -89,19 +97,26 @@ export function mergeHookIntoSettings(
   return out;
 }
 
+/** Exact command, or a predicate for callers whose command form can drift
+ *  between install and removal (see isGradientHookFor). */
+export type HookCommandMatch = string | ((command: string) => boolean);
+
 export function removeHookFromSettings(
   existing: Record<string, any>,
   event: string,
-  command: string,
+  command: HookCommandMatch,
   matcher?: string,
 ): Record<string, any> {
   assertSettingsShape(existing, event);
+  const matches = typeof command === "function"
+    ? command
+    : (candidate: string) => candidate === command;
   const out = { ...existing, hooks: { ...(existing.hooks ?? {}) } };
   const groups: HookGroup[] = Array.isArray(out.hooks[event]) ? out.hooks[event] : [];
   const kept = groups
     .map(group => matcher !== undefined && group.matcher !== matcher
       ? { ...group, hooks: [...group.hooks] }
-      : { ...group, hooks: (group.hooks ?? []).filter(hook => hook.command !== command) })
+      : { ...group, hooks: (group.hooks ?? []).filter(hook => !matches(hook.command)) })
     .filter(g => g.hooks.length > 0);
   if (kept.length > 0) out.hooks[event] = kept;
   else delete out.hooks[event];
@@ -113,7 +128,7 @@ export async function installHook(
   projectDir: string,
   event: string,
   command: string,
-  opts: { timeout?: number; matcher?: string; replacing?: string[] } = {},
+  opts: { timeout?: number; matcher?: string; replacing?: HookCommandMatch[] } = {},
 ): Promise<string> {
   const path = settingsPath(projectDir);
   assertInside(join(projectDir, ".claude"), path);
@@ -135,7 +150,7 @@ export async function installHook(
 export async function removeHook(
   projectDir: string,
   event: string,
-  command: string,
+  command: HookCommandMatch,
   matcher?: string,
 ): Promise<string> {
   const path = settingsPath(projectDir);
@@ -155,7 +170,7 @@ export async function removeHook(
 export async function hookInstalled(
   projectDir: string,
   event: string,
-  command: string,
+  command: HookCommandMatch,
   opts: { matcher?: string } = {},
 ): Promise<boolean> {
   try {
@@ -164,10 +179,13 @@ export async function hookInstalled(
       settingsPath(projectDir),
       { maxBytes: SETTINGS_MAX_BYTES },
     ));
+    const matches = typeof command === "function"
+      ? command
+      : (candidate: string) => candidate === command;
     const groups: HookGroup[] = Array.isArray(parsed?.hooks?.[event]) ? parsed.hooks[event] : [];
     return groups.some(group =>
       (opts.matcher === undefined || group.matcher === opts.matcher) &&
-      group.hooks?.some(hook => hook.command === command),
+      group.hooks?.some(hook => matches(hook.command)),
     );
   } catch {
     return false;

@@ -13,6 +13,7 @@ import { addEntry, artifactMarker } from "../core/manifest.js";
 import { projectKey, saveConfig } from "../config.js";
 import { suggestionsPath } from "./apply.js";
 import { recordArtifactApproval } from "../core/approvals.js";
+import { isGradientHookFor } from "../core/hookBinary.js";
 
 let dir: string;
 let home: string;
@@ -129,11 +130,11 @@ describe("setRecall / recallStatus", () => {
     const result = await setRecall(true, dir, home);
     expect(result.installed).toBe(true);
     const settings = JSON.parse(await readFile(join(dir, ".claude", "settings.local.json"), "utf8"));
-    expect(settings.hooks.UserPromptSubmit[0].hooks[0]).toEqual({
+    expect(settings.hooks.UserPromptSubmit[0].hooks[0]).toMatchObject({
       type: "command",
-      command: "gradient recall",
       timeout: 5,
     });
+    expect(isGradientHookFor(settings.hooks.UserPromptSubmit[0].hooks[0].command, "recall")).toBe(true);
     expect(await recallStatus(dir, home)).toMatchObject({ installed: true, entries: 0 });
     expect((await recallStatus(dir, home)).builtAt).toBeTruthy();
   });

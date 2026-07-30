@@ -1,5 +1,6 @@
 import { accessSync, constants } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { VERSION } from "../version.js";
 
 /** What a hook command looks like when `gradient` is a real command on PATH. */
@@ -22,6 +23,19 @@ export interface HookBinary {
 /** Quote for a POSIX shell only when the value actually needs it. */
 export function shellQuote(value: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** gradient's own executable entry, located from this module rather than from
+ *  process.argv — argv[1] is the *host* process (a test runner, or any program
+ *  embedding this package), which must never be baked into a user's hook. */
+function ownBinPath(): string | null {
+  try {
+    const candidate = join(dirname(fileURLToPath(import.meta.url)), "..", "bin.js");
+    accessSync(candidate, constants.R_OK);
+    return candidate;
+  } catch {
+    return null;
+  }
 }
 
 function onPath(name: string, env: NodeJS.ProcessEnv): boolean {
@@ -57,7 +71,7 @@ export function resolveHookBinary(opts: {
   if (onPath(DEFAULT_HOOK_BINARY, env)) return { command: DEFAULT_HOOK_BINARY, durable: true };
 
   const execPath = opts.execPath ?? process.execPath;
-  const scriptPath = opts.scriptPath ?? process.argv[1];
+  const scriptPath = opts.scriptPath ?? ownBinPath();
   if (scriptPath && !EPHEMERAL_INSTALL.test(scriptPath)) {
     return {
       command: `${shellQuote(execPath)} ${shellQuote(scriptPath)}`,
@@ -75,4 +89,30 @@ export function resolveHookBinary(opts: {
       `so the hook falls back to "npx -y ${spec}" — slower per fire, and it needs the npm cache. ` +
       `Install globally (npm i -g gradient.md) and re-apply for a direct command.`,
   };
+}
+
+/** The command an installed hook should run for one gradient subcommand. Every
+ *  hook installer must go through this rather than composing `gradient <sub>`,
+ *  which only resolves for globally installed users. */
+export function gradientHookCommand(
+  subcommand: string,
+  opts: Parameters<typeof resolveHookBinary>[0] = {},
+): string {
+  return `${resolveHookBinary(opts).command} ${subcommand}`;
+}
+
+/**
+ * Whether an installed hook command is gradient's own invocation of a subcommand.
+ *
+ * Removal cannot compare against a freshly resolved string: a hook installed
+ * before a global install reads `<node> <script> recall`, while `off` afterwards
+ * would resolve to `gradient recall` and match nothing, silently orphaning the
+ * hook. Match on the subcommand instead, still requiring the command to name
+ * gradient so a user's unrelated hook is never removed.
+ */
+export function isGradientHookFor(command: string, subcommand: string): boolean {
+  const trimmed = command.trim();
+  const targetsSubcommand = trimmed === `${DEFAULT_HOOK_BINARY} ${subcommand}` ||
+    trimmed.endsWith(` ${subcommand}`);
+  return targetsSubcommand && /gradient/i.test(trimmed);
 }

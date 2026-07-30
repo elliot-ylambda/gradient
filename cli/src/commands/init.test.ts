@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { init } from "./init.js";
 import { saveConfig } from "../config.js";
+import { isGradientHookFor } from "../core/hookBinary.js";
 
 const fakeSkill = (body: string) => `---\nname: gradient\ndescription: test skill\n---\n\n# ${body}\n`;
 
@@ -94,7 +95,7 @@ describe("init", () => {
     const cfg = JSON.parse(await readFile(join(home, ".config", "gradient", "config.json"), "utf8"));
     expect(cfg.scanOnSessionStart).toBe(true);
     const settings = JSON.parse(await readFile(join(projectDir, ".claude", "settings.local.json"), "utf8"));
-    expect(settings.hooks.SessionStart[0].hooks[0].command).toBe("gradient session-start");
+    expect(isGradientHookFor(settings.hooks.SessionStart[0].hooks[0].command, "session-start")).toBe(true);
   });
   it("migrates the old detached-scan hook exactly once", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-init-home-"));
@@ -107,7 +108,9 @@ describe("init", () => {
     await init({ installSkill: false, sessionScan: true, home, projectDir }, { backend: null });
     const settings = JSON.parse(await readFile(join(projectDir, ".claude", "settings.local.json"), "utf8"));
     const commands = settings.hooks.SessionStart.flatMap((group: any) => group.hooks.map((hook: any) => hook.command));
-    expect(commands).toEqual(["gradient session-start"]);
+    // The legacy hook is superseded and re-running init must not duplicate it.
+    expect(commands).toHaveLength(1);
+    expect(isGradientHookFor(commands[0], "session-start")).toBe(true);
   });
   it("preserves existing config keys instead of clobbering them (init doesn't disable autopilot)", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-"));

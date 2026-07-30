@@ -13,6 +13,7 @@ import {
 import { hookInstalled, installHook, removeHook } from "../core/settings.js";
 import { loadConfig, projectKey, saveConfig } from "../config.js";
 import { safeAppendFile } from "../core/safeFs.js";
+import { gradientHookCommand, isGradientHookFor } from "../core/hookBinary.js";
 
 export interface RecallHookInput {
   prompt?: string;
@@ -95,15 +96,15 @@ export async function setRecall(
     const settingsPath = await installHook(
       projectDir,
       "UserPromptSubmit",
-      "gradient recall",
-      { timeout: 5 },
+      gradientHookCommand("recall"),
+      { timeout: 5, replacing: [cmd => isGradientHookFor(cmd, "recall")] },
     );
     projects.add(key);
     config.recallProjects = [...projects].sort();
     try {
       await saveConfig(config, home);
     } catch (error) {
-      await removeHook(projectDir, "UserPromptSubmit", "gradient recall").catch(() => undefined);
+      await removeHook(projectDir, "UserPromptSubmit", cmd => isGradientHookFor(cmd, "recall")).catch(() => undefined);
       throw error;
     }
     return { installed: true, settingsPath };
@@ -112,7 +113,7 @@ export async function setRecall(
   projects.delete(key);
   config.recallProjects = [...projects].sort();
   await saveConfig(config, home);
-  const settingsPath = await removeHook(projectDir, "UserPromptSubmit", "gradient recall");
+  const settingsPath = await removeHook(projectDir, "UserPromptSubmit", cmd => isGradientHookFor(cmd, "recall"));
   return { installed: false, settingsPath };
 }
 
@@ -122,7 +123,7 @@ export async function recallStatus(
 ): Promise<{ installed: boolean; entries: number; builtAt?: string }> {
   const config = await loadConfig(home);
   const installed = (config.recallProjects ?? []).includes(projectKey(projectDir)) &&
-    await hookInstalled(projectDir, "UserPromptSubmit", "gradient recall");
+    await hookInstalled(projectDir, "UserPromptSubmit", cmd => isGradientHookFor(cmd, "recall"));
   const index = await loadRecallIndex(projectDir, home);
   return {
     installed,
