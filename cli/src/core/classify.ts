@@ -103,3 +103,17 @@ export function hookFromEvents(events: CommandEvent[]): Suggestion | null {
     },
   };
 }
+
+/**
+ * Whether a suggestion's evidence is a counted tool event rather than an
+ * interpretation of prompt text.
+ *
+ * Every hook gradient proposes is derived from something it counted —
+ * `/compact` invocations, idle waits over a threshold, repeated tool failures —
+ * whereas commands, loops, and playbook lines are all clustered prompt text.
+ * Dogfooding found every worthwhile suggestion in the first group, so callers
+ * present them as separate tiers rather than interleaving them by an estimate.
+ */
+export function isMeasured(suggestion: Suggestion): boolean {
+  return suggestion.payload.type === "hook";
+}

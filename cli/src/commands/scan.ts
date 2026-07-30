@@ -18,7 +18,7 @@ import {
 import { compileIgnorePatterns, filterPrompts, hasTemplateFloodSupport, isTemplateFlood } from "../core/filter.js";
 import { boundedPromptLimit, capByRecency, MAX_PROMPTS_HARD_CAP } from "../core/cap.js";
 import { DEFAULT_DETECT_WINDOW, DEFAULT_MAX_PROMPTS } from "../core/scope.js";
-import { cluster, normalize } from "../core/cluster.js";
+import { cluster, dedupeReplayedOccurrences, normalize } from "../core/cluster.js";
 import { annotateTemporal } from "../core/temporal.js";
 import { hookFromEvents, markLoops } from "../core/classify.js";
 import { markCorrections } from "../core/corrections.js";
@@ -34,10 +34,25 @@ import { saveSuggestions } from "./apply.js";
 import { detectPasteCandidates, extractPasteKey } from "../core/paste.js";
 import { ANSWER_MAX_PAIRS, extractAnswerPairs, mineAnswerCandidates } from "../core/answers.js";
 import { attentionSuggestion, mineAttention } from "../core/attention.js";
+import { isNudgeText } from "../core/insights.js";
+
 import { mineProjectPlaybook } from "../core/project-suggest.js";
 import { failureLoops, rituals } from "../core/toolmine.js";
 import { loadInstructions } from "../core/instructions.js";
 import { audit, clearInstructionAudit, CORRECTION_RE, saveInstructionAudit } from "../core/audit.js";
+
+/**
+ * Candidate kinds produced by clustering raw prompt text, and only those.
+ *
+ * This is the family where a single sitting masquerades as a habit: forked
+ * sessions replay a parent's prompts, and iterating on one hard feature repeats
+ * the same phrasing all afternoon. Every other producer already carries its own
+ * support floor — pastes need PASTE_MIN_COUNT, sequences need recurrence,
+ * tool-event kinds are counted facts — so gating them would suppress real
+ * signal without removing any of the noise actually observed.
+ */
+const CLUSTERED_PROMPT_KINDS: ReadonlySet<string> = new Set(["unknown", "loop", "correction"]);
+const MIN_DISTINCT_DAYS = 2;
 
 const MAX_MINED_PROMPT_CHARS = 4_000;
 export const MAX_TOOL_EVENTS = 20_000;
@@ -299,7 +314,13 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
       toolCandidates = toolCandidates.slice(0, toolCandidateCap);
     }
   }
-  const allCandidates = [...nonSequenceCandidates, ...sequenceCandidates, ...toolCandidates, ...auditCandidates];
+  // Collapse fork/resume replays before any counting: a resumed session copies
+  // its parent's turns verbatim, so one typed prompt can otherwise present as
+  // several occurrences across several session ids and inflate every downstream
+  // count, including the ranking key.
+  const allCandidates = dedupeReplayedOccurrences(
+    [...nonSequenceCandidates, ...sequenceCandidates, ...toolCandidates, ...auditCandidates],
+  );
   // Runs are computed over the full kept stream, not clusterInput: a paste turn
   // sitting between two cluster members must break the run like any non-member.
   annotateTemporal(kept, allCandidates);
@@ -313,11 +334,40 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   // loop is left untouched (loops win ties by order); only kind-"unknown"
   // candidates are eligible.
   if (opts.scope === "project") markCorrections(allCandidates);
-  log(`mining → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);
+
+  // Evidence gate. Tool-event candidates are counted facts — a failure loop or
+  // a post-edit ritual is real the first day it happens. Prompt-derived
+  // candidates are interpretations: the same phrasing recurs both because it is
+  // a ritual and because one hard feature was iterated on in a single sitting,
+  // and clustering cannot tell those apart. A pattern confined to one day is
+  // project history, so require it to span two.
+  const beforeGate = allCandidates.length;
+  const dayGated = allCandidates.filter(candidate =>
+    !CLUSTERED_PROMPT_KINDS.has(candidate.kind) ||
+    (candidate.temporal?.distinctDays ?? 0) >= MIN_DISTINCT_DAYS);
+  if (dayGated.length < beforeGate) {
+    log(`single-day gate → ${beforeGate - dayGated.length} prompt-derived candidate(s) held back as project history`);
+  }
+  // "lgtm", "looks good to me", "continue from where you left off" are
+  // approvals, not workflows. They repeat constantly and across many days, so
+  // no frequency or temporal rule catches them, and a skill built from one can
+  // never fire usefully.
+  //
+  // Keep the ones already classified as loops: those become a loop suggestion
+  // carrying the autopilot recommendation, which is the correct response to
+  // nudging. Drop only the nudges still heading for a command artifact.
+  const gated = dayGated.filter(candidate =>
+    !!candidate.cadence ||
+    candidate.kind === "loop" ||
+    !isNudgeText(candidate.signature));
+  if (gated.length < dayGated.length) {
+    log(`nudge filter → ${dayGated.length - gated.length} approval phrase(s) dropped; see gradient autopilot nudge`);
+  }
+  log(`mining → ${gated.length} candidate patterns; sending top ${window} to llm`);
 
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });
   if (!backend) log("no LLM backend available — degrading to exact-repeat command suggestions only");
-  const suggestions = await detect(allCandidates, backend, {
+  const suggestions = await detect(gated, backend, {
     limit: window,
     onCap: count => log(`capped to top ${window}; ${count} lower-frequency candidates dropped`),
   });

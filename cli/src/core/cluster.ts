@@ -12,6 +12,39 @@ export function trigrams(s: string): Set<string> {
   return out;
 }
 
+/**
+ * Collapse prompts a forked or resumed session replayed from its parent.
+ *
+ * A resumed session inherits its parent's turns verbatim, timestamp included,
+ * so one typed prompt can present as N occurrences across N session ids. Two
+ * genuinely separate sends are milliseconds apart at worst; an identical
+ * millisecond timestamp within one cluster is replay, not repetition.
+ *
+ * Occurrences with no timestamp are kept — absence of proof is not proof of a
+ * replay, and dropping them would silently undercount older transcripts.
+ */
+export function dedupeReplayedOccurrences(candidates: Candidate[]): Candidate[] {
+  return candidates.map(candidate => {
+    if (candidate.occurrences.length < 2) return candidate;
+    const seen = new Set<string>();
+    const occurrences = candidate.occurrences.filter(occurrence => {
+      if (!occurrence.ts) return true;
+      if (seen.has(occurrence.ts)) return false;
+      seen.add(occurrence.ts);
+      return true;
+    });
+    if (occurrences.length === candidate.occurrences.length) return candidate;
+    const sessionIds = [...new Set(occurrences.map(occurrence => occurrence.sessionId))];
+    return {
+      ...candidate,
+      occurrences,
+      count: occurrences.length,
+      sessions: sessionIds.length,
+      sessionIds,
+    };
+  });
+}
+
 export function similarity(a: string, b: string): number {
   if (a === b) return 1;
   const ta = trigrams(a), tb = trigrams(b);

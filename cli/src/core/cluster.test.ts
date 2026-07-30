@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalize, similarity, cluster } from "./cluster.js";
+import { normalize, similarity, cluster, dedupeReplayedOccurrences } from "./cluster.js";
 import type { Turn } from "./types.js";
 
 const u = (text: string, sessionId = "s"): Turn => ({ ts: "t", project: "p", role: "user", text, sessionId });
@@ -89,5 +89,53 @@ describe("cluster", () => {
     expect(merged.occurrences.length).toBe(3);
     expect(merged.memberSignatures.length).toBeGreaterThanOrEqual(2);
     expect(merged.memberSignatures).toContain("push and create a pull request");
+  });
+});
+
+describe("dedupeReplayedOccurrences", () => {
+  const candidate = (occurrences: { ts: string; sessionId: string }[]) => ({
+    kind: "unknown" as const,
+    signature: "sig",
+    examples: ["x"],
+    count: occurrences.length,
+    sessions: new Set(occurrences.map(o => o.sessionId)).size,
+    sessionIds: [...new Set(occurrences.map(o => o.sessionId))],
+    occurrences,
+    memberSignatures: [],
+    confidence: "high" as const,
+  });
+
+  it("collapses the same instant replayed into several forked sessions", () => {
+    // Observed shape: three sessions inherited one typed prompt verbatim.
+    const [out] = dedupeReplayedOccurrences([candidate([
+      { ts: "2026-07-19T00:07:09.199Z", sessionId: "a" },
+      { ts: "2026-07-19T00:07:09.199Z", sessionId: "b" },
+      { ts: "2026-07-19T00:07:09.199Z", sessionId: "c" },
+    ])]);
+    expect(out.count).toBe(1);
+    expect(out.sessions).toBe(1);
+    expect(out.occurrences).toHaveLength(1);
+  });
+
+  it("keeps genuinely separate sends, even seconds apart in different sessions", () => {
+    const [out] = dedupeReplayedOccurrences([candidate([
+      { ts: "2026-07-19T00:06:18.324Z", sessionId: "a" },
+      { ts: "2026-07-19T00:06:42.562Z", sessionId: "b" },
+    ])]);
+    expect(out.count).toBe(2);
+    expect(out.sessions).toBe(2);
+  });
+
+  it("keeps occurrences with no timestamp rather than guessing they are replays", () => {
+    const [out] = dedupeReplayedOccurrences([candidate([
+      { ts: "", sessionId: "a" },
+      { ts: "", sessionId: "b" },
+    ])]);
+    expect(out.count).toBe(2);
+  });
+
+  it("returns the candidate untouched when nothing is duplicated", () => {
+    const input = candidate([{ ts: "2026-07-19T00:00:00.000Z", sessionId: "a" }]);
+    expect(dedupeReplayedOccurrences([input])[0]).toBe(input);
   });
 });

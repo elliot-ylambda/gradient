@@ -327,7 +327,7 @@ describe("main", () => {
     }));
   });
 
-  it("shows an estimated minutes-saved-per-month next to each scan suggestion when known", async () => {
+  it("never shows the minutes-saved estimate, which is derived from the count it inflates with", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-cli-home-"));
     vi.mocked(scan).mockResolvedValueOnce([{
       id: "a", name: "ship", title: "Ship things", rationale: "r", confidence: "high",
@@ -337,7 +337,34 @@ describe("main", () => {
     const logs: string[] = [];
     const code = await main(["scan", "--no-review"], { home, log: m => logs.push(m) });
     expect(code).toBe(0);
-    expect(logs.join("\n")).toContain("≈20m/mo");
+    const output = logs.join("\n");
+    expect(output).not.toContain("20m/mo");
+    // The evidence that is actually counted stays visible.
+    expect(output).toContain("seen 5×");
+    expect(output).toContain("3 session(s)");
+  });
+
+  it("separates measured (tool-event) suggestions from prompt-inferred ones", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-cli-home-"));
+    vi.mocked(scan).mockResolvedValueOnce([
+      {
+        id: "a", name: "ship", title: "Ship things", rationale: "r", confidence: "high",
+        evidence: { count: 5, sessions: 3 },
+        payload: { type: "command", commandName: "ship", body: "b" },
+      },
+      {
+        id: "b", name: "notify-when-waiting", title: "Ping when idle", rationale: "r", confidence: "high",
+        evidence: { count: 30, sessions: 23 },
+        payload: { type: "hook", event: "Notification", subcommand: "notify" },
+      },
+    ]);
+    const logs: string[] = [];
+    expect(await main(["scan", "--no-review"], { home, log: m => logs.push(m) })).toBe(0);
+    const output = logs.join("\n");
+    expect(output).toContain("measured");
+    expect(output).toContain("possible");
+    // The measured tier is printed first, so the hook leads.
+    expect(output.indexOf("notify-when-waiting")).toBeLessThan(output.indexOf("ship"));
   });
 
   it("omits the minutes-saved suffix for a suggestion cached before the estimate existed", async () => {

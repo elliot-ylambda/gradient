@@ -15,6 +15,7 @@ import { setAutopilotMode, autopilotStatus } from "./commands/autopilot.js";
 import { migrate } from "./commands/migrate.js";
 import { recallHook, recallStatus, setRecall, type RecallHookInput } from "./commands/recall.js";
 import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
+import { isMeasured } from "./core/classify.js";
 import { spawnDetached } from "./core/spawn.js";
 import { resolveScanScope } from "./core/scope.js";
 import { isNudge } from "./core/playbook.js";
@@ -26,7 +27,7 @@ import { boardDigest, boardRefresh, boardShow, setBoard } from "./commands/board
 import { recap } from "./commands/recap.js";
 import { bundleCommand } from "./commands/bundle.js";
 import { notify } from "./commands/notify.js";
-import type { Assistant } from "./core/types.js";
+import type { Assistant, Suggestion } from "./core/types.js";
 import { stripUnsafeControls } from "./core/security.js";
 import { readlineConfirm, type Confirm } from "./core/confirm.js";
 import { instructionEffectivenessLine } from "./core/insights.js";
@@ -193,16 +194,30 @@ async function runScanFlow(
     },
     { log, config },
   );
-  for (const s of out) {
-    const leverage = s.evidence.estMinutesSavedPerMonth
-      ? ` ${c.dim(`≈${s.evidence.estMinutesSavedPerMonth}m/mo`)}`
-      : "";
+  // Two tiers, measured first. Suggestions built from counted tool events
+  // (compactions, idle waits, failure loops) are direct measurements; those
+  // built from prompt text are interpretations of what repeated phrasing meant.
+  // Dogfooding found every good suggestion in the first group and most of the
+  // noise in the second, so the split is the ranking that matters.
+  const measured = out.filter(isMeasured);
+  const possible = out.filter(s => !isMeasured(s));
+  const renderSuggestion = (s: Suggestion): void => {
+    // estMinutesSavedPerMonth is derived from the occurrence count, so any
+    // count inflation lands straight in it. Kept in the cache, never shown.
     log(
-      `  ${confidenceChip(s.confidence)} ${c.bold(terminalSafeLine(s.name))}  ${c.muted(terminalSafeLine(s.title))}  ${c.dim(`(seen ${s.evidence.count}×)`)}${leverage}`,
+      `  ${confidenceChip(s.confidence)} ${c.bold(terminalSafeLine(s.name))}  ${c.muted(terminalSafeLine(s.title))}  ${c.dim(`(seen ${s.evidence.count}× · ${s.evidence.sessions} session(s))`)}`,
     );
     if (isNudge(s)) {
       log(`      ${c.dim("tip: this is what autopilot automates →")} ${c.violet("gradient autopilot nudge")}`);
     }
+  };
+  if (measured.length > 0) {
+    log(`\n${c.bold("measured")} ${c.dim("— counted from tool events")}`);
+    for (const s of measured) renderSuggestion(s);
+  }
+  if (possible.length > 0) {
+    log(`\n${c.bold("possible")} ${c.dim("— inferred from repeated prompts; check the evidence before installing")}`);
+    for (const s of possible) renderSuggestion(s);
   }
   if (out.length === 0) {
     log(`\n${c.dim("no suggestions found — try a wider scan:")} ${c.violet("gradient scan --user")}`);

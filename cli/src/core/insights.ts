@@ -5,7 +5,7 @@ import { cleanupStale, listStateFiles, loadState } from "./state.js";
 import type { InstructionTally } from "./audit.js";
 import { commandKey } from "./command.js";
 
-const NUDGE_RE = /^(continue|go on|keep going|next|what'?s next|proceed|yes|y|ok|okay|do it|go|sure|yep|good|great|perfect|lgtm|looks good|approved?|ship it|sounds good)[.!?]*$/i;
+const NUDGE_RE = /^(continue( (from )?where you left off)?|go on|keep going|carry on|resume|next|what'?s next|proceed|yes|y|ok|okay|do it|go|sure|yep|good|great|perfect|lgtm|looks good( to me)?|approved?|ship it|sounds good)[.!?,]*$/i;
 
 export function isNudgeText(text: string): boolean {
   return NUDGE_RE.test(text.trim());

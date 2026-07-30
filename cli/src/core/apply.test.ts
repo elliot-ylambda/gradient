@@ -9,6 +9,7 @@ import { remove } from "../commands/remove.js";
 import type { Suggestion } from "./types.js";
 import { approvalMatches, loadArtifactApprovals } from "./approvals.js";
 import { loadPlaybookPin, pinState, parseProjectPlaybook } from "./playbook.js";
+import { loadConfig, projectKey } from "../config.js";
 
 const base = { id: "x", title: "t", rationale: "r", evidence: { count: 3, sessions: 2 }, confidence: "high" as const };
 
@@ -450,5 +451,40 @@ describe("applySuggestion project-playbook", () => {
     const once = await readFile(join(proj, "gradient.md"), "utf8");
     await applySuggestion(pbSuggestion(), proj, { home });
     expect(await readFile(join(proj, "gradient.md"), "utf8")).toBe(once);
+  });
+});
+
+describe("consent-gated hooks (issue #29)", () => {
+  const checkpointSuggestion = {
+    id: "c1", name: "checkpoint-before-compaction", title: "t", rationale: "r",
+    evidence: { count: 10, sessions: 10 }, confidence: "high" as const,
+    payload: { type: "hook" as const, event: "PreCompact", subcommand: "checkpoint" },
+  };
+
+  it("grants continuity consent so the installed hook is not a no-op", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-consent-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-consent-home-"));
+    await applySuggestion(checkpointSuggestion, dir, { home });
+    const config = await loadConfig(home);
+    expect(config.continuityProjects).toContain(projectKey(dir));
+  });
+
+  it("does not grant consent for hooks that need none", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-consent-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-consent-home-"));
+    await applySuggestion({
+      ...checkpointSuggestion,
+      id: "n1", name: "notify-when-waiting",
+      payload: { type: "hook" as const, event: "Notification", matcher: "permission_prompt|idle_prompt", subcommand: "notify" },
+    }, dir, { home });
+    expect((await loadConfig(home)).continuityProjects ?? []).toEqual([]);
+  });
+
+  it("is idempotent across repeated approvals", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-consent-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-consent-home-"));
+    await applySuggestion(checkpointSuggestion, dir, { home });
+    await applySuggestion(checkpointSuggestion, dir, { home });
+    expect((await loadConfig(home)).continuityProjects).toEqual([projectKey(dir)]);
   });
 });

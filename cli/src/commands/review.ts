@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import type { Assistant, Suggestion } from "../core/types.js";
-import { applySuggestion, type ApplyResult } from "../core/apply.js";
+import { applySuggestion, hookNeedsConsent, type ApplyResult } from "../core/apply.js";
 import { isNudge, loadProjectPlaybook, loadPlaybookPin, savePlaybookPin, pinState, type PinState } from "../core/playbook.js";
 import { loadSuggestions, saveSuggestions, syncApprovedPlaybook } from "./apply.js";
 import { loadConfig, resolveCheapModel, resolveTargets } from "../config.js";
@@ -83,7 +83,13 @@ function renderedText(
               `installs a ${rendered.install.event} hook (matcher: ${rendered.install.matcher ?? "all tools"})\n` +
               `that runs automatically: ${rendered.install.command}`
             : `.claude/settings.local.json (merged on approve)\n${rendered.settingsPatch ?? ""}`;
-  return `[${target}]\n${body}`;
+  // Approving a gated hook also grants its consent, which the user must see
+  // before choosing rather than discover afterwards in config.json.
+  const consentNote = suggestion.payload.type === "hook" && hookNeedsConsent(suggestion.payload.subcommand)
+    ? "\napproving also enables continuity for this project (what `gradient continuity on` does);\n" +
+      "without it this hook would install and then do nothing"
+    : "";
+  return `[${target}]\n${body}${consentNote}`;
 }
 
 export function suggestionPreview(

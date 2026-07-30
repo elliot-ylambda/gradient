@@ -554,9 +554,11 @@ describe("scan", () => {
         collectFn: async () => ["fake.jsonl"],
         parseFn: async () => ({
           turns: [
-            { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s1" },
-            { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s2" },
-            { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s3" },
+            // Distinct days: a habit by definition spans more than one sitting,
+            // and distinct timestamps keep these from reading as fork replays.
+            { ts: "2026-07-01T10:00:00.000Z", project: "x", role: "user", text: "push and create a pull request", sessionId: "s1" },
+            { ts: "2026-07-02T10:00:00.000Z", project: "x", role: "user", text: "push and create a pull request", sessionId: "s2" },
+            { ts: "2026-07-03T10:00:00.000Z", project: "x", role: "user", text: "push and create a pull request", sessionId: "s3" },
           ],
           events: [],
         }),
@@ -608,7 +610,7 @@ describe("scan", () => {
         collectFn: async () => ["fake.jsonl"],
         parseFn: async () => ({
           turns: Array.from({ length: 3 }, (_, i) => ({
-            ts: "t", project: "x", role: "user" as const,
+            ts: `2026-07-0${i + 1}T10:00:00.000Z`, project: "x", role: "user" as const,
             text: "continue until actually done", sessionId: `s${i}`,
           })),
           events: [],
@@ -815,7 +817,9 @@ describe("scan", () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const claudeTurns = ["c1", "c2"].map(sessionId => ({
-      ts: "2026-07-01T00:00:00Z",
+      // Distinct instants on distinct days: identical timestamps now read as a
+      // fork replay, and a one-day pattern is held back as project history.
+      ts: sessionId === "c1" ? "2026-07-01T00:00:00Z" : "2026-07-02T00:00:00Z",
       project: "gradient",
       role: "user" as const,
       sessionId,
@@ -823,7 +827,7 @@ describe("scan", () => {
       assistant: "claude-code" as const,
     }));
     const codexTurns = ["codex:x1", "codex:x2"].map(sessionId => ({
-      ts: "2026-07-01T00:01:00Z",
+      ts: sessionId === "codex:x1" ? "2026-07-01T00:01:00Z" : "2026-07-02T00:01:00Z",
       project: "gradient",
       role: "user" as const,
       sessionId,
