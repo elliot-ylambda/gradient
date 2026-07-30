@@ -5,6 +5,7 @@ import { assertInside } from "./security.js";
 import { addEntry, artifactHasMarker, loadManifest, manifestTarget } from "./manifest.js";
 import { safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
 import { installHook, removeHook } from "./settings.js";
+import { DEFAULT_HOOK_BINARY } from "./hookBinary.js";
 import { validateSuggestion } from "./validate.js";
 import { hookApprovalContent, recordArtifactApproval } from "./approvals.js";
 import { spliceLine } from "./playbook-splice.js";
@@ -53,6 +54,7 @@ export async function applySuggestion(
     targets?: Assistant[];
     cheapModel?: string;
     home?: string;
+    hookBinary?: string;
   } = {},
 ): Promise<ApplyResult> {
   validateSuggestion(suggestion);
@@ -76,6 +78,7 @@ export async function applySuggestion(
         target: opts.emitTarget,
         assistant: target,
         cheapModel: opts.cheapModel,
+        ...(opts.hookBinary !== undefined ? { hookBinary: opts.hookBinary } : {}),
       });
       let type: ArtifactType;
       let written = "";
@@ -144,7 +147,7 @@ export async function applySuggestion(
         const install = result.install ?? {
           event: suggestion.payload.event,
           ...(suggestion.payload.matcher !== undefined ? { matcher: suggestion.payload.matcher } : {}),
-          command: `gradient ${suggestion.payload.subcommand}`,
+          command: `${opts.hookBinary ?? DEFAULT_HOOK_BINARY} ${suggestion.payload.subcommand}`,
         };
         const settingsFile = await installHook(projectDir, install.event, install.command, {
           ...(install.matcher !== undefined ? { matcher: install.matcher } : {}),

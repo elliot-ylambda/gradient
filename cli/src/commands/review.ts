@@ -10,6 +10,7 @@ import { clarifiedWorkflowBody } from "../core/detect.js";
 import { stripUnsafeControls } from "../core/security.js";
 import { proseDiff } from "../core/playbook-splice.js";
 import { addDismissal, isDismissed, loadDismissed } from "../core/dismiss.js";
+import { resolveHookBinary } from "../core/hookBinary.js";
 
 export type ReviewDecision = "approve" | "skip" | "explain" | "quit";
 
@@ -58,11 +59,17 @@ function renderedText(
   target: Assistant,
   emitTarget: EmitTarget,
   cheapModel?: string,
+  hookBinary?: string,
 ): string {
   if (target === "codex" && suggestion.payload.type !== "command" && suggestion.payload.type !== "rule") {
     return `[${target}]\n(skipped: this artifact type is not supported)`;
   }
-  const rendered = emit(suggestion, { target: emitTarget, assistant: target, cheapModel });
+  const rendered = emit(suggestion, {
+    target: emitTarget,
+    assistant: target,
+    cheapModel,
+    ...(hookBinary !== undefined ? { hookBinary } : {}),
+  });
   const body = rendered.kind === "command" || rendered.kind === "skill" || rendered.kind === "rule"
     ? `${rendered.path}\n${rendered.content}`
     : rendered.kind === "loop"
@@ -82,10 +89,10 @@ function renderedText(
 export function suggestionPreview(
   suggestion: Suggestion,
   emitTarget: EmitTarget,
-  opts: { targets?: Assistant[]; cheapModel?: string } = {},
+  opts: { targets?: Assistant[]; cheapModel?: string; hookBinary?: string } = {},
 ): string {
   return (opts.targets ?? ["claude-code"])
-    .map(target => renderedText(suggestion, target, emitTarget, opts.cheapModel))
+    .map(target => renderedText(suggestion, target, emitTarget, opts.cheapModel, opts.hookBinary))
     .join("\n\n");
 }
 
@@ -120,6 +127,9 @@ export async function review(
   const emitTarget = config.emitTarget ?? "skill";
   const targets = resolveTargets(config);
   const cheapModel = resolveCheapModel(config);
+  // Previews must show the same command the approval will install.
+  const hookBinary = resolveHookBinary();
+  let hookWarned = false;
   const out: ApplyResult[] = [];
   for (let index = 0; index < suggestions.length; index++) {
     let suggestion = suggestions[index];
@@ -146,17 +156,22 @@ export async function review(
         suggestion,
         index,
         suggestions.length,
-        suggestionPreview(suggestion, emitTarget, { targets, cheapModel }),
+        suggestionPreview(suggestion, emitTarget, { targets, cheapModel, hookBinary: hookBinary.command }),
       );
       if (decision === "explain") opts.onExplain?.(suggestionExplanation(suggestion));
     } while (decision === "explain");
     if (decision === "quit") break;
     if (decision === "approve") {
+      if (suggestion.payload.type === "hook" && hookBinary.warning && !hookWarned) {
+        opts.onSkip?.(hookBinary.warning);
+        hookWarned = true;
+      }
       out.push(await applySuggestion(suggestion, projectDir, {
         emitTarget,
         targets,
         cheapModel,
         home: opts.home,
+        hookBinary: hookBinary.command,
       }));
     } else if (decision === "skip") {
       await addDismissal(projectDir, suggestion);

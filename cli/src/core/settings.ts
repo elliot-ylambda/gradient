@@ -127,7 +127,7 @@ export async function installHook(
     // ENOENT → no existing settings; start fresh
   }
   const merged = mergeHookIntoSettings(existing, event, command, opts);
-  await safeWriteFile(projectDir, path, JSON.stringify(merged, null, 2));
+  await safeWriteFile(projectDir, path, `${JSON.stringify(merged, null, 2)}\n`);
   return path;
 }
 
@@ -148,7 +148,7 @@ export async function removeHook(
     throw new Error(`refusing to overwrite unreadable ${path}: ${(e as Error).message}`);
   }
   const merged = removeHookFromSettings(existing, event, command, matcher);
-  await safeWriteFile(projectDir, path, JSON.stringify(merged, null, 2));
+  await safeWriteFile(projectDir, path, `${JSON.stringify(merged, null, 2)}\n`);
   return path;
 }
 

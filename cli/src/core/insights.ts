@@ -99,6 +99,10 @@ export interface CostRow {
   tokens: number;
   prompts: number;
   line: string;
+  /** True when the suggested action actually avoids re-sending these tokens.
+   *  Nudges are not recoverable: autopilot still sends the same turn (plus a
+   *  judge call), so automating them buys back attention, never tokens. */
+  recoverable: boolean;
 }
 
 function tokensFor(turn: Turn): number {
@@ -110,6 +114,13 @@ function tokensFor(turn: Turn): number {
 
 function costLine(tokens: number, prompts: number, label: string, action: string): string {
   return `≈${tokens.toLocaleString("en-US")} tokens · ${prompts} ${label} · ${action}`;
+}
+
+/** Same measurement, honest claim: the tokens were spent, but the suggested
+ *  action does not win them back — it removes the turn you had to type. */
+function attentionLine(tokens: number, prompts: number, label: string, action: string): string {
+  return `${prompts} ${label} across ≈${tokens.toLocaleString("en-US")} tokens of turns you had to drive ` +
+    `(automating saves attention, not tokens) · ${action}`;
 }
 
 /** Token-attributed cost of habits gradient can remove. Tokens stay approximate:
@@ -149,20 +160,25 @@ export function buildCostRows(turns: Turn[], ignore: RegExp[] = []): CostRow[] {
   }
 
   const rows: CostRow[] = [];
-  if (totals.nudges.prompts > 0) rows.push({
-    metric: "nudges",
-    ...totals.nudges,
-    line: costLine(totals.nudges.tokens, totals.nudges.prompts, "nudge prompt(s)", "gradient autopilot nudge"),
-  });
+  // Recoverable rows first: a reader scanning top-down should meet the tokens
+  // an action actually wins back before the (usually much larger) attention row.
   if (totals.continuations.prompts > 0) rows.push({
     metric: "continuations",
     ...totals.continuations,
+    recoverable: true,
     line: costLine(totals.continuations.tokens, totals.continuations.prompts, "context re-explain(s)", "gradient continuity on"),
   });
   if (totals.pastes.prompts > 0) rows.push({
     metric: "pastes",
     ...totals.pastes,
+    recoverable: true,
     line: costLine(totals.pastes.tokens, totals.pastes.prompts, "repeated error paste(s)", "gradient scan"),
+  });
+  if (totals.nudges.prompts > 0) rows.push({
+    metric: "nudges",
+    ...totals.nudges,
+    recoverable: false,
+    line: attentionLine(totals.nudges.tokens, totals.nudges.prompts, "nudge prompt(s)", "gradient autopilot nudge"),
   });
   return rows;
 }

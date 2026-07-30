@@ -338,7 +338,11 @@ export async function main(
         return 0;
       }
       case "apply": {
-        const applied = await applyByIds(positionals, projectDir, { home: io.home, onSkip: log });
+        const applied = await applyByIds(positionals, projectDir, {
+          home: io.home,
+          onSkip: log,
+          onNote: message => log(c.coral(terminalSafeLine(message))),
+        });
         for (const a of applied) {
           for (const write of a.writes) {
             log(`${c.ok("wrote")} ${c.muted(terminalSafeLine(write.path))}${write.target === "codex" ? c.dim(" [codex]") : ""}`);
@@ -384,6 +388,12 @@ export async function main(
       }
       case "list": {
         const entries = await list(projectDir);
+        if (entries.length === 0) {
+          // Printing nothing here is indistinguishable from a crash.
+          log(c.muted("no generated artifacts in this project yet"));
+          log(c.dim("run gradient scan, then gradient review"));
+          return 0;
+        }
         const showTargets = entries.some(entry => entry.target === "codex");
         for (const e of entries) {
           const target = showTargets ? `\t${c.dim(e.target ?? "claude-code")}` : "";

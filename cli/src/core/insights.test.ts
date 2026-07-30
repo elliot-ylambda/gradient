@@ -174,7 +174,7 @@ describe("renderInsightsHtml", () => {
       errorPastes: 1,
     },
     recommendations: [{ metric: "nudges", line: "try <gradient autopilot nudge> & friends" }],
-    costs: [{ metric: "nudges" as const, tokens: 123, prompts: 3, line: "≈123 tokens · 3 nudges" }],
+    costs: [{ metric: "nudges" as const, tokens: 123, prompts: 3, recoverable: false, line: "≈123 tokens · 3 nudges" }],
     toolActivity: { failureLoops: 2, postEditRituals: 1 },
   };
 

@@ -14,11 +14,13 @@ const PLAYBOOK_FILE_MAX_BYTES = 256_000;
 
 export const DEFAULT_PLAYBOOK = `# gradient.md — autopilot playbook
 
-The Rules section is yours — edit freely. \`gradient scan\` refreshes only the
-region between the mined markers.
+The Rules section is yours — edit freely. Nothing but the region between the
+mined markers is ever rewritten, and only suggestions you approve land there:
+\`gradient scan\` proposes, \`gradient review\` approves, and approval is what
+updates this file.
 
 ${MINED_START}
-_(run \`gradient scan\` to mine your habits into this section)_
+_(approve suggestions with \`gradient review\` to mine your habits into this section)_
 ${MINED_END}
 
 ## Rules

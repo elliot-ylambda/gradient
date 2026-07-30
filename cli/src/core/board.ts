@@ -296,7 +296,38 @@ export async function collectRepoState(
 export type GhRunner = (args: string[], cwd: string) => Promise<string>;
 export type PrResult = { lines: string[]; staleMs?: number } | "unavailable";
 
-interface PrCache { fetchedAt: number; lines: string[] }
+/** Bumped when the query changes, so caches written by an older gradient
+ *  (which listed every author on the `origin` repo) are discarded instead of
+ *  replayed for up to PR_CACHE_FRESH_MS. */
+const PR_QUERY_VERSION = 2;
+
+/** Fetch more than we show so truncation is detectable and can be announced
+ *  rather than silently dropping rows off the end of the board. */
+const PR_FETCH_LIMIT = 20;
+const PR_DISPLAY_LIMIT = 10;
+
+interface PrCache { fetchedAt: number; lines: string[]; queryVersion?: number }
+
+/** Owner/repo for the remote this branch actually pushes to.
+ *
+ * `gh pr list` with no --repo resolves through `origin`, which on a fork points
+ * at the upstream vendor — so a fork's board filled up with the upstream's PRs.
+ * Prefer the push remote and fall back to origin only when nothing else is set. */
+export async function pushRepoSlug(
+  boardRoot: string,
+  gitRunner: typeof git = git,
+): Promise<string | null> {
+  const branch = await gitRunner(["rev-parse", "--abbrev-ref", "HEAD"], boardRoot);
+  const remote =
+    (branch && await gitRunner(["config", "--get", `branch.${branch}.pushRemote`], boardRoot)) ||
+    await gitRunner(["config", "--get", "remote.pushDefault"], boardRoot) ||
+    (branch && await gitRunner(["config", "--get", `branch.${branch}.remote`], boardRoot)) ||
+    "origin";
+  const url = await gitRunner(["remote", "get-url", "--push", remote], boardRoot);
+  if (!url) return null;
+  const match = /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/.exec(url.trim());
+  return match ? `${match[1]}/${match[2]}` : null;
+}
 
 const defaultGh: GhRunner = async (args, cwd) => {
   const { stdout } = await execFileP("gh", args, {
@@ -309,7 +340,7 @@ const defaultGh: GhRunner = async (args, cwd) => {
 
 export async function openPrs(
   boardRoot: string,
-  opts: { home?: string; now?: number; gh?: GhRunner } = {},
+  opts: { home?: string; now?: number; gh?: GhRunner; git?: typeof git } = {},
 ): Promise<PrResult> {
   const home = opts.home ?? homedir();
   const now = opts.now ?? Date.now();
@@ -319,7 +350,8 @@ export async function openPrs(
   try {
     const parsed = JSON.parse(await safeReadFile(home, cachePath, { maxBytes: 100_000 })) as PrCache;
     if (Number.isFinite(parsed.fetchedAt) && Array.isArray(parsed.lines) &&
-      parsed.lines.every(line => typeof line === "string")) {
+      parsed.lines.every(line => typeof line === "string") &&
+      parsed.queryVersion === PR_QUERY_VERSION) {
       cache = parsed;
     }
   } catch {
@@ -328,17 +360,32 @@ export async function openPrs(
   if (cache && now - cache.fetchedAt < PR_CACHE_FRESH_MS) return { lines: cache.lines };
   try {
     const gh = opts.gh ?? defaultGh;
+    const slug = await pushRepoSlug(boardRoot, opts.git ?? git);
     const raw = JSON.parse(await gh(
-      ["pr", "list", "--json", "number,headRefName,baseRefName", "--limit", "20"],
+      [
+        "pr", "list",
+        "--json", "number,headRefName,baseRefName",
+        // The board reports what *you* have in flight; without this a busy
+        // upstream drowns it in other people's branches.
+        "--author", "@me",
+        ...(slug ? ["--repo", slug] : []),
+        "--limit", String(PR_FETCH_LIMIT),
+      ],
       boardRoot,
     )) as Array<{ number?: unknown; headRefName?: unknown; baseRefName?: unknown }>;
-    const lines = raw
-      .filter(pr => typeof pr.number === "number" && typeof pr.headRefName === "string")
+    const kept = raw
+      .filter(pr => typeof pr.number === "number" && typeof pr.headRefName === "string");
+    const lines = kept
+      .slice(0, PR_DISPLAY_LIMIT)
       .map(pr => `#${pr.number} ${redact(String(pr.headRefName)).slice(0, 80)} → ` +
-        `${redact(String(pr.baseRefName ?? "main")).slice(0, 80)}`)
-      .slice(0, 10);
+        `${redact(String(pr.baseRefName ?? "main")).slice(0, 80)}`);
+    if (kept.length > lines.length) lines.push(`…and ${kept.length - lines.length} more`);
     await safeMkdir(home, stateDir);
-    await safeWriteFile(home, cachePath, JSON.stringify({ fetchedAt: now, lines } satisfies PrCache));
+    await safeWriteFile(
+      home,
+      cachePath,
+      JSON.stringify({ fetchedAt: now, lines, queryVersion: PR_QUERY_VERSION } satisfies PrCache),
+    );
     return { lines };
   } catch {
     if (cache) return { lines: cache.lines, staleMs: now - cache.fetchedAt };
