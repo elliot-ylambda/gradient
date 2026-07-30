@@ -60,6 +60,59 @@ verbs, which is a larger win than making it work.
 
 If the set is meaningful, proceed to 1.1.
 
+### 0.1 result — gate FAILED, delete recall
+
+Measured on `clinch-terminal`: 104 sessions, 876 raw user turns, **279 genuine
+human prompts** after gradient's own `filterPrompts` (≥15 chars, non-slash).
+
+```
+hints @0.55 — Jaccard (today)      0   (0.0%)
+hints @0.55 — containment (fix)   30  (10.8%)
+```
+
+Three findings, each independently sufficient:
+
+1. **Today recall has never fired.** Zero hints across 279 eligible prompts. It
+   has delivered no value in its entire life.
+2. **The proposed fix makes it worse, not better.** Of the 30 containment hits,
+   at most 2 are correct by inspection — `"Push it all to main."` → `ship` and
+   `"When I click the add button ... in the footer"` → `clinch-toolbelt`. That
+   is ~7% precision against the ≥0.8 bar set in 1.1. Representative failures:
+
+   ```
+   [0.72 ] build        "Delete the git worktrees."
+   [0.714] build        "Yes just implement it."
+   [0.571] diff         "Ok push this to main."
+   [0.556] codex-build  "Open it in Chrome."
+   [0.827] sentry-cli   "# Deploy to Vercel ..."
+   ```
+
+   The same prompt also matches three different artifacts across occurrences,
+   so the ranking is not merely imprecise, it is incoherent.
+3. **Native dispatch already does this job well.** In the same sessions the
+   assistant invoked skills correctly 90+ times — `brainstorming` 30,
+   `systematic-debugging` 20, `writing-plans` 9, `subagent-driven-development` 7,
+   `using-git-worktrees` 5 — with no help from recall. Of those ten skills,
+   exactly one (`plan-review`) appears in recall's index at all. recall indexes
+   26 artifacts that are essentially never invoked while being blind to the ones
+   that are.
+
+**Decision: delete `recall`** in Part 2 — `commands/recall.ts`, `core/recall.ts`,
+the `UserPromptSubmit` hook, the per-project index, `config.recallProjects`, the
+`refreshRecallIndex` calls in `apply`/`scan`, and the recall row in `insights`.
+Skip 1.1 entirely. Recall is now off in `clinch-terminal`.
+
+Two spin-off findings worth their own work:
+
+- **The injected-text filter leaks.** ~13 of the 30 hits were skill-injected
+  preambles ("Review this change for security vulnerabilities…", "## Handoff
+  summary", "# Deploy to Vercel") that `filterPrompts` classified as human. Any
+  prompt-derived mining inherits this contamination, which is a second
+  explanation for `scan`'s low precision — fix it as part of 1.3.
+- **Nudges are being scored as workflow requests.** "Yes just implement it",
+  "yes, implement it", "And I clicked it" are continuations, not requests. 1.3
+  should exclude nudge-classified prompts from candidate generation outright.
+
 ## Part 1 — Make the survivors actually work
 
 ### 1.1 recall: replace Jaccard with containment (only if 0.1 passes)

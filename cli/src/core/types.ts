@@ -51,6 +51,10 @@ export interface Turn {
   assistant?: Assistant;
   /** Tokens consumed by the model turn this prompt initiated, when recorded. */
   usageTokens?: number;
+  /** How the prompt entered the session, when the transcript records it.
+   * Authoritative for human-vs-injected: text heuristics cannot distinguish a
+   * typed request from a skill body the harness expanded into the user role. */
+  promptSource?: string;
 }
 
 /** One tool invocation mined from a transcript. Only Bash and file-edit tools
