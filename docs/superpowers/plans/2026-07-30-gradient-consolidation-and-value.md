@@ -283,8 +283,8 @@ planned:
 | 2 delete `bundle` | Not done. Kept, hidden from help: packaging artifacts for a team is a capability nothing else provides. |
 | 3.1 recurring-failure ledger | Partly superseded. Failure loops are mined and tiered as measured; the cross-session ledger is unbuilt, and the replay fix showed most "recurring" failures were one failure counted twice. |
 | 3.2 instruction effectiveness | **Gated and deleted.** Rebuilt both halves first, measured 0 true positives in 31 candidates across 61 projects, then removed it (−1,015 LOC). |
-| 3.3 context-death forensics | Not started. |
-| 3.4 cross-session collision guard | Not started. |
+| 3.3 context-death forensics | **Gated, not built.** Context death is diffuse: median 26% for the largest single source, and only 2 of 78 compacted sessions have any source above 40%. Nothing to name in a `.claudeignore`. The mitigation (`gradient on continuity`) already ships. |
+| 3.4 cross-session collision guard | **Gated, not built.** 844 concurrent same-directory session pairs produced 6 distinct co-edited files ever, 2 of them `MEMORY.md`. A `PreToolUse` hook on every write to fire ~3 times in 6 months — and the board already prints what other sessions are editing. |
 
 Two deliberate deviations, both argued at the commit:
 
