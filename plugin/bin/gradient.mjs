@@ -376,7 +376,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.7.0" : require2("../package.json").version;
+    VERSION = true ? "0.7.1" : require2("../package.json").version;
   }
 });
 
@@ -20402,6 +20402,7 @@ var init_confirm = __esm({
 // src/cli.ts
 var cli_exports = {};
 __export(cli_exports, {
+  RETIRED: () => RETIRED,
   main: () => main,
   parseCliArgs: () => parseCliArgs,
   posixShellQuote: () => posixShellQuote
@@ -20861,13 +20862,19 @@ ${c.dim("try it:")} claude --plugin-dir ${posixShellQuote(displayDir)}`);
         }
         return 0;
       }
-      default:
+      default: {
+        const moved = RETIRED.get(command);
+        if (moved) {
+          log(c.dim(`gradient ${command} is now ${moved}`));
+          return 0;
+        }
         log(`${c.coral(`unknown command: ${terminalSafeLine2(command)}`)}
 
 ${banner(VERSION)}
 
 ${HELP}`);
         return 2;
+      }
     }
   } catch (e) {
     log(c.coral(`gradient: ${terminalSafeLine2(e.message)}`));
@@ -20887,7 +20894,7 @@ async function readStdinJson() {
     return {};
   }
 }
-var HOOK_TARGETS, HELP;
+var HOOK_TARGETS, RETIRED, HELP;
 var init_cli = __esm({
   "src/cli.ts"() {
     "use strict";
@@ -20926,6 +20933,9 @@ var init_cli = __esm({
       "respond",
       "session-start",
       "recall"
+    ]);
+    RETIRED = /* @__PURE__ */ new Map([
+      ["explain", "part of gradient scan \u2014 every proposal now arrives with its evidence"]
     ]);
     HELP = `gradient \u2014 measure how you actually work, and automate what recurs
 

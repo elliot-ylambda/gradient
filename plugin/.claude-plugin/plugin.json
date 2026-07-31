@@ -1,7 +1,7 @@
 {
   "name": "gradient",
   "description": "Measure how you actually work, from your own Claude Code and Codex history, and automate what recurs. Read-only report, scan that proposes, reversible apply — nothing runs without you turning it on.",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "author": {
     "name": "ylambda"
   },

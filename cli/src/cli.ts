@@ -38,6 +38,25 @@ const HOOK_TARGETS: ReadonlySet<string> = new Set([
   "checkpoint", "recap", "notify", "respond", "session-start", "recall",
 ]);
 
+/**
+ * Retired verbs with no behaviour left to run, which must still not read as
+ * typos while the docs and people's fingers name them.
+ *
+ * Verbs that kept behaviour keep their own `case` above; this is only for the
+ * ones where the answer is a sentence. It is also the list `cli.test.ts` drives:
+ * the previous alias test enumerated three names by hand, so `explain` — which
+ * the surface table promises redirects to `gradient scan`, and which was never
+ * wired up — was invisible to it and shipped in 0.7.0 as `unknown command`.
+ * A test that repeats the implementation's list cannot catch the
+ * implementation's omission.
+ *
+ * `migrate` is deliberately absent: it is documented as deleted outright, not
+ * redirected, so `unknown command` is the honest answer for it.
+ */
+export const RETIRED: ReadonlyMap<string, string> = new Map([
+  ["explain", "part of gradient scan — every proposal now arrives with its evidence"],
+]);
+
 const HELP = `gradient — measure how you actually work, and automate what recurs
 
 Usage:
@@ -602,9 +621,15 @@ export async function main(
         }
         return 0;
       }
-      default:
+      default: {
+        const moved = RETIRED.get(command);
+        if (moved) {
+          log(c.dim(`gradient ${command} is now ${moved}`));
+          return 0;
+        }
         log(`${c.coral(`unknown command: ${terminalSafeLine(command)}`)}\n\n${banner(VERSION)}\n\n${HELP}`);
         return 2;
+      }
     }
   } catch (e) {
     log(c.coral(`gradient: ${terminalSafeLine((e as Error).message)}`));
