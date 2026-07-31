@@ -49,7 +49,9 @@ describe("plugin bundle", () => {
     const r = spawnSync(process.execPath, [bin], { encoding: "utf8", timeout: 15000 });
     expect(r.status).toBe(0);
     expect(r.stdout).toContain(VERSION);   // banner includes the version
-    expect(r.stdout).toContain("gradient scan");  // HELP text
+    // A bare invocation is the report, not help — in a pipe as much as a terminal.
+    expect(r.stdout).toContain("prompts");
+    expect(r.stdout).toContain("features:");
   });
   it("uses the lightweight binary dispatcher as its entrypoint", () => {
     const bundle = readFileSync(join(pluginDir, "bin", "gradient.mjs"), "utf8");
@@ -72,30 +74,48 @@ function frontmatter(skill: string): Record<string, string> {
 }
 
 describe("plugin skills", () => {
-  it("ships exactly scan, review, stats, autopilot", () => {
-    expect(readdirSync(join(pluginDir, "skills")).sort()).toEqual(["autopilot", "review", "scan", "stats"]);
+  const SKILLS = ["features", "report", "scan"];
+
+  it("mirrors the CLI's surface: the report, scan, and the consent verb", () => {
+    expect(readdirSync(join(pluginDir, "skills")).sort()).toEqual(SKILLS);
   });
+
   it("every skill has a description and invokes the bundled bin", () => {
-    for (const s of ["scan", "review", "stats", "autopilot"]) {
+    for (const s of SKILLS) {
       expect(frontmatter(s).description).toBeTruthy();
       const body = readFileSync(join(pluginDir, "skills", s, "SKILL.md"), "utf8");
       expect(body).toContain('node "${CLAUDE_PLUGIN_ROOT}/bin/gradient.mjs"');
-      expect(body).not.toMatch(/(^|[^/])\bgradient (scan|review|apply|stats|autopilot|remove|list|explain|init)/); // no PATH fallback
+      // No PATH fallback: the plugin's own bundle is the only gradient it runs.
+      expect(body).not.toMatch(/(^|[^/])\bgradient (scan|apply|remove|init|on|off)\b/);
     }
   });
-  it("only autopilot is user-invocation-only", () => {
-    expect(frontmatter("autopilot")["disable-model-invocation"]).toBe("true");
-    for (const s of ["scan", "review", "stats"]) {
+
+  // Turning on a background feature installs a hook that runs unattended
+  // afterwards, so it stays the user's decision to make.
+  it("only the consent verb is user-invocation-only", () => {
+    expect(frontmatter("features")["disable-model-invocation"]).toBe("true");
+    for (const s of ["report", "scan"]) {
       expect(frontmatter(s)["disable-model-invocation"]).toBeUndefined();
     }
   });
-  it("includes the shipped insights report in the stats skill", () => {
-    const body = readFileSync(join(pluginDir, "skills", "stats", "SKILL.md"), "utf8");
-    expect(body).toContain('gradient.mjs" stats');
-    expect(body).toContain('gradient.mjs" insights');
+
+  it("points the report skill at the bare invocation, not the retired verbs", () => {
+    const body = readFileSync(join(pluginDir, "skills", "report", "SKILL.md"), "utf8");
+    expect(body).toMatch(/gradient\.mjs"\s*$/m);
+    for (const retired of ["stats", "insights\"", "list", "mirror", "board"]) {
+      expect(body).not.toContain(`gradient.mjs" ${retired}`);
+    }
   });
+
+  it("names every feature the consent verb can toggle", () => {
+    const body = readFileSync(join(pluginDir, "skills", "features", "SKILL.md"), "utf8");
+    for (const feature of ["continuity", "autopilot", "board", "session-scan"]) {
+      expect(body).toContain(feature);
+    }
+  });
+
   it("describes reviewed hooks as installed settings, not printed patches", () => {
-    const body = readFileSync(join(pluginDir, "skills", "review", "SKILL.md"), "utf8");
+    const body = readFileSync(join(pluginDir, "skills", "scan", "SKILL.md"), "utf8");
     expect(body).toContain("local settings path");
     expect(body).not.toContain("hook patches");
   });
