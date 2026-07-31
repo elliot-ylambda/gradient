@@ -5,6 +5,7 @@ import { applySuggestion, type ApplyResult } from "../core/apply.js";
 import { loadConfig, projectCacheDir, resolveCheapModel, resolveTargets } from "../config.js";
 import { safeReadFile, safeWriteFile } from "../core/safeFs.js";
 import { validateSuggestion } from "../core/validate.js";
+import { isRestatement } from "../core/restatement.js";
 import { loadManifest } from "../core/manifest.js";
 import { writePlaybook } from "../core/playbook.js";
 import { resolveHookBinary } from "../core/hookBinary.js";
@@ -34,13 +35,28 @@ export async function loadSuggestions(
       return [];
     }
     const suggestions: Suggestion[] = [];
+    let restated = 0;
     for (const candidate of parsed) {
       try {
         validateSuggestion(candidate);
+        // Re-apply the generation-time filter on read. A cache written by an
+        // older release predates whatever the current one rejects, and nothing
+        // in the file says which release wrote it — the format is a bare array.
+        // Left unfiltered, upgrading silently keeps serving the exact
+        // suggestions the upgrade exists to stop producing, right up until the
+        // user happens to rescan. This is cheap because isRestatement is a pure
+        // predicate over a finished suggestion: no mining state, no model call.
+        if (isRestatement(candidate)) {
+          restated++;
+          continue;
+        }
         suggestions.push(candidate);
       } catch (error) {
         onSkip(`skipping invalid cached suggestion: ${(error as Error).message}`);
       }
+    }
+    if (restated > 0) {
+      onSkip(`dropped ${restated} cached suggestion(s) that restate their own prompts; rescan to refresh`);
     }
     return suggestions;
   } catch (error) {
