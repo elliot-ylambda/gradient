@@ -28,7 +28,6 @@ import { notify } from "./commands/notify.js";
 import type { Assistant, Suggestion } from "./core/types.js";
 import { stripUnsafeControls } from "./core/security.js";
 import { readlineConfirm, type Confirm } from "./core/confirm.js";
-import { instructionEffectivenessLine } from "./core/insights.js";
 import { sessionStart } from "./commands/sessionStart.js";
 
 /** Subcommands that exist to be invoked by settings.json, never typed. They stay

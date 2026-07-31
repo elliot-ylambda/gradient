@@ -2,7 +2,6 @@ import type { Report } from "./report.js";
 import type { Suggestion } from "../core/types.js";
 import { c, confidenceChip } from "../core/ui.js";
 import { isMeasured } from "../core/classify.js";
-import { instructionEffectivenessLine } from "../core/insights.js";
 import { stripUnsafeControls } from "../core/security.js";
 
 function oneLine(value: unknown): string {
@@ -32,13 +31,6 @@ export function renderReport(report: Report): string[] {
   if (insights.costs.length > 0) {
     lines.push(`\n${c.bold("cost of unautomated habits")}`);
     for (const cost of insights.costs) lines.push(`  ${c.violet("→")} ${cost.line}`);
-  }
-
-  if (insights.instructionEffectiveness?.length) {
-    lines.push(`\n${c.bold("instructions that aren't holding")}`);
-    for (const tally of insights.instructionEffectiveness) {
-      lines.push(`  ${c.violet("→")} ${instructionEffectivenessLine(tally)}`);
-    }
   }
 
   lines.push(...renderInstalled(report));

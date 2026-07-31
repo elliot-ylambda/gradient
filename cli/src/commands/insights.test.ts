@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { insights, writeInsightsHtml } from "./insights.js";
 import type { CommandEvent, ToolEvent, Turn } from "../core/types.js";
-import { saveInstructionAudit } from "../core/audit.js";
 
 let dir: string;
 let home: string;
@@ -49,39 +48,6 @@ describe("insights", () => {
     );
     expect(report.toolActivity).toEqual({ failureLoops: 1, postEditRituals: 1 });
     expect(report.recommendations.map(item => item.line).join("\n")).toContain("run gradient scan");
-  });
-
-  it("loads at most 15 instruction-effectiveness rows from the private audit cache", async () => {
-    const tallies = Array.from({ length: 20 }, (_, index) => ({
-      file: "CLAUDE.md",
-      source: "project" as const,
-      text: `instruction number ${index} with some length`,
-      restatements: 20 - index,
-      violations: 0,
-      lastSeen: "2026-07-01T00:00:00Z",
-    }));
-    await saveInstructionAudit(dir, tallies, home);
-    const report = await insights(
-      { projectDir: dir, home },
-      { collectFn: async () => [], parseFn: async () => [] },
-    );
-    expect(report.instructionEffectiveness).toHaveLength(15);
-    expect(report.instructionEffectiveness?.[0].text).toContain("instruction number 0");
-    expect(report.instructionEffectiveness?.some(row => row.text.includes("number 16"))).toBe(false);
-
-    const htmlPath = await writeInsightsHtml(dir, report);
-    const html = await readFile(htmlPath, "utf8");
-    expect(html).toContain("Instruction effectiveness");
-    expect(html).toContain("instruction number 0");
-    expect(html).not.toContain("instruction number 16");
-  });
-
-  it("omits instruction effectiveness without a valid project audit cache", async () => {
-    const report = await insights(
-      { projectDir: dir, home },
-      { collectFn: async () => [], parseFn: async () => [] },
-    );
-    expect(report.instructionEffectiveness).toBeUndefined();
   });
 
   it("assembles metrics and recommendations for project scope", async () => {

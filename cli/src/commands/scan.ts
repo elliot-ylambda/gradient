@@ -39,8 +39,6 @@ import { isNudgeText } from "../core/insights.js";
 
 import { mineProjectPlaybook } from "../core/project-suggest.js";
 import { failureLoops, rituals } from "../core/toolmine.js";
-import { loadInstructions } from "../core/instructions.js";
-import { audit, clearInstructionAudit, CORRECTION_RE, saveInstructionAudit } from "../core/audit.js";
 
 /**
  * Candidate kinds produced by clustering raw prompt text, and only those.
@@ -75,7 +73,6 @@ export interface ScanDeps {
   collectCodexFn?: (options: ScanOptions) => Promise<string[]>;
   parseFn?: (path: string) => Promise<ParsedTranscript | Turn[]>;
   parseToolEventsFn?: (path: string) => Promise<{ events: ToolEvent[]; dropped: number }>;
-  parseCorrectionContextFn?: (path: string) => Promise<Turn[]>;
   parseCodexFn?: (path: string) => Promise<Turn[]>;
   parseDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
   parseCodexDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
@@ -131,22 +128,13 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const ignore = compileIgnorePatterns(config.ignorePatterns);
   const answerPairs = [] as ReturnType<typeof extractAnswerPairs>;
   const pairCap = Math.min(ANSWER_MAX_PAIRS, max);
-  const instructions = opts.scope === "project"
-    ? await loadInstructions(projectDir, opts.home ?? homedir())
-    : [];
-  if (opts.scope === "project" && instructions.length === 0) {
-    await clearInstructionAudit(projectDir, opts.home);
-  }
   let turns: Turn[] = [];
   let toolEvents: ToolEvent[] = [];
   let toolEventsDropped = 0;
-  let confirmedCorrections: Turn[] = [];
   // Command events stay separate from minable prompt text and feed adoption,
   // insights, and deterministic checkpoint-hook detection.
   let events: CommandEvent[] = [];
   const parseToolEventsFn = deps.parseToolEventsFn ?? (deps.parseFn ? undefined : parseToolEventsFile);
-  const parseCorrectionContextFn = deps.parseCorrectionContextFn ??
-    (deps.parseFn ? undefined : parseAssistantFollowedUserFile);
   const userTurnCounts = new Map<string, number>();
   for (const file of claudeFiles) {
     const parsedValue = await parseFn(file);
@@ -164,12 +152,6 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
         const capped = capByRecency(toolEvents, MAX_TOOL_EVENTS, MAX_TOOL_EVENTS);
         toolEventsDropped += capped.dropped;
         toolEvents = capped.kept;
-      }
-    }
-    if (instructions.length > 0 && parseCorrectionContextFn) {
-      confirmedCorrections.push(...scoped(await parseCorrectionContextFn(file)));
-      if (confirmedCorrections.length > MAX_PROMPTS_HARD_CAP) {
-        confirmedCorrections = capByRecency(confirmedCorrections, MAX_PROMPTS_HARD_CAP).kept;
       }
     }
   }
@@ -236,33 +218,11 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const { kept, dropped } = capByRecency(prompts, max);
   if (dropped > 0) log(`capped to most recent ${max} prompts; ${dropped} older dropped (raise with --max-prompts)`);
 
-  let auditCandidates: Candidate[] = [];
-  if (instructions.length > 0) {
-    const claudePrompts = kept.filter(turn => (turn.assistant ?? "claude-code") === "claude-code");
-    const result = audit(claudePrompts, instructions, { confirmedCorrections });
-    const restatementFindings = result.candidates.filter(candidate =>
-      candidate.hint?.startsWith("restated instruction")).length;
-    const correctionFindings = result.candidates.length - restatementFindings;
-    log(
-      `instruction audit: ${instructions.length} instructions · ` +
-      `${restatementFindings} restatement findings · ${correctionFindings} correction findings`,
-    );
-    await saveInstructionAudit(projectDir, result.tallies, opts.home);
-    auditCandidates = result.candidates;
-    const auditCandidateCap = Math.ceil(window / 3);
-    if (auditCandidates.length > auditCandidateCap) {
-      log(`audit candidates capped to ${auditCandidateCap}; ${auditCandidates.length - auditCandidateCap} dropped`);
-      auditCandidates = auditCandidates.slice(0, auditCandidateCap);
-    }
-  }
-
   const detectedPastes = detectPasteCandidates(kept);
   const pasteFloods = detectedPastes.filter(hasTemplateFloodSupport);
   const pastes = detectedPastes.filter(candidate => !hasTemplateFloodSupport(candidate));
   const clusterInput = kept
-    .filter(turn =>
-      !extractPasteKey(turn.text ?? "") &&
-      !(instructions.length > 0 && CORRECTION_RE.test(turn.text ?? "")))
+    .filter(turn => !extractPasteKey(turn.text ?? ""))
     .map(turn => ({ ...turn, text: turn.text?.slice(0, MAX_MINED_PROMPT_CHARS) }));
   const clustered = cluster(clusterInput);
   const floods = clustered.filter(isTemplateFlood);
@@ -348,7 +308,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   // Replays were already collapsed at the turn and event level, before any of
   // these producers saw their input, so counts here are of distinct sends.
   const allCandidates =
-    [...nonSequenceCandidates, ...sequenceCandidates, ...toolCandidates, ...auditCandidates];
+    [...nonSequenceCandidates, ...sequenceCandidates, ...toolCandidates];
   // Runs are computed over the full kept stream, not clusterInput: a paste turn
   // sitting between two cluster members must break the run like any non-member.
   annotateTemporal(kept, allCandidates);

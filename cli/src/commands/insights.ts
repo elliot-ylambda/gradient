@@ -21,7 +21,6 @@ import { loadConfig, projectKey, resolveTargets } from "../config.js";
 import { adoptionFromEvents, type AdoptionRow } from "../core/adoption.js";
 import { gradientDir } from "../core/manifest.js";
 import { safeWriteFile } from "../core/safeFs.js";
-import { loadInstructionAudit, type InstructionTally } from "../core/audit.js";
 import { failureLoops as mineFailureLoops, rituals as mineRituals } from "../core/toolmine.js";
 import { capByRecency } from "../core/cap.js";
 import {
@@ -39,7 +38,6 @@ export interface InsightsReport {
   costs: CostRow[];
   capped: boolean;
   toolActivity: ToolActivityMetrics;
-  instructionEffectiveness?: InstructionTally[];
   /** Per-artifact use counts. Empty in user scope, and empty when the corpus was
    * capped — a partial transcript read would under-count uses and wrongly
    * recommend removing an artifact that is in fact being invoked. */
@@ -186,13 +184,6 @@ export async function insights(
   };
   if (toolEventsDropped > 0) capped = true;
   const avoided = await sumAutopilotAvoided(opts.home);
-  const auditSnapshot = opts.user ? null : await loadInstructionAudit(opts.projectDir, opts.home);
-  const instructionEffectiveness = auditSnapshot?.tallies
-    .filter(tally => tally.restatements + tally.violations > 0)
-    .sort((left, right) =>
-      (right.restatements + right.violations) - (left.restatements + left.violations) ||
-      left.text.localeCompare(right.text))
-    .slice(0, 15);
   let adoption: AdoptionRow[] = [];
   if (!opts.user && analysisComplete && !capped) {
     try {
@@ -225,7 +216,6 @@ export async function insights(
     capped,
     toolActivity,
     adoption,
-    ...(instructionEffectiveness?.length ? { instructionEffectiveness } : {}),
     recommendations,
   };
 }

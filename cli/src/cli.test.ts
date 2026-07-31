@@ -68,14 +68,6 @@ vi.mock("./commands/insights.js", () => ({
     toolActivity: { failureLoops: 2, postEditRituals: 1 },
     recommendations: [{ metric: "nudges", line: "try: gradient on autopilot" }],
     costs: [{ metric: "nudges", tokens: 120, prompts: 11, line: "≈120 tokens · 11 nudge prompts" }],
-    instructionEffectiveness: [{
-      file: "CLAUDE.md",
-      source: "project",
-      text: "Always use pnpm",
-      restatements: 3,
-      violations: 1,
-      lastSeen: "2026-07-01T00:00:00Z",
-    }],
   })),
   writeInsightsHtml: vi.fn(async () => "/repo/.gradient/insights.html"),
 }));
@@ -484,7 +476,6 @@ describe("retired report aliases", () => {
     const output = lines.join("\n");
     expect(output).toContain("prompts");
     expect(output).toContain("gradient on autopilot");
-    expect(output).toContain("Always use pnpm");
     expect(output).toContain("in-session failure loops");
     expect(output).not.toContain("installed");
   });
