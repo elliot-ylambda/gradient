@@ -7,6 +7,7 @@ import { loadConfig, saveConfig, projectKey } from "../config.js";
 import { hookInstalled } from "../core/settings.js";
 import { saveState, freshState } from "../core/state.js";
 import { playbookPath } from "../core/playbook.js";
+import { isGradientHookFor } from "../core/hookBinary.js";
 
 const tmp = () => mkdtemp(join(tmpdir(), "grad-ap-"));
 const tmpHome = tmp;
@@ -17,7 +18,7 @@ describe("setAutopilotMode", () => {
     const r = await setAutopilotMode("nudge", project, { home });
     expect(r).toMatchObject({ mode: "nudge", hookInstalled: true });
     expect((await loadConfig(home)).autopilotProjects?.[projectKey(project)]).toBe("nudge");
-    expect(await hookInstalled(project, "Stop", RESPOND_HOOK_COMMAND)).toBe(true);
+    expect(await hookInstalled(project, "Stop", cmd => isGradientHookFor(cmd, "respond"))).toBe(true);
     const settings = JSON.parse(await (await import("node:fs/promises")).readFile(join(project, ".claude", "settings.local.json"), "utf8"));
     expect(settings.hooks.Stop[0].hooks[0].timeout).toBe(60);
   });
@@ -28,7 +29,7 @@ describe("setAutopilotMode", () => {
     const r = await setAutopilotMode("off", project, { home });
     expect(r.hookInstalled).toBe(false);
     expect((await loadConfig(home)).autopilotProjects?.[projectKey(project)]).toBeUndefined();
-    expect(await hookInstalled(project, "Stop", RESPOND_HOOK_COMMAND)).toBe(false);
+    expect(await hookInstalled(project, "Stop", cmd => isGradientHookFor(cmd, "respond"))).toBe(false);
   });
 
   it("preserves existing config keys when switching modes", async () => {
@@ -45,7 +46,7 @@ describe("setAutopilotMode", () => {
   it("refuses full mode until arbitrary-response hardening exists", async () => {
     const home = await tmp(), project = await tmp();
     await expect(setAutopilotMode("full", project, { home })).rejects.toThrow(/disabled/);
-    expect(await hookInstalled(project, "Stop", RESPOND_HOOK_COMMAND)).toBe(false);
+    expect(await hookInstalled(project, "Stop", cmd => isGradientHookFor(cmd, "respond"))).toBe(false);
   });
 });
 

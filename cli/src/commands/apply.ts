@@ -3,11 +3,11 @@ import { join } from "node:path";
 import type { Suggestion } from "../core/types.js";
 import { applySuggestion, type ApplyResult } from "../core/apply.js";
 import { loadConfig, projectCacheDir, resolveCheapModel, resolveTargets } from "../config.js";
-import { refreshRecallIndex } from "./recall.js";
 import { safeReadFile, safeWriteFile } from "../core/safeFs.js";
 import { validateSuggestion } from "../core/validate.js";
 import { loadManifest } from "../core/manifest.js";
 import { writePlaybook } from "../core/playbook.js";
+import { resolveHookBinary } from "../core/hookBinary.js";
 
 const SUGGESTIONS_MAX_BYTES = 5_000_000;
 const SUGGESTIONS_MAX_ENTRIES = 1_000;
@@ -78,7 +78,11 @@ export async function syncApprovedPlaybook(
 export async function applyByIds(
   ids: string[],
   projectDir: string,
-  opts: { home?: string; onSkip?: (message: string) => void } = {},
+  opts: {
+    home?: string;
+    onSkip?: (message: string) => void;
+    onNote?: (message: string) => void;
+  } = {},
 ): Promise<ApplyResult[]> {
   const all = await loadSuggestions(projectDir, opts);
   const wanted = all.filter(suggestion => ids.includes(suggestion.id) || ids.includes(suggestion.name));
@@ -86,22 +90,29 @@ export async function applyByIds(
   const emitTarget = config.emitTarget ?? "skill";
   const targets = resolveTargets(config);
   const cheapModel = resolveCheapModel(config);
+  // Resolved once per run, and only announced when a hook is actually written.
+  const hookBinary = resolveHookBinary();
+  let hookWarned = false;
   const out: ApplyResult[] = [];
   for (const suggestion of wanted) {
     if (suggestion.confidence === "flagged") {
       opts.onSkip?.(`skipping unresolved flagged suggestion: ${suggestion.name}`);
       continue;
     }
+    if (suggestion.payload.type === "hook" && hookBinary.warning && !hookWarned) {
+      opts.onNote?.(hookBinary.warning);
+      hookWarned = true;
+    }
     out.push(await applySuggestion(suggestion, projectDir, {
       emitTarget,
       targets,
       cheapModel,
       home: opts.home,
+      hookBinary: hookBinary.command,
     }));
   }
   if (out.length > 0) {
     await syncApprovedPlaybook(projectDir, all, opts.home);
-    await refreshRecallIndex(projectDir, opts.home);
   }
   return out;
 }

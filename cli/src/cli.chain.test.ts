@@ -6,7 +6,6 @@ import { main } from "./cli.js";
 import { scan } from "./commands/scan.js";
 import { review } from "./commands/review.js";
 import { init } from "./commands/init.js";
-import { recallStatus, setRecall } from "./commands/recall.js";
 import type { Suggestion } from "./core/types.js";
 import type { ApplyResult } from "./commands/apply.js";
 
@@ -24,11 +23,6 @@ vi.mock("./commands/init.js", () => ({
     skillPaths: [],
     sessionScanInstalled: false,
   })),
-}));
-vi.mock("./commands/recall.js", () => ({
-  recallHook: vi.fn(async () => ({})),
-  recallStatus: vi.fn(async () => ({ installed: false, entries: 0 })),
-  setRecall: vi.fn(async () => ({ installed: true, settingsPath: "/repo/.claude/settings.local.json" })),
 }));
 
 const SUGGESTION = {
@@ -54,7 +48,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(scan).mockResolvedValue([SUGGESTION]);
   vi.mocked(review).mockResolvedValue([]);
-  vi.mocked(recallStatus).mockResolvedValue({ installed: false, entries: 0 });
 });
 
 describe("scan → review continuation", () => {
@@ -73,7 +66,7 @@ describe("scan → review continuation", () => {
     const code = await main(["scan"], { log: m => logs.push(m), home: await tmpHome(), confirm: async () => false });
     expect(code).toBe(0);
     expect(review).not.toHaveBeenCalled();
-    expect(logs.join("\n")).toContain("gradient review");
+    expect(logs.join("\n")).toContain("gradient scan");
   });
 
   it("--no-review never asks", async () => {
@@ -108,34 +101,5 @@ describe("init → first scan continuation", () => {
     await main(["init", "--no-scan"], { log: () => {}, home: await tmpHome(), confirm });
     expect(confirm).not.toHaveBeenCalled();
     expect(scan).not.toHaveBeenCalled();
-  });
-});
-
-describe("review → recall continuation", () => {
-  it("offers recall after artifacts were applied and enables it on yes", async () => {
-    vi.mocked(review).mockResolvedValue([APPLIED]);
-    const logs: string[] = [];
-    const home = await tmpHome();
-    const confirm = vi.fn(async () => true);
-    await main(["review"], { log: m => logs.push(m), home, confirm });
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("recall"), false);
-    expect(setRecall).toHaveBeenCalledWith(true, expect.any(String), home);
-    expect(logs.join("\n")).toContain("recall hook installed");
-  });
-
-  it("does not offer recall when nothing was applied", async () => {
-    const confirm = vi.fn(async () => true);
-    await main(["review"], { log: () => {}, home: await tmpHome(), confirm });
-    expect(confirm).not.toHaveBeenCalled();
-    expect(setRecall).not.toHaveBeenCalled();
-  });
-
-  it("does not offer recall when it is already on", async () => {
-    vi.mocked(review).mockResolvedValue([APPLIED]);
-    vi.mocked(recallStatus).mockResolvedValue({ installed: true, entries: 2 });
-    const confirm = vi.fn(async () => true);
-    await main(["review"], { log: () => {}, home: await tmpHome(), confirm });
-    expect(confirm).not.toHaveBeenCalled();
-    expect(setRecall).not.toHaveBeenCalled();
   });
 });

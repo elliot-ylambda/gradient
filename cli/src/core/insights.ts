@@ -1,11 +1,10 @@
 import type { Turn, CommandEvent, AutopilotMode } from "./types.js";
-import { classifyPrompt } from "./filter.js";
+import { classifyTurn } from "./filter.js";
 import { extractPasteKey, PASTE_MIN_COUNT } from "./paste.js";
 import { cleanupStale, listStateFiles, loadState } from "./state.js";
-import type { InstructionTally } from "./audit.js";
 import { commandKey } from "./command.js";
 
-const NUDGE_RE = /^(continue|go on|keep going|next|what'?s next|proceed|yes|y|ok|okay|do it|go|sure|yep|good|great|perfect|lgtm|looks good|approved?|ship it|sounds good)[.!?]*$/i;
+const NUDGE_RE = /^(continue( (from )?where you left off)?|go on|keep going|carry on|resume|next|what'?s next|proceed|yes|y|ok|okay|do it|go|sure|yep|good|great|perfect|lgtm|looks good( to me)?|approved?|ship it|sounds good)[.!?,]*$/i;
 
 export function isNudgeText(text: string): boolean {
   return NUDGE_RE.test(text.trim());
@@ -56,7 +55,11 @@ export function computeMetrics(turns: Turn[], events: CommandEvent[] = [], ignor
       continue;
     }
 
-    switch (classifyPrompt(text, ignore)) {
+    // classifyTurn, not classifyPrompt: the transcript records how a prompt
+    // entered the session, and text heuristics cannot tell a typed request from
+    // a skill body the harness expanded into the user role. Using the weaker
+    // test here made the report and `scan` disagree about the same corpus.
+    switch (classifyTurn(turn, ignore)) {
       case "continuation":
         metrics.continuations++;
         continue;
@@ -99,6 +102,10 @@ export interface CostRow {
   tokens: number;
   prompts: number;
   line: string;
+  /** True when the suggested action actually avoids re-sending these tokens.
+   *  Nudges are not recoverable: autopilot still sends the same turn (plus a
+   *  judge call), so automating them buys back attention, never tokens. */
+  recoverable: boolean;
 }
 
 function tokensFor(turn: Turn): number {
@@ -110,6 +117,13 @@ function tokensFor(turn: Turn): number {
 
 function costLine(tokens: number, prompts: number, label: string, action: string): string {
   return `≈${tokens.toLocaleString("en-US")} tokens · ${prompts} ${label} · ${action}`;
+}
+
+/** Same measurement, honest claim: the tokens were spent, but the suggested
+ *  action does not win them back — it removes the turn you had to type. */
+function attentionLine(tokens: number, prompts: number, label: string, action: string): string {
+  return `${prompts} ${label} across ≈${tokens.toLocaleString("en-US")} tokens of turns you had to drive ` +
+    `(automating saves attention, not tokens) · ${action}`;
 }
 
 /** Token-attributed cost of habits gradient can remove. Tokens stay approximate:
@@ -130,7 +144,7 @@ export function buildCostRows(turns: Turn[], ignore: RegExp[] = []): CostRow[] {
   };
   for (const turn of turns) {
     if (turn.role !== "user" || !turn.text) continue;
-    const classification = classifyPrompt(turn.text, ignore);
+    const classification = classifyTurn(turn, ignore);
     if (classification === "continuation") {
       totals.continuations.prompts++;
       totals.continuations.tokens += tokensFor(turn);
@@ -149,20 +163,25 @@ export function buildCostRows(turns: Turn[], ignore: RegExp[] = []): CostRow[] {
   }
 
   const rows: CostRow[] = [];
-  if (totals.nudges.prompts > 0) rows.push({
-    metric: "nudges",
-    ...totals.nudges,
-    line: costLine(totals.nudges.tokens, totals.nudges.prompts, "nudge prompt(s)", "gradient autopilot nudge"),
-  });
+  // Recoverable rows first: a reader scanning top-down should meet the tokens
+  // an action actually wins back before the (usually much larger) attention row.
   if (totals.continuations.prompts > 0) rows.push({
     metric: "continuations",
     ...totals.continuations,
-    line: costLine(totals.continuations.tokens, totals.continuations.prompts, "context re-explain(s)", "gradient continuity on"),
+    recoverable: true,
+    line: costLine(totals.continuations.tokens, totals.continuations.prompts, "context re-explain(s)", "gradient on continuity"),
   });
   if (totals.pastes.prompts > 0) rows.push({
     metric: "pastes",
     ...totals.pastes,
+    recoverable: true,
     line: costLine(totals.pastes.tokens, totals.pastes.prompts, "repeated error paste(s)", "gradient scan"),
+  });
+  if (totals.nudges.prompts > 0) rows.push({
+    metric: "nudges",
+    ...totals.nudges,
+    recoverable: false,
+    line: attentionLine(totals.nudges.tokens, totals.nudges.prompts, "nudge prompt(s)", "gradient on autopilot"),
   });
   return rows;
 }
@@ -172,7 +191,6 @@ export function buildRecommendations(
   context: {
     autopilotMode: AutopilotMode | undefined;
     avoided: number;
-    recallInstalled: boolean;
     unusedArtifacts: string[];
   },
 ): Recommendation[] {
@@ -186,13 +204,13 @@ export function buildRecommendations(
   } else if (metrics.nudges > 10) {
     recommendations.push({
       metric: "nudges",
-      line: `you typed ${metrics.nudges} nudges — try: gradient autopilot nudge`,
+      line: `you typed ${metrics.nudges} nudges — try: gradient on autopilot`,
     });
   }
   if (metrics.continuations + metrics.compacts > 10) {
     recommendations.push({
       metric: "context",
-      line: `${metrics.continuations} context death(s), ${metrics.compacts} compact(s) — try: gradient continuity on`,
+      line: `${metrics.continuations} context death(s), ${metrics.compacts} compact(s) — try: gradient on continuity`,
     });
   }
   if (metrics.interrupts > 20) {
@@ -213,12 +231,6 @@ export function buildRecommendations(
       line: `${metrics.modelSwitches} /model and ${metrics.effortSwitches} /effort switches — pin defaultModel in .claude/settings.json per project`,
     });
   }
-  if (!context.recallInstalled) {
-    recommendations.push({
-      metric: "recall",
-      line: "recall hook off — gradient recall on hints when a typed prompt matches an artifact",
-    });
-  }
   for (const name of context.unusedArtifacts) {
     recommendations.push({ metric: "adoption", line: `unused 30d+: gradient remove ${name}` });
   }
@@ -237,19 +249,12 @@ export function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-export function instructionEffectivenessLine(tally: InstructionTally): string {
-  const text = tally.text.length > 60 ? `${tally.text.slice(0, 59)}…` : tally.text;
-  const lastSeen = /^\d{4}-\d{2}-\d{2}/.test(tally.lastSeen) ? tally.lastSeen.slice(0, 10) : "unknown";
-  return `"${text}" · restated ${tally.restatements}× · violated ${tally.violations}× · last seen ${lastSeen}`;
-}
-
 export function renderInsightsHtml(report: {
   label: string;
   avoided: number;
   metrics: InsightsMetrics;
   recommendations: Recommendation[];
   costs?: CostRow[];
-  instructionEffectiveness?: InstructionTally[];
   toolActivity?: ToolActivityMetrics;
 }): string {
   const metrics = report.metrics;
@@ -281,9 +286,6 @@ export function renderInsightsHtml(report: {
 <dl>${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${value}</dd>`).join("")}</dl>
 ${report.costs?.length ? `<h1>cost of unautomated habits</h1>
 <ul>${report.costs.map(cost => `<li>${escapeHtml(cost.line)}</li>`).join("")}</ul>` : ""}
-${report.instructionEffectiveness?.length ? `<h1>Instruction effectiveness</h1>
-<ul>${report.instructionEffectiveness.map(tally => `<li>${escapeHtml(instructionEffectivenessLine(tally))}</li>`).join("")}</ul>
-<p>These instructions aren't holding — run <code>gradient review</code> to convert them.</p>` : ""}
 <h1>next</h1>
 <ul>${report.recommendations.map(recommendation => `<li>${escapeHtml(recommendation.line)}</li>`).join("")}</ul>
 </body></html>\n`;

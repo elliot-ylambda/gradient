@@ -4,10 +4,12 @@ import { installHook, removeHook, hookInstalled } from "../core/settings.js";
 import { latestState } from "../core/state.js";
 import { playbookPath, projectPlaybookPath, loadProjectPlaybook, clampMode, loadPlaybookPin, pinState, type PinState } from "../core/playbook.js";
 import type { AutopilotLogEntry, AutopilotMode } from "../core/types.js";
+import { gradientHookCommand, isGradientHookFor } from "../core/hookBinary.js";
 
 export type { AutopilotMode }; // single source of truth: core/types.ts
 
-export const RESPOND_HOOK_COMMAND = "gradient respond";
+export const RESPOND_SUB = "respond";
+export const RESPOND_HOOK_COMMAND = `gradient ${RESPOND_SUB}`;
 const HOOK_TIMEOUT_S = 60;
 const STATUS_RECENT = 5;
 
@@ -36,17 +38,18 @@ export async function setAutopilotMode(
     delete config.autopilot;
     // Revoke consent first: a hook-removal failure must leave the hook inert.
     await saveConfig(config, opts.home);
-    const settingsPath = await removeHook(projectDir, "Stop", RESPOND_HOOK_COMMAND);
+    const settingsPath = await removeHook(projectDir, "Stop", cmd => isGradientHookFor(cmd, RESPOND_SUB));
     return { mode, hookInstalled: false, settingsPath };
   }
-  const settingsPath = await installHook(projectDir, "Stop", RESPOND_HOOK_COMMAND, { timeout: HOOK_TIMEOUT_S });
+  const settingsPath = await installHook(projectDir, "Stop", gradientHookCommand(RESPOND_SUB),
+    { timeout: HOOK_TIMEOUT_S, replacing: [cmd => isGradientHookFor(cmd, RESPOND_SUB)] });
   projects[key] = mode;
   config.autopilotProjects = projects;
   delete config.autopilot;
   try {
     await saveConfig(config, opts.home);
   } catch (error) {
-    await removeHook(projectDir, "Stop", RESPOND_HOOK_COMMAND).catch(() => undefined);
+    await removeHook(projectDir, "Stop", cmd => isGradientHookFor(cmd, RESPOND_SUB)).catch(() => undefined);
     throw error;
   }
   return { mode, hookInstalled: true, settingsPath };
@@ -111,7 +114,7 @@ export async function autopilotStatus(
     projectPlaybookExists: project !== null,
     projectPlaybookPin: pinState(project, await loadPlaybookPin(projectDir, opts.home)),
     projectMalformed,
-    hookInstalled: await hookInstalled(projectDir, "Stop", RESPOND_HOOK_COMMAND),
+    hookInstalled: await hookInstalled(projectDir, "Stop", cmd => isGradientHookFor(cmd, RESPOND_SUB)),
     recent: latest?.state.log.slice(-STATUS_RECENT) ?? [],
   };
 }

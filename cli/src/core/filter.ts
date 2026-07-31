@@ -109,11 +109,36 @@ export function classifyPrompt(text: string, ignore: RegExp[] = []): PromptClass
   return "human";
 }
 
+/** Prompt origins that are not the user typing. `system` is harness-injected
+ *  (task notifications, reminders); `sdk` is a skill or subagent body expanded
+ *  into the user role — text that reads exactly like a request but was never
+ *  written by a human, and which no regexp can reliably distinguish. */
+const NON_HUMAN_SOURCES: ReadonlySet<string> = new Set(["system", "sdk"]);
+
+/**
+ * Classify a turn, preferring the transcript's own record of where the prompt
+ * came from. Text heuristics remain the path for human-authored sources
+ * (`typed`, `queued`, `suggestion_accepted`) and for transcripts that predate
+ * `promptSource`, since a typed prompt can still be a continuation and
+ * user-supplied ignore patterns must still apply.
+ */
+export function classifyTurn(turn: Turn, ignore: RegExp[] = []): PromptClass {
+  const text = turn.text ?? "";
+  if (turn.promptSource !== undefined && NON_HUMAN_SOURCES.has(turn.promptSource)) {
+    const trimmed = text.trim();
+    // Continuations still feed the continuity metrics, so keep that label.
+    if (CONTINUATION_RE.test(trimmed)) return "continuation";
+    if (NOTIFICATION_RE.test(trimmed)) return "notification";
+    return "injected";
+  }
+  return classifyPrompt(text, ignore);
+}
+
 export function classifyPrompts(turns: Turn[], ignore: RegExp[] = []): Record<PromptClass, Turn[]> {
   const out: Record<PromptClass, Turn[]> = { human: [], injected: [], continuation: [], notification: [] };
   for (const t of turns) {
     if (t.role !== "user" || t.text === undefined) continue;
-    out[classifyPrompt(t.text, ignore)].push(t);
+    out[classifyTurn(t, ignore)].push(t);
   }
   return out;
 }

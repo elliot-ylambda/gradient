@@ -14,6 +14,9 @@ export interface EmitOpts {
   target?: EmitTarget;
   assistant?: Assistant;
   cheapModel?: string;
+  /** Command prefix an installed hook uses to reach gradient. Resolved by the
+   *  caller, because it depends on how this process itself was launched. */
+  hookBinary?: string;
 }
 export type EmitResult =
   | { kind: "command"; path: string; content: string }
@@ -40,7 +43,7 @@ export function emit(s: Suggestion, opts: EmitOpts = {}): EmitResult {
         ? { kind: "command", ...emitCommand(s) }
         : { kind: "skill", assistant, ...emitSkill(s, { model: opts.cheapModel }) };
     case "loop": return { kind: "loop", ...emitLoop(s) };
-    case "hook": return { kind: "hook", ...emitHook(s) };
+    case "hook": return { kind: "hook", ...emitHook(s, opts.hookBinary) };
     case "rule": {
       if (assistant === "codex") {
         return { kind: "rule-print", text: emitCodexRule(s).printed };

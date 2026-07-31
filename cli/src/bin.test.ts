@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gradientHomeFromEnv, isEntrypoint, runBinary } from "./bin.js";
-import { saveRecallIndex } from "./core/recall.js";
-import { projectKey, saveConfig } from "./config.js";
+import { loadConfig, saveConfig } from "./config.js";
+import { installHook, hookInstalled } from "./core/settings.js";
 import { notify } from "./commands/notify.js";
 import { sessionStart } from "./commands/sessionStart.js";
 
@@ -31,30 +31,36 @@ describe("binary bootstrap", () => {
     expect(isEntrypoint(pathToFileURL(target).href, link)).toBe(true);
   });
 
-  it("uses the lightweight recall path for exact hook invocation", async () => {
+  // `recall` is retired. A user who had it on still has a UserPromptSubmit hook
+  // pointing at it, and that event's stdout is read as model context — so the
+  // fast path must stay, stay silent, and take the hook with it.
+  it("retires a leftover recall hook silently instead of reaching the unknown-command handler", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-bin-recall-"));
     const home = await mkdtemp(join(tmpdir(), "grad-bin-home-"));
-    await saveConfig({ recallProjects: [projectKey(dir)] }, home);
-    await saveRecallIndex(dir, {
-      builtAt: new Date().toISOString(),
-      entries: [{
-        name: "ship", kind: "skill", invocation: "/ship",
-        triggers: ["prepare this pull request for shipping"], signature: "", description: "",
-      }],
-    }, home);
+    await saveConfig({ recallProjects: [dir] } as Record<string, unknown>, home);
+    await installHook(dir, "UserPromptSubmit", "gradient recall", { timeout: 5 });
+    expect(await hookInstalled(dir, "UserPromptSubmit", "gradient recall")).toBe(true);
+
     const output: string[] = [];
     const code = await runBinary(["recall"], {
-      readStdin: async () => ({ prompt: "prepare this pull request for shipping", cwd: dir }),
+      readStdin: async () => ({ prompt: "anything at all", cwd: dir }),
       write: chunk => output.push(chunk),
       home,
+      cwd: dir,
     });
+
     expect(code).toBe(0);
-    expect(JSON.parse(output.join(""))).toMatchObject({
-      hookSpecificOutput: {
-        hookEventName: "UserPromptSubmit",
-        additionalContext: expect.stringContaining('"/ship"'),
-      },
-    });
+    expect(output.join("")).toBe("");
+    expect(await hookInstalled(dir, "UserPromptSubmit", "gradient recall")).toBe(false);
+    expect((await loadConfig(home) as Record<string, unknown>).recallProjects).toBeUndefined();
+  });
+
+  it("is idempotent when there is nothing left to retire", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-bin-recall-clean-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-bin-home-clean-"));
+    const output: string[] = [];
+    expect(await runBinary(["recall"], { write: chunk => output.push(chunk), home, cwd: dir })).toBe(0);
+    expect(output.join("")).toBe("");
   });
 
   it("uses a silent lightweight path for the notification hook", async () => {

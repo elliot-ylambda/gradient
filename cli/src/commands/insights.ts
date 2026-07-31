@@ -16,15 +16,19 @@ import {
   type Recommendation,
   type ToolActivityMetrics,
 } from "../core/insights.js";
-import { hookInstalled } from "../core/settings.js";
 import { DEFAULT_USER_SCOPE_DAYS } from "../core/scope.js";
 import { loadConfig, projectKey, resolveTargets } from "../config.js";
-import { adoptionFromEvents } from "./stats.js";
+import { adoptionFromEvents, type AdoptionRow } from "../core/adoption.js";
 import { gradientDir } from "../core/manifest.js";
 import { safeWriteFile } from "../core/safeFs.js";
-import { loadInstructionAudit, type InstructionTally } from "../core/audit.js";
 import { failureLoops as mineFailureLoops, rituals as mineRituals } from "../core/toolmine.js";
 import { capByRecency } from "../core/cap.js";
+import {
+  commandEventIdentity,
+  replayFilter,
+  toolEventIdentity,
+  turnIdentity,
+} from "../core/replay.js";
 
 export interface InsightsReport {
   label: string;
@@ -34,7 +38,10 @@ export interface InsightsReport {
   costs: CostRow[];
   capped: boolean;
   toolActivity: ToolActivityMetrics;
-  instructionEffectiveness?: InstructionTally[];
+  /** Per-artifact use counts. Empty in user scope, and empty when the corpus was
+   * capped — a partial transcript read would under-count uses and wrongly
+   * recommend removing an artifact that is in fact being invoked. */
+  adoption: AdoptionRow[];
 }
 
 export const INSIGHTS_MAX_FILES = 2_000;
@@ -84,6 +91,13 @@ export async function insights(
   }
 
   const ignore = compileIgnorePatterns(config.ignorePatterns);
+  // Transcripts are read one at a time under a resource cap, so the replay
+  // filters carry their seen-sets across files. Without this the report counts
+  // one prompt, compaction or command failure once per session that replayed
+  // it — and then disagrees with scan about the same corpus.
+  const freshTurns = replayFilter<Turn>(turnIdentity);
+  const freshEvents = replayFilter<CommandEvent>(commandEventIdentity);
+  const freshTools = replayFilter<ToolEvent>(toolEventIdentity);
   const metrics = computeMetrics([], [], ignore);
   const analysisTurns: Turn[] = [];
   let toolEvents: ToolEvent[] = [];
@@ -117,7 +131,7 @@ export async function insights(
     if (file.assistant === "codex") {
       // Codex parsing is untouched — its transcripts carry no command-tag events.
       const raw = await parseCodexFn(file.path);
-      const scopedTurns = raw.filter(turn => inCutoff(turn.ts));
+      const scopedTurns = freshTurns(raw.filter(turn => inCutoff(turn.ts)));
       const parsedTurns = scopedTurns.slice(0, remaining);
       if (scopedTurns.length > parsedTurns.length) capped = true;
       processedTurns += parsedTurns.length;
@@ -130,8 +144,8 @@ export async function insights(
     const raw: ParsedTranscript = Array.isArray(parsedClaude)
       ? { turns: parsedClaude, events: [] }
       : parsedClaude;
-    const scopedTurns = raw.turns.filter(turn => inCutoff(turn.ts));
-    const scopedEvents = raw.events.filter(event => inCutoff(event.ts));
+    const scopedTurns = freshTurns(raw.turns.filter(turn => inCutoff(turn.ts)));
+    const scopedEvents = freshEvents(raw.events.filter(event => inCutoff(event.ts)));
     const parsedTurns = scopedTurns.slice(0, remaining);
     // Events share the turn ceiling: a transcript that is all slash commands
     // must not bypass the resource cap by contributing zero turns.
@@ -144,7 +158,7 @@ export async function insights(
 
     if (config.mineToolEvents !== false && parseToolEventsFn) {
       const parsedTools = await parseToolEventsFn(file.path);
-      const scopedTools = parsedTools.events.filter(event => inCutoff(event.ts));
+      const scopedTools = freshTools(parsedTools.events.filter(event => inCutoff(event.ts)));
       toolEventsDropped += parsedTools.dropped;
       toolEvents.push(...scopedTools);
       if (toolEvents.length > INSIGHTS_MAX_TOOL_EVENTS) {
@@ -159,6 +173,10 @@ export async function insights(
     }
   }
 
+  // Same reason scan does it: a resumed session inherits its parent's history
+  // verbatim, so without this the report counts one prompt, compaction or
+  // command failure once per session that replayed it — and then disagrees with
+  // scan about the same corpus.
   const costs = buildCostRows(analysisTurns, ignore);
   const toolActivity: ToolActivityMetrics = {
     failureLoops: mineFailureLoops(toolEvents).length,
@@ -166,38 +184,28 @@ export async function insights(
   };
   if (toolEventsDropped > 0) capped = true;
   const avoided = await sumAutopilotAvoided(opts.home);
-  const recallInstalled = await hookInstalled(opts.projectDir, "UserPromptSubmit", "gradient recall");
-  const auditSnapshot = opts.user ? null : await loadInstructionAudit(opts.projectDir, opts.home);
-  const instructionEffectiveness = auditSnapshot?.tallies
-    .filter(tally => tally.restatements + tally.violations > 0)
-    .sort((left, right) =>
-      (right.restatements + right.violations) - (left.restatements + left.violations) ||
-      left.text.localeCompare(right.text))
-    .slice(0, 15);
-  let unusedArtifacts: string[] = [];
+  let adoption: AdoptionRow[] = [];
   if (!opts.user && analysisComplete && !capped) {
     try {
-      unusedArtifacts = (await adoptionFromEvents(opts.projectDir, events, { home: opts.home, now: opts.now }))
-        .filter(artifact => artifact.suggestRemoval)
-        .map(artifact => artifact.name);
+      adoption = await adoptionFromEvents(opts.projectDir, events, { home: opts.home, now: opts.now });
     } catch {
       // Corrupt or unavailable adoption data must not hide the behavior report.
     }
   }
+  const unusedArtifacts = adoption.filter(artifact => artifact.suggestRemoval).map(artifact => artifact.name);
 
   const recommendations = buildRecommendations(metrics, {
     autopilotMode: config.autopilotProjects?.[projectKey(opts.projectDir)],
     avoided,
-    recallInstalled,
     unusedArtifacts,
   });
   if (toolActivity.postEditRituals > 0) recommendations.unshift({
     metric: "post-edit-rituals",
-    line: `${toolActivity.postEditRituals} post-edit ritual(s) detected — run gradient scan, then gradient review`,
+    line: `${toolActivity.postEditRituals} post-edit ritual(s) detected — run gradient scan`,
   });
   if (toolActivity.failureLoops > 0) recommendations.unshift({
     metric: "failure-loops",
-    line: `${toolActivity.failureLoops} recurring in-session command failure loop(s) — run gradient scan, then gradient review`,
+    line: `${toolActivity.failureLoops} recurring in-session command failure loop(s) — run gradient scan`,
   });
 
   return {
@@ -207,7 +215,7 @@ export async function insights(
     avoided,
     capped,
     toolActivity,
-    ...(instructionEffectiveness?.length ? { instructionEffectiveness } : {}),
+    adoption,
     recommendations,
   };
 }

@@ -53,6 +53,7 @@ interface Raw {
   cwd?: string;
   gitBranch?: string;
   timestamp?: string;
+  promptSource?: string;
   message?: {
     role?: string;
     content?: string | RawBlock[];
@@ -89,6 +90,7 @@ function parseOne(raw: Raw): Turn | null {
     role: "user",
     text: text.slice(0, MAX_TURN_TEXT_CHARS),
     assistant: "claude-code",
+    ...(typeof raw.promptSource === "string" ? { promptSource: raw.promptSource.slice(0, 64) } : {}),
   };
 }
 

@@ -8,7 +8,6 @@ import {
   removeEntries,
 } from "../core/manifest.js";
 import { assertInside } from "../core/security.js";
-import { refreshRecallIndex } from "./recall.js";
 import { assertNoSymlinkPath, safeReadFile, safeUnlink, safeWriteFile } from "../core/safeFs.js";
 import { removeHook } from "../core/settings.js";
 import {
@@ -133,6 +132,5 @@ export async function remove(
   }
   await removeEntries(projectDir, name);
   await revokeArtifactApproval(projectDir, name, opts.home);
-  await refreshRecallIndex(projectDir, opts.home);
   return true;
 }

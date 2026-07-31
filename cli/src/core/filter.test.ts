@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   classifyPrompt,
   classifyPrompts,
+  classifyTurn,
   compileIgnorePatterns,
   filterPrompts,
   isInjected,
@@ -184,5 +185,47 @@ describe("isTemplateFlood", () => {
     expect(isTemplateFlood(cand({ signature: "x".repeat(TEMPLATE_MIN_CHARS), count: 25, sessions: 25 }))).toBe(false);
     expect(isTemplateFlood(cand({ count: TEMPLATE_MIN_COUNT, sessions: 23 }))).toBe(true);
     expect(isTemplateFlood(cand({ count: TEMPLATE_MIN_COUNT, sessions: 22 }))).toBe(false);
+  });
+});
+
+describe("classifyTurn — promptSource is authoritative", () => {
+  const base = { ts: "2026-07-30T00:00:00Z", project: "p", sessionId: "s", role: "user" as const };
+
+  it("rejects an sdk-expanded skill body that reads exactly like a request", () => {
+    // Verbatim shape of the security-review skill expanded into the user role;
+    // no text heuristic can tell this from a human asking for a review.
+    const text = "Review this change for security vulnerabilities. Changed files (you may Read these)";
+    expect(classifyTurn({ ...base, text, promptSource: "sdk" })).toBe("injected");
+    // Same text typed by a person is a genuine prompt.
+    expect(classifyTurn({ ...base, text, promptSource: "typed" })).toBe("human");
+  });
+
+  it("rejects harness-injected system prompts", () => {
+    expect(classifyTurn({ ...base, text: "# Deploy to Vercel", promptSource: "system" })).toBe("injected");
+  });
+
+  it("keeps queued and accepted-suggestion prompts, which are human-authored", () => {
+    expect(classifyTurn({ ...base, text: "merge the PR now please", promptSource: "queued" })).toBe("human");
+    expect(classifyTurn({ ...base, text: "merge the PR now please", promptSource: "suggestion_accepted" }))
+      .toBe("human");
+  });
+
+  it("still labels continuations and notifications inside non-human sources", () => {
+    expect(classifyTurn({
+      ...base,
+      text: "This session is being continued from a previous conversation.",
+      promptSource: "system",
+    })).toBe("continuation");
+    expect(classifyTurn({ ...base, text: "<task-notification>x</task-notification>", promptSource: "system" }))
+      .toBe("notification");
+  });
+
+  it("falls back to text rules when the transcript predates promptSource", () => {
+    expect(classifyTurn({ ...base, text: "add a retry to the uploader" })).toBe("human");
+    expect(classifyTurn({ ...base, text: "<system-reminder>hi</system-reminder>" })).toBe("injected");
+  });
+
+  it("still honours user ignore patterns for human sources", () => {
+    expect(classifyTurn({ ...base, text: "deploy now", promptSource: "typed" }, [/^deploy/])).toBe("injected");
   });
 });

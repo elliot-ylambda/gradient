@@ -50,7 +50,7 @@ removed after reporting.
 | Artifacts | legacy command and migration; Claude/Codex skills; project/user/Codex rules; loop; built-in/command hooks; committed `gradient.md` entry |
 | Review and consent | direct apply, interactive approval, exact-prose playbook pinning, list, provenance, private modes |
 | Portability | team bundle, both plugin manifests, portable inclusion, hook/loop exclusion |
-| Runtime | recall hit and adoption, stats, terminal/HTML insights, continuity checkpoint/recap, board discovery/delta/consent, autopilot continue/progress/stand-down, notification fail-open |
+| Runtime | adoption, stats, terminal/HTML insights, continuity checkpoint/recap, board discovery/delta/consent, autopilot continue/progress/stand-down, notification fail-open |
 | Safety and cleanup | unknown/malformed/corrupt/oversized/symlinked input, disabled hook export, tamper refusal, line-surgical and hook-specific removal |
 | Evidence | tarball digest, source commit, sanitized paths/output, secret-sentinel absence, JSON/Markdown/HTML parity |
 
@@ -96,9 +96,6 @@ Result: PASS | FAIL | BLOCKED
 - [ ] Apply one project rule, one hook, and one `gradient.md` entry. Confirm the
       expected files/settings, then remove each and verify adjacent manual
       content survives.
-- [ ] Enable recall and type a matching natural-language prompt. Observe the
-      hint, then verify `gradient stats` reports adoption without storing the
-      prompt text.
 - [ ] Run `gradient insights --html`; compare the visible report with known
       recent behavior and open the HTML artifact.
 - [ ] Enable continuity, trigger a real compaction, resume, and confirm the
@@ -117,7 +114,7 @@ Result: PASS | FAIL | BLOCKED
 - [ ] Build `gradient bundle live-dogfood`, load it as a local Claude plugin and
       through the supported Codex marketplace path, then invoke one bundled
       skill. Confirm hooks were not exported.
-- [ ] Run `gradient recall off`, `gradient continuity off`, `gradient board
+- [ ] Run `gradient continuity off`, `gradient board
       off`, and `gradient autopilot off`; inspect settings and remove remaining
       generated artifacts.
 

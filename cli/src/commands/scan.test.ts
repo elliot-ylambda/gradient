@@ -6,144 +6,26 @@ import { MAX_TOOL_EVENTS, scan } from "./scan.js";
 import { playbookPath } from "../core/playbook.js";
 import { suggestionsPath } from "./apply.js";
 import type { ToolEvent } from "../core/types.js";
-import { auditCachePath } from "../core/audit.js";
 
 describe("scan", () => {
-  it("audits project instructions and persists private effectiveness tallies", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "grad-audit-"));
-    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    await writeFile(join(projectDir, "CLAUDE.md"), "- Always use pnpm, never npm.\n");
-    const logs: string[] = [];
-    await scan(
-      { scope: "project", projectPath: projectDir, home },
-      {
-        backend: null,
-        config: {},
-        collectFn: async () => ["f1"],
-        parseFn: async () => [
-          { ts: "2026-07-01T00:00:00Z", project: "p", role: "user", sessionId: "s1", text: "use pnpm never npm" },
-          { ts: "2026-07-01T00:01:00Z", project: "p", role: "user", sessionId: "s1", text: "always use pnpm never npm" },
-          { ts: "2026-07-02T00:00:00Z", project: "p", role: "user", sessionId: "s2", text: "use pnpm not npm please" },
-        ],
-        attentionFn: async () => null,
-        log: message => logs.push(message),
-      },
-    );
-    const snapshot = JSON.parse(await readFile(auditCachePath(projectDir, home), "utf8"));
-    expect(snapshot.tallies[0]).toMatchObject({ restatements: 3, violations: 0 });
-    expect(logs.some(message => message.startsWith("instruction audit:"))).toBe(true);
-    await expect(readFile(join(projectDir, ".gradient", "audit.json"), "utf8")).rejects.toThrow();
-  });
-
-  it("does not create an audit cache or log when the project has no instruction sources", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "grad-audit-empty-"));
-    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    const logs: string[] = [];
-    await scan(
-      { scope: "project", projectPath: projectDir, home },
-      {
-        backend: null,
-        config: {},
-        collectFn: async () => ["f1"],
-        parseFn: async () => [],
-        attentionFn: async () => null,
-        log: message => logs.push(message),
-      },
-    );
-    await expect(readFile(auditCachePath(projectDir, home), "utf8")).rejects.toThrow();
-    expect(logs.some(message => message.startsWith("instruction audit:"))).toBe(false);
-  });
-
-  it("does not apply project CLAUDE instructions to cross-project scans", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "grad-audit-all-"));
-    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    await writeFile(join(projectDir, "CLAUDE.md"), "- Always use pnpm, never npm.\n");
-    const logs: string[] = [];
-    await scan(
-      { scope: "all", projectPath: projectDir, home },
-      {
-        backend: null,
-        config: {},
-        collectFn: async () => ["f1"],
-        parseFn: async () => [
-          { ts: "t", project: "other", role: "user", sessionId: "s1", text: "use pnpm never npm" },
-          { ts: "t", project: "other", role: "user", sessionId: "s2", text: "use pnpm never npm" },
-          { ts: "t", project: "other", role: "user", sessionId: "s3", text: "use pnpm never npm" },
-        ],
-        attentionFn: async () => null,
-        log: message => logs.push(message),
-      },
-    );
-    expect(logs.some(message => message.startsWith("instruction audit:"))).toBe(false);
-  });
-
-  it("counts corrections only when the real transcript shows preceding assistant activity", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "grad-audit-context-"));
-    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    const transcript = join(projectDir, "corrections.jsonl");
-    await writeFile(join(projectDir, "CLAUDE.md"), "- Never edit generated files.\n");
-    const lines: string[] = [];
-    for (let index = 1; index <= 3; index++) {
-      const sessionId = `s${index}`;
-      lines.push(
-        JSON.stringify({
-          type: "assistant",
-          sessionId,
-          timestamp: `2026-07-0${index}T00:00:00Z`,
-          message: {
-            role: "assistant",
-            content: [{ type: "tool_use", id: `edit-${index}`, name: "Edit", input: { file_path: "/p/generated.ts" } }],
-          },
-        }),
-        JSON.stringify({
-          type: "user",
-          sessionId,
-          cwd: "/p/project",
-          timestamp: `2026-07-0${index}T00:01:00Z`,
-          message: { role: "user", content: "no, never edit generated files" },
-        }),
-      );
-    }
-    await writeFile(transcript, `${lines.join("\n")}\n`);
-    let seen: Array<{ kind?: string; hint?: string }> = [];
-    await scan(
-      { scope: "project", projectPath: projectDir, home },
-      {
-        config: {},
-        collectFn: async () => [transcript],
-        backend: {
-          name: "recording",
-          available: async () => true,
-          complete: async ({ prompt }: { prompt: string }) => {
-            seen = JSON.parse(prompt);
-            return JSON.stringify({ suggestions: [] });
-          },
-        },
-        attentionFn: async () => null,
-        gitLogFn: async () => "",
-      },
-    );
-    expect(seen).toEqual([expect.objectContaining({
-      kind: "instruction",
-      hint: expect.stringContaining("correction violating instruction"),
-    })]);
-    const snapshot = JSON.parse(await readFile(auditCachePath(projectDir, home), "utf8"));
-    expect(snapshot.tallies[0]).toMatchObject({ restatements: 0, violations: 3 });
-  });
-
   it("mines Claude tool events into candidates and reports extraction drops", async () => {
     const projectDir = await mkdtemp(join(tmpdir(), "grad-tools-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const logs: string[] = [];
-    const failure = (sessionId: string): ToolEvent => ({
-      ts: "2026-07-01T00:00:00Z",
+    // Distinct instants: identical timestamps across sessions are how a resumed
+    // session replays its parent's history, and are counted once.
+    const failure = (sessionId: string, ts: string): ToolEvent => ({
+      ts,
       sessionId,
       kind: "bash",
       command: "npm test",
       isError: true,
       errorHead: "FAIL",
     });
-    const events = [failure("s1"), failure("s1"), failure("s2"), failure("s2")];
+    const events = [
+      failure("s1", "2026-07-01T00:00:00Z"), failure("s1", "2026-07-01T00:01:00Z"),
+      failure("s2", "2026-07-02T00:00:00Z"), failure("s2", "2026-07-02T00:01:00Z"),
+    ];
     await scan(
       { scope: "project", projectPath: projectDir, home },
       {
@@ -347,25 +229,49 @@ describe("scan", () => {
     expect(suggestions).toEqual([]);
   });
 
-  // Regression: a "continue"-style cluster with runs (maxRunLength 4, runSessions 3)
-  // becomes a loop suggestion with zero LLM involvement — markLoops must run on the
-  // real cluster/temporal output inside scan(), and the degrade path (backend: null)
-  // must turn the marked candidate into a loop suggestion.
-  it("marks a 'continue'-style cluster with runs as a loop suggestion in degraded (no-LLM) mode", async () => {
-    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+  const loopFixture = (text: string) => {
     const at = (sessionId: string, times: string[]) =>
-      times.map(ts => ({ ts, project: "p", role: "user" as const, text: "continue", sessionId }));
-    const turns = [
+      times.map(ts => ({ ts, project: "p", role: "user" as const, text, sessionId }));
+    return [
       ...at("s1", ["2026-06-01T10:00:00Z", "2026-06-01T10:05:00Z", "2026-06-01T10:10:00Z", "2026-06-01T10:15:00Z"]),
       ...at("s2", ["2026-06-02T09:00:00Z", "2026-06-02T09:05:00Z"]),
       ...at("s3", ["2026-06-03T09:00:00Z", "2026-06-03T09:05:00Z"]),
     ];
+  };
+
+  const runLoopScan = async (text: string) => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const logs: string[] = [];
     const suggestions = await scan(
       { scope: "all", projectPath: process.cwd(), home },
-      { backend: null, collectFn: async () => ["f"], parseFn: async () => ({ turns, events: [] }) },
+      {
+        backend: null,
+        collectFn: async () => ["f"],
+        parseFn: async () => ({ turns: loopFixture(text), events: [] }),
+        log: message => logs.push(message),
+      },
     );
-    const loopSuggestion = suggestions.find(s => s.payload.type === "loop");
-    expect(loopSuggestion).toBeDefined();
+    return { suggestions, log: logs.join("\n") };
+  };
+
+  // markLoops still runs on the real cluster/temporal output inside scan(), and
+  // the degrade path still turns the marked candidate into a loop. The loop
+  // artifact is then refused: its instruction is `Reminder: <the prompt>`, so it
+  // cannot say anything the prompt did not.
+  it("classifies a repeated instruction as a loop and then refuses to make an artifact of it", async () => {
+    const { suggestions, log } = await runLoopScan("run the tests again");
+    expect(suggestions.find(s => s.payload.type === "loop")).toBeUndefined();
+    expect(log).toContain("restatement filter → 1 suggestion(s) dropped");
+  });
+
+  // A nudge never reaches the model at all: autopilot is the tool that answers
+  // repeated nudging, and saying so costs nothing.
+  it("drops a 'continue'-style nudge before the model sees it and points at autopilot", async () => {
+    const { suggestions, log } = await runLoopScan("continue");
+    expect(suggestions).toEqual([]);
+    expect(log).toContain("nudge filter → 1 approval phrase(s) dropped");
+    expect(log).toContain("gradient on autopilot");
+    expect(log).not.toContain("restatement filter");
   });
 
   // Regression: a "don't add comments" correction cluster (4x, 3 sessions) is
@@ -424,8 +330,10 @@ describe("scan", () => {
   // post-detect even when there's no LLM at all.
   it("suggests the PreCompact checkpoint hook from /compact command events in degraded mode", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    const events = ["s1", "s1", "s1", "s2", "s2", "s2", "s3", "s3", "s3", "s4", "s4", "s4"].map(sessionId => ({
-      ts: "2026-07-01T00:00:00Z", project: "p", sessionId, command: "/compact",
+    // Distinct instants: twelve compactions sharing one timestamp is a resumed
+    // session replaying its parent, and is counted once.
+    const events = ["s1", "s1", "s1", "s2", "s2", "s2", "s3", "s3", "s3", "s4", "s4", "s4"].map((sessionId, index) => ({
+      ts: `2026-07-01T00:${String(index).padStart(2, "0")}:00Z`, project: "p", sessionId, command: "/compact",
     }));
     const logs: string[] = [];
     const suggestions = await scan(
@@ -449,11 +357,11 @@ describe("scan", () => {
   // hook type or the user sees the same checkpoint hook twice.
   it("emits exactly one checkpoint hook when the llm and /compact evidence both propose it", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    const events = ["s1", "s1", "s1", "s2", "s2", "s2", "s3", "s3", "s3", "s4", "s4", "s4"].map(sessionId => ({
-      ts: "2026-07-01T00:00:00Z", project: "p", sessionId, command: "/compact",
+    const events = ["s1", "s1", "s1", "s2", "s2", "s2", "s3", "s3", "s3", "s4", "s4", "s4"].map((sessionId, index) => ({
+      ts: `2026-07-01T00:${String(index).padStart(2, "0")}:00Z`, project: "p", sessionId, command: "/compact",
     }));
-    const turns = ["s1", "s2", "s3"].map(sessionId => ({
-      ts: "2026-07-01T00:00:00Z", project: "p", role: "user" as const,
+    const turns = ["s1", "s2", "s3"].map((sessionId, index) => ({
+      ts: `2026-07-0${index + 1}T12:00:00Z`, project: "p", role: "user" as const,
       text: "we keep losing context after compaction", sessionId,
     }));
     const backend = {
@@ -547,16 +455,25 @@ describe("scan", () => {
         }] });
       },
     };
+    // A repeated error paste, because its artifact is an advisory diagnosis the
+    // user never typed. A plain repeated instruction cannot reach the cache any
+    // more: detect rebuilds a command body from the prompt itself, so the
+    // artifact would be the prompt with a preamble and is dropped upstream.
+    const paste = "pnpm test\nError: Cannot find module '@scope/pkg'\n" + "  at Module._resolveFilename\n".repeat(20);
+    const at = (ts: string, sessionId: string) =>
+      ({ ts, project: "x", role: "user" as const, text: paste, sessionId });
     const out = await scan(
       { scope: "project", projectPath: projectDir, home },
       {
         backend: fakeBackend,
         collectFn: async () => ["fake.jsonl"],
         parseFn: async () => ({
+          // Distinct days: a habit by definition spans more than one sitting,
+          // and distinct timestamps keep these from reading as fork replays.
           turns: [
-            { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s1" },
-            { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s2" },
-            { ts: "t", project: "x", role: "user", text: "push and create a pull request", sessionId: "s3" },
+            at("2026-07-01T10:00:00.000Z", "s1"),
+            at("2026-07-02T10:00:00.000Z", "s2"),
+            at("2026-07-03T10:00:00.000Z", "s3"),
           ],
           events: [],
         }),
@@ -608,7 +525,7 @@ describe("scan", () => {
         collectFn: async () => ["fake.jsonl"],
         parseFn: async () => ({
           turns: Array.from({ length: 3 }, (_, i) => ({
-            ts: "t", project: "x", role: "user" as const,
+            ts: `2026-07-0${i + 1}T10:00:00.000Z`, project: "x", role: "user" as const,
             text: "continue until actually done", sessionId: `s${i}`,
           })),
           events: [],
@@ -623,9 +540,11 @@ describe("scan", () => {
     // Redacted sample from the dogfood security-review injector: one identical
     // prompt per session across all 1,318 affected sessions.
     const flood = "Review this change for security vulnerabilities. Changed files (you may read these and any other file in the repo): " + "x".repeat(200);
+    // Distinct instants: the injector fired once per session, and identical
+    // (timestamp, text) across sessions is a replay rather than 1,318 sends.
     const turns = Array.from({ length: 1_318 }, (_, i) => ({
-      ts: `2026-07-0${(i % 9) + 1}T00:00:00Z`, project: "p", role: "user" as const,
-      sessionId: `s${i}`, text: flood,
+      ts: `2026-07-0${(i % 9) + 1}T${String(Math.floor(i / 60) % 24).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}:00Z`,
+      project: "p", role: "user" as const, sessionId: `s${i}`, text: flood,
     }));
     const logs: string[] = [];
     const out = await scan(
@@ -658,8 +577,8 @@ describe("scan", () => {
     const projectDir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const errorBody = `make dev\n${"error: boom SENSITIVE_BODY\n".repeat(40)}`;
-    const turns = ["s1", "s2", "s3"].map(sessionId => ({
-      ts: "2026-07-01T00:00:00Z",
+    const turns = ["s1", "s2", "s3"].map((sessionId, index) => ({
+      ts: `2026-07-0${index + 1}T00:00:00Z`,
       project: "p",
       role: "user" as const,
       sessionId,
@@ -797,9 +716,11 @@ describe("scan", () => {
   it("mines sequences into candidates and logs the sequence count", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    // One chain per day: a chain repeated inside a single sitting is the shape
+    // of iterating on one feature, and is held back as project history.
     const seqTurns = Array.from({ length: 3 }, (_, i) => [
-      { ts: "2026-07-01T00:00:00Z", project: "p", role: "user" as const, sessionId: `s${i}`, text: "review the spec" },
-      { ts: "2026-07-01T00:01:00Z", project: "p", role: "user" as const, sessionId: `s${i}`, text: "write the plan" },
+      { ts: `2026-07-0${i + 1}T00:00:00Z`, project: "p", role: "user" as const, sessionId: `s${i}`, text: "review the spec" },
+      { ts: `2026-07-0${i + 1}T00:01:00Z`, project: "p", role: "user" as const, sessionId: `s${i}`, text: "write the plan" },
     ]).flat();
     const logs: string[] = [];
     const out = await scan(
@@ -815,7 +736,9 @@ describe("scan", () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const claudeTurns = ["c1", "c2"].map(sessionId => ({
-      ts: "2026-07-01T00:00:00Z",
+      // Distinct instants on distinct days: identical timestamps now read as a
+      // fork replay, and a one-day pattern is held back as project history.
+      ts: sessionId === "c1" ? "2026-07-01T00:00:00Z" : "2026-07-02T00:00:00Z",
       project: "gradient",
       role: "user" as const,
       sessionId,
@@ -823,7 +746,7 @@ describe("scan", () => {
       assistant: "claude-code" as const,
     }));
     const codexTurns = ["codex:x1", "codex:x2"].map(sessionId => ({
-      ts: "2026-07-01T00:01:00Z",
+      ts: sessionId === "codex:x1" ? "2026-07-01T00:01:00Z" : "2026-07-02T00:01:00Z",
       project: "gradient",
       role: "user" as const,
       sessionId,
@@ -847,11 +770,11 @@ describe("scan", () => {
     );
     expect(logs.join("\n")).toContain("Claude Code 1 · Codex 1");
     expect(logs.join("\n")).toContain("Claude Code 2 prompt(s) · Codex 2 prompt(s)");
-    expect(out[0].evidence).toMatchObject({
-      count: 4,
-      sessions: 4,
-      assistants: ["claude-code", "codex"],
-    });
+    // The merged candidate produces exactly one suggestion, not one per
+    // assistant — that single drop is the evidence union surviving into detect.
+    // The artifact itself is refused: its body would be the prompt verbatim.
+    expect(out).toEqual([]);
+    expect(logs.join("\n")).toContain("restatement filter → 1 suggestion(s) dropped");
   });
 
   it("routes <command-name> turns to events via the real parseFn, keeping them out of mining", async () => {

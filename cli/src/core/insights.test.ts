@@ -104,13 +104,11 @@ describe("buildRecommendations", () => {
     const recommendations = buildRecommendations(metrics, {
       autopilotMode: undefined,
       avoided: 0,
-      recallInstalled: false,
       unusedArtifacts: ["dead"],
     });
     const all = recommendations.map(recommendation => recommendation.line).join("\n");
-    expect(all).toContain("gradient autopilot nudge");
-    expect(all).toContain("gradient continuity on");
-    expect(all).toContain("gradient recall on");
+    expect(all).toContain("gradient on autopilot");
+    expect(all).toContain("gradient on continuity");
     expect(all).toContain("gradient remove dead");
     expect(all).toContain("defaultModel");
     expect(all).toContain("fewer-permission-prompts");
@@ -120,7 +118,6 @@ describe("buildRecommendations", () => {
     const recommendations = buildRecommendations(metrics, {
       autopilotMode: "nudge",
       avoided: 7,
-      recallInstalled: true,
       unusedArtifacts: [],
     });
     expect(recommendations.map(recommendation => recommendation.line).join("\n")).toContain("7 nudge(s) avoided");
@@ -129,7 +126,7 @@ describe("buildRecommendations", () => {
   it("routes effort churn even without model switches", () => {
     const recommendations = buildRecommendations(
       { ...metrics, modelSwitches: 0, effortSwitches: 12 },
-      { autopilotMode: "off", avoided: 0, recallInstalled: true, unusedArtifacts: [] },
+      { autopilotMode: "off", avoided: 0, unusedArtifacts: [] },
     );
     expect(recommendations.map(recommendation => recommendation.line).join("\n")).toContain("defaultModel");
   });
@@ -173,8 +170,8 @@ describe("renderInsightsHtml", () => {
       effortSwitches: 0,
       errorPastes: 1,
     },
-    recommendations: [{ metric: "nudges", line: "try <gradient autopilot nudge> & friends" }],
-    costs: [{ metric: "nudges" as const, tokens: 123, prompts: 3, line: "≈123 tokens · 3 nudges" }],
+    recommendations: [{ metric: "nudges", line: "try <gradient on autopilot> & friends" }],
+    costs: [{ metric: "nudges" as const, tokens: 123, prompts: 3, recoverable: false, line: "≈123 tokens · 3 nudges" }],
     toolActivity: { failureLoops: 2, postEditRituals: 1 },
   };
 
@@ -183,7 +180,7 @@ describe("renderInsightsHtml", () => {
     expect(html).toContain("<style>");
     expect(html).not.toContain("<script");
     expect(html).not.toMatch(/https?:\/\//);
-    expect(html).toContain("&lt;gradient autopilot nudge&gt; &amp; friends");
+    expect(html).toContain("&lt;gradient on autopilot&gt; &amp; friends");
     expect(html).toContain("project scope");
     expect(html).toContain("cost of unautomated habits");
     expect(html).toContain("≈123 tokens");

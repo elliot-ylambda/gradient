@@ -19,7 +19,9 @@ import { compileIgnorePatterns, filterPrompts, hasTemplateFloodSupport, isTempla
 import { boundedPromptLimit, capByRecency, MAX_PROMPTS_HARD_CAP } from "../core/cap.js";
 import { DEFAULT_DETECT_WINDOW, DEFAULT_MAX_PROMPTS } from "../core/scope.js";
 import { cluster, normalize } from "../core/cluster.js";
-import { annotateTemporal } from "../core/temporal.js";
+import { activeWindows, annotateTemporal } from "../core/temporal.js";
+import { isRestatement } from "../core/restatement.js";
+import { commandEventIdentity, dedupeReplayedEvents, toolEventIdentity, turnIdentity } from "../core/replay.js";
 import { hookFromEvents, markLoops } from "../core/classify.js";
 import { markCorrections } from "../core/corrections.js";
 import { mineSequences, SEQ_MAX_BIGRAMS } from "../core/sequence.js";
@@ -29,15 +31,27 @@ import { findHusks, findMissingSessions } from "../core/coverage.js";
 import { selectBackend } from "../llm/index.js";
 import { loadConfig, resolveTargets } from "../config.js";
 import type { LLMBackend } from "../llm/backend.js";
-import { refreshRecallIndex } from "./recall.js";
 import { saveSuggestions } from "./apply.js";
 import { detectPasteCandidates, extractPasteKey } from "../core/paste.js";
 import { ANSWER_MAX_PAIRS, extractAnswerPairs, mineAnswerCandidates } from "../core/answers.js";
 import { attentionSuggestion, mineAttention } from "../core/attention.js";
+import { isNudgeText } from "../core/insights.js";
+
 import { mineProjectPlaybook } from "../core/project-suggest.js";
 import { failureLoops, rituals } from "../core/toolmine.js";
-import { loadInstructions } from "../core/instructions.js";
-import { audit, clearInstructionAudit, CORRECTION_RE, saveInstructionAudit } from "../core/audit.js";
+
+/**
+ * Candidate kinds produced by clustering raw prompt text, and only those.
+ *
+ * This is the family where a single sitting masquerades as a habit: forked
+ * sessions replay a parent's prompts, and iterating on one hard feature repeats
+ * the same phrasing all afternoon. Every other producer already carries its own
+ * support floor — pastes need PASTE_MIN_COUNT, sequences need recurrence,
+ * tool-event kinds are counted facts — so gating them would suppress real
+ * signal without removing any of the noise actually observed.
+ */
+const CLUSTERED_PROMPT_KINDS: ReadonlySet<string> = new Set(["unknown", "loop", "correction"]);
+const MIN_ACTIVE_WINDOWS = 2;
 
 const MAX_MINED_PROMPT_CHARS = 4_000;
 export const MAX_TOOL_EVENTS = 20_000;
@@ -59,7 +73,6 @@ export interface ScanDeps {
   collectCodexFn?: (options: ScanOptions) => Promise<string[]>;
   parseFn?: (path: string) => Promise<ParsedTranscript | Turn[]>;
   parseToolEventsFn?: (path: string) => Promise<{ events: ToolEvent[]; dropped: number }>;
-  parseCorrectionContextFn?: (path: string) => Promise<Turn[]>;
   parseCodexFn?: (path: string) => Promise<Turn[]>;
   parseDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
   parseCodexDialogueFn?: (path: string) => Promise<DialogueTurn[]>;
@@ -115,22 +128,13 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const ignore = compileIgnorePatterns(config.ignorePatterns);
   const answerPairs = [] as ReturnType<typeof extractAnswerPairs>;
   const pairCap = Math.min(ANSWER_MAX_PAIRS, max);
-  const instructions = opts.scope === "project"
-    ? await loadInstructions(projectDir, opts.home ?? homedir())
-    : [];
-  if (opts.scope === "project" && instructions.length === 0) {
-    await clearInstructionAudit(projectDir, opts.home);
-  }
   let turns: Turn[] = [];
   let toolEvents: ToolEvent[] = [];
   let toolEventsDropped = 0;
-  let confirmedCorrections: Turn[] = [];
   // Command events stay separate from minable prompt text and feed adoption,
   // insights, and deterministic checkpoint-hook detection.
   let events: CommandEvent[] = [];
   const parseToolEventsFn = deps.parseToolEventsFn ?? (deps.parseFn ? undefined : parseToolEventsFile);
-  const parseCorrectionContextFn = deps.parseCorrectionContextFn ??
-    (deps.parseFn ? undefined : parseAssistantFollowedUserFile);
   const userTurnCounts = new Map<string, number>();
   for (const file of claudeFiles) {
     const parsedValue = await parseFn(file);
@@ -150,12 +154,19 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
         toolEvents = capped.kept;
       }
     }
-    if (instructions.length > 0 && parseCorrectionContextFn) {
-      confirmedCorrections.push(...scoped(await parseCorrectionContextFn(file)));
-      if (confirmedCorrections.length > MAX_PROMPTS_HARD_CAP) {
-        confirmedCorrections = capByRecency(confirmedCorrections, MAX_PROMPTS_HARD_CAP).kept;
-      }
-    }
+  }
+
+  // Before anything counts. Every cross-session floor downstream — two sessions
+  // for a failure loop, three for a compaction hook — is otherwise satisfied by
+  // a resumed session replaying its parent's history rather than by the thing
+  // happening twice.
+  const dedupedCommands = dedupeReplayedEvents(events, commandEventIdentity);
+  const dedupedTools = dedupeReplayedEvents(toolEvents, toolEventIdentity);
+  events = dedupedCommands.kept;
+  toolEvents = dedupedTools.kept;
+  const replayed = dedupedCommands.dropped + dedupedTools.dropped;
+  if (replayed > 0) {
+    log(`replay dedupe → ${replayed} event(s) inherited by resumed sessions counted once`);
   }
 
   const productionCodexSinglePass = !deps.parseCodexFn && !deps.parseCodexDialogueFn;
@@ -193,38 +204,25 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     log(`coverage check failed: ${(error as Error).message}`);
   }
 
-  const prompts = filterPrompts(turns, ignore);
-  log(`prompts: ${prompts.length} after filtering injected text`);
+  // Replay dedupe before counting, matching the events above and the report:
+  // one prompt a resumed session inherited from its parent is one prompt, and
+  // any other answer makes `gradient` and `gradient scan` disagree about the
+  // same corpus.
+  const filtered = filterPrompts(turns, ignore);
+  const deduped = dedupeReplayedEvents(filtered, turnIdentity);
+  const prompts = deduped.kept;
+  log(
+    `prompts: ${prompts.length} after filtering injected text` +
+    (deduped.dropped > 0 ? ` and ${deduped.dropped} session replay(s)` : ""),
+  );
   const { kept, dropped } = capByRecency(prompts, max);
   if (dropped > 0) log(`capped to most recent ${max} prompts; ${dropped} older dropped (raise with --max-prompts)`);
-
-  let auditCandidates: Candidate[] = [];
-  if (instructions.length > 0) {
-    const claudePrompts = kept.filter(turn => (turn.assistant ?? "claude-code") === "claude-code");
-    const result = audit(claudePrompts, instructions, { confirmedCorrections });
-    const restatementFindings = result.candidates.filter(candidate =>
-      candidate.hint?.startsWith("restated instruction")).length;
-    const correctionFindings = result.candidates.length - restatementFindings;
-    log(
-      `instruction audit: ${instructions.length} instructions · ` +
-      `${restatementFindings} restatement findings · ${correctionFindings} correction findings`,
-    );
-    await saveInstructionAudit(projectDir, result.tallies, opts.home);
-    auditCandidates = result.candidates;
-    const auditCandidateCap = Math.ceil(window / 3);
-    if (auditCandidates.length > auditCandidateCap) {
-      log(`audit candidates capped to ${auditCandidateCap}; ${auditCandidates.length - auditCandidateCap} dropped`);
-      auditCandidates = auditCandidates.slice(0, auditCandidateCap);
-    }
-  }
 
   const detectedPastes = detectPasteCandidates(kept);
   const pasteFloods = detectedPastes.filter(hasTemplateFloodSupport);
   const pastes = detectedPastes.filter(candidate => !hasTemplateFloodSupport(candidate));
   const clusterInput = kept
-    .filter(turn =>
-      !extractPasteKey(turn.text ?? "") &&
-      !(instructions.length > 0 && CORRECTION_RE.test(turn.text ?? "")))
+    .filter(turn => !extractPasteKey(turn.text ?? ""))
     .map(turn => ({ ...turn, text: turn.text?.slice(0, MAX_MINED_PROMPT_CHARS) }));
   const clustered = cluster(clusterInput);
   const floods = clustered.filter(isTemplateFlood);
@@ -263,13 +261,21 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     return signatureSet.has(normalized) ? normalized : null;
   });
   if (sequence.capped) log(`sequence pair cap hit (${SEQ_MAX_BIGRAMS} distinct pairs) — pairs first seen after the cap were ignored`);
-  if (sequence.chains.length > 0) log(`sequences: ${sequence.chains.length} recurring chain(s)`);
+  // Chains carry a count floor, not a recurrence floor, so a feature iterated on
+  // for one afternoon reaches it easily. Gate here rather than downstream: both
+  // the sequence candidates and the committed-playbook miner read these chains,
+  // and a chain that is project history must reach neither.
+  const chains = sequence.chains.filter(chain => activeWindows(chain.occurrences) >= MIN_ACTIVE_WINDOWS);
+  if (chains.length < sequence.chains.length) {
+    log(`recurrence gate → ${sequence.chains.length - chains.length} chain(s) held back as project history`);
+  }
+  if (chains.length > 0) log(`sequences: ${chains.length} recurring chain(s)`);
   const sequenceCap = Math.ceil(window / 4);
-  if (sequence.chains.length > sequenceCap) {
-    log(`sequence candidates capped to ${sequenceCap}; ${sequence.chains.length - sequenceCap} dropped`);
+  if (chains.length > sequenceCap) {
+    log(`sequence candidates capped to ${sequenceCap}; ${chains.length - sequenceCap} dropped`);
   }
   const assistantBySession = new Map(clusterInput.map(turn => [turn.sessionId, turn.assistant ?? "claude-code"]));
-  const sequenceCandidates: Candidate[] = sequence.chains.slice(0, sequenceCap).map(chain => ({
+  const sequenceCandidates: Candidate[] = chains.slice(0, sequenceCap).map(chain => ({
     kind: "sequence",
     signature: chain.steps.join(" → "),
     examples: chain.examples.map(example => example.join(" ⏎ ")),
@@ -299,7 +305,10 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
       toolCandidates = toolCandidates.slice(0, toolCandidateCap);
     }
   }
-  const allCandidates = [...nonSequenceCandidates, ...sequenceCandidates, ...toolCandidates, ...auditCandidates];
+  // Replays were already collapsed at the turn and event level, before any of
+  // these producers saw their input, so counts here are of distinct sends.
+  const allCandidates =
+    [...nonSequenceCandidates, ...sequenceCandidates, ...toolCandidates];
   // Runs are computed over the full kept stream, not clusterInput: a paste turn
   // sitting between two cluster members must break the run like any non-member.
   annotateTemporal(kept, allCandidates);
@@ -313,22 +322,65 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   // loop is left untouched (loops win ties by order); only kind-"unknown"
   // candidates are eligible.
   if (opts.scope === "project") markCorrections(allCandidates);
-  log(`mining → ${allCandidates.length} candidate patterns; sending top ${window} to llm`);
+
+  // Evidence gate. Tool-event candidates are counted facts — a failure loop or
+  // a post-edit ritual is real the first day it happens. Prompt-derived
+  // candidates are interpretations: the same phrasing recurs both because it is
+  // a ritual and because one hard feature was iterated on in a single sitting,
+  // and clustering cannot tell those apart. A pattern confined to one sitting is
+  // project history, so require two occasions at least 24h apart.
+  const beforeGate = allCandidates.length;
+  const dayGated = allCandidates.filter(candidate =>
+    !CLUSTERED_PROMPT_KINDS.has(candidate.kind) ||
+    activeWindows(candidate.occurrences) >= MIN_ACTIVE_WINDOWS);
+  if (dayGated.length < beforeGate) {
+    log(`recurrence gate → ${beforeGate - dayGated.length} prompt-derived candidate(s) held back as project history`);
+  }
+  // "lgtm", "looks good to me", "continue from where you left off" are
+  // approvals, not workflows. They repeat constantly and across many days, so
+  // no frequency or temporal rule catches them, and a skill built from one can
+  // never fire usefully.
+  //
+  // Loops used to be exempt so the resulting loop suggestion could carry the
+  // autopilot recommendation. It cannot any more — a loop artifact reads
+  // `Reminder: <the prompt>` and is refused downstream as a restatement — so the
+  // recommendation is made here, where it costs nothing and skips an LLM call.
+  // A candidate with a derived cadence still passes: that is a schedule, not an
+  // approval, and its value is the timing rather than the words.
+  const gated = dayGated.filter(candidate =>
+    !!candidate.cadence || !isNudgeText(candidate.signature));
+  if (gated.length < dayGated.length) {
+    log(`nudge filter → ${dayGated.length - gated.length} approval phrase(s) dropped; see gradient on autopilot`);
+  }
+  log(`mining → ${gated.length} candidate patterns; sending top ${window} to llm`);
 
   const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });
   if (!backend) log("no LLM backend available — degrading to exact-repeat command suggestions only");
-  const suggestions = await detect(allCandidates, backend, {
+  const suggestions = await detect(gated, backend, {
     limit: window,
     onCap: count => log(`capped to top ${window}; ${count} lower-frequency candidates dropped`),
   });
-  const valid: Suggestion[] = [];
+  const generated: Suggestion[] = [];
   for (const suggestion of suggestions) {
     try {
       validateSuggestion(suggestion);
-      valid.push(suggestion);
+      generated.push(suggestion);
     } catch (error) {
       log(`skipping invalid suggestion: ${(error as Error).message}`);
     }
+  }
+
+  // Repetition proves the phrasing recurred; it never proves an artifact would
+  // help. Drop the ones whose body is the prompt with a heading above it —
+  // invoking such a skill costs more than typing the sentence it contains.
+  // Runs before the playbook miner so a sequence entry cannot outlive the
+  // suggestions it chains together.
+  const valid = generated.filter(suggestion => !isRestatement(suggestion));
+  if (valid.length < generated.length) {
+    log(
+      `restatement filter → ${generated.length - valid.length} suggestion(s) dropped; ` +
+      "the generated artifact only repeated the prompt",
+    );
   }
 
   // Deterministic checkpoint-hook proposal from raw /compact command evidence
@@ -382,7 +434,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
 
   try {
     if (opts.scope === "project") {
-      const projectSuggestions = mineProjectPlaybook(valid, sequence.chains, assistantBySession);
+      const projectSuggestions = mineProjectPlaybook(valid, chains, assistantBySession);
       for (const suggestion of projectSuggestions) {
         validateSuggestion(suggestion);
         valid.push(suggestion);
@@ -397,6 +449,5 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
 
   await saveSuggestions(projectDir, valid, opts.home);
   log(`found ${valid.length} suggestions → cached`);
-  await refreshRecallIndex(projectDir, opts.home);
   return valid;
 }

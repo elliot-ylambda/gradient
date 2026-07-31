@@ -3,9 +3,10 @@ import { homedir } from "node:os";
 import { loadConfig, projectKey, saveConfig } from "../config.js";
 import { safeUnlink } from "../core/safeFs.js";
 import { progressPath } from "./checkpoint.js";
+import { gradientHookCommand, isGradientHookFor } from "../core/hookBinary.js";
 
-const CHECKPOINT_COMMAND = "gradient checkpoint";
-const RECAP_COMMAND = "gradient recap";
+const CHECKPOINT_SUB = "checkpoint";
+const RECAP_SUB = "recap";
 const RECAP_MATCHER = "resume|compact";
 
 export async function setContinuity(
@@ -18,8 +19,10 @@ export async function setContinuity(
   const key = projectKey(projectDir);
   if (on) {
     try {
-      await installHook(projectDir, "PreCompact", CHECKPOINT_COMMAND);
-      const path = await installHook(projectDir, "SessionStart", RECAP_COMMAND, { matcher: RECAP_MATCHER });
+      await installHook(projectDir, "PreCompact", gradientHookCommand(CHECKPOINT_SUB),
+        { replacing: [cmd => isGradientHookFor(cmd, CHECKPOINT_SUB)] });
+      const path = await installHook(projectDir, "SessionStart", gradientHookCommand(RECAP_SUB),
+        { matcher: RECAP_MATCHER, replacing: [cmd => isGradientHookFor(cmd, RECAP_SUB)] });
       projects.add(key);
       config.continuityProjects = [...projects].sort();
       await saveConfig(config, opts.home);
@@ -28,8 +31,8 @@ export async function setContinuity(
       projects.delete(key);
       config.continuityProjects = [...projects].sort();
       await saveConfig(config, opts.home).catch(() => undefined);
-      await removeHook(projectDir, "PreCompact", CHECKPOINT_COMMAND).catch(() => undefined);
-      await removeHook(projectDir, "SessionStart", RECAP_COMMAND).catch(() => undefined);
+      await removeHook(projectDir, "PreCompact", cmd => isGradientHookFor(cmd, CHECKPOINT_SUB)).catch(() => undefined);
+      await removeHook(projectDir, "SessionStart", cmd => isGradientHookFor(cmd, RECAP_SUB)).catch(() => undefined);
       throw error;
     }
   }
@@ -42,8 +45,8 @@ export async function setContinuity(
   await safeUnlink(userHome, progressPath(projectDir, userHome)).catch(error => {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   });
-  await removeHook(projectDir, "PreCompact", CHECKPOINT_COMMAND);
-  const path = await removeHook(projectDir, "SessionStart", RECAP_COMMAND);
+  await removeHook(projectDir, "PreCompact", cmd => isGradientHookFor(cmd, CHECKPOINT_SUB));
+  const path = await removeHook(projectDir, "SessionStart", cmd => isGradientHookFor(cmd, RECAP_SUB));
   return { on: false, settingsPath: path };
 }
 
@@ -55,7 +58,7 @@ export async function continuityStatus(
   const consented = (config.continuityProjects ?? []).includes(projectKey(projectDir));
   if (!consented) return { checkpoint: false, recap: false };
   return {
-    checkpoint: await hookInstalled(projectDir, "PreCompact", CHECKPOINT_COMMAND),
-    recap: await hookInstalled(projectDir, "SessionStart", RECAP_COMMAND, { matcher: RECAP_MATCHER }),
+    checkpoint: await hookInstalled(projectDir, "PreCompact", cmd => isGradientHookFor(cmd, CHECKPOINT_SUB)),
+    recap: await hookInstalled(projectDir, "SessionStart", cmd => isGradientHookFor(cmd, RECAP_SUB), { matcher: RECAP_MATCHER }),
   };
 }

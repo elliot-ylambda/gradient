@@ -113,7 +113,7 @@ describe("review", () => {
     let calls = 0;
     await review(dir, async () => decisions[calls++], { home, onExplain: message => explanations.push(message) });
     expect(calls).toBe(2);
-    expect(explanations[0]).toContain("≈7m/month");
+    expect(explanations[0]).toContain("inferred from repeated prompts");
     expect(explanations[0]).toContain("ship after checks");
   });
 });

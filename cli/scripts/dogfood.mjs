@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -34,10 +35,25 @@ const LIVE_LIMITATIONS = [
 ];
 
 const COVERED_COMMANDS = new Set([
-  "<bare>", "help", "init", "scan", "review", "session-start", "apply", "explain",
-  "notify", "list", "remove", "migrate", "recall", "stats", "insights", "continuity",
-  "board", "recap", "bundle", "checkpoint", "autopilot", "respond",
+  // The six advertised verbs, plus the hidden ones the gate still drives: hook
+  // targets, the retired aliases kept for one release, and `bundle`.
+  "<bare>", "help", "init", "scan", "apply", "remove", "on", "off",
+  "hook", "session-start", "notify", "recap", "checkpoint", "respond", "recall",
+  "review", "insights", "stats", "list", "mirror", "continuity", "autopilot", "board", "bundle",
 ]);
+
+
+/** Hook commands are written in whichever binary form resolves here: a bare
+ *  `gradient` when it is on PATH, `<node> <script>` otherwise. CI has no global
+ *  install, so assert on the subcommand a hook runs rather than on one spelling
+ *  of the binary that happens to be true on a developer's machine. */
+function installedHookCommands(settings, event) {
+  return (settings?.hooks?.[event] ?? []).flatMap(entry => (entry.hooks ?? []).map(hook => hook.command ?? ""));
+}
+
+function runsSubcommand(settings, event, subcommand) {
+  return installedHookCommands(settings, event).some(command => command.trim().endsWith(` ${subcommand}`));
+}
 
 function parseOptions(argv) {
   let output = join(repoRoot, "artifacts", "dogfood");
@@ -535,16 +551,32 @@ async function main() {
 import { basename } from "node:path";
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
-const ids = [...input.matchAll(/"id"\s*:\s*"(c_[a-f0-9]+)"/g)].map(match => match[1]);
+// Classify per candidate, not per request. Deciding one payload type from the
+// whole prompt gave a paste candidate a loop payload, which detect rejects as
+// an incompatible kind — the request looked answered and produced nothing.
+// The two backends wrap the candidate array differently, and the Codex prompt
+// embeds the system text — whose own JSON example contains brackets — so slice
+// each candidate out by its opaque id rather than parsing the whole payload.
+const candidates = input.split(/"id"\s*:\s*"/).slice(1).map(chunk => {
+  const id = /^(c_[a-f0-9]+)"/.exec(chunk);
+  if (!id) return null;
+  const head = chunk.slice(0, Math.max(0, chunk.indexOf('"signature"')) || 200);
+  const kind = /"kind"\s*:\s*"([a-z-]+)"/.exec(head);
+  return { id: id[1], kind: kind ? kind[1] : "unknown" };
+}).filter(Boolean);
 let result;
-if (ids.length > 0) {
-  const payload = /"kind"\s*:\s*"loop"/.test(input)
-    ? { type: "loop" }
-    : { type: "command", commandName: "dogfood-scan", mechanical: true };
-  result = JSON.stringify({ suggestions: [{
-    sourceIds: [ids[0]], name: "dogfood-scan", confidence: "high",
-    payload
-  }] });
+if (candidates.length > 0) {
+  const nameFor = (candidate, index) => candidate.kind === "loop"
+    ? "dogfood-loop-echo"
+    : candidate.kind === "paste" ? "dogfood-scan" : "dogfood-other" + index;
+  result = JSON.stringify({ suggestions: candidates.map((candidate, index) => ({
+    sourceIds: [candidate.id],
+    name: nameFor(candidate, index),
+    confidence: "high",
+    payload: candidate.kind === "loop"
+      ? { type: "loop" }
+      : { type: "command", commandName: nameFor(candidate, index), mechanical: true },
+  })) });
 } else if (input.includes("DOGFOOD_STAND_DOWN")) {
   result = JSON.stringify({ action: "stand_down", why: "deterministic dogfood stand-down" });
 } else if (input.includes("DOGFOOD_CONTINUE")) {
@@ -569,22 +601,35 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       await Promise.all([mkdir(claudeRoot, { recursive: true }), mkdir(codexRoot, { recursive: true })]);
       const now = Date.now() - 60_000;
       const iso = offset => new Date(now + offset * 1000).toISOString();
+      // One session per day. A habit is something that recurs on separate
+      // occasions; a fixture whose sessions all land in the same minute is a
+      // single sitting, and the recurrence gate correctly holds it back.
+      const DAY_SECONDS = 86_400;
+      const dayOf = session => -(3 - session) * DAY_SECONDS;
       const claudeLine = (type, sessionId, timestamp, content) => JSON.stringify({
         type, sessionId, cwd: state.project, timestamp,
         message: { role: type === "assistant" ? "assistant" : "user", content },
       });
       const repeated = "format the dogfood report and run the focused tests";
+      // A repeated error paste. A plain repeated instruction can no longer
+      // reach an artifact: detect rebuilds a command body from the prompt it
+      // was mined from, so the result would be the prompt with a heading above
+      // it and is dropped as a restatement. A paste's artifact is an advisory
+      // diagnosis the user never typed, which is the point of generating it.
+      const pastedError = `pnpm test\nError: Cannot find module '@dogfood/pkg'\n${"  at Module._resolveFilename (node:internal/modules/cjs/loader)\n".repeat(12)}`;
       for (let session = 1; session <= 2; session += 1) {
         const sessionId = `claude-dogfood-${session}`;
         const lines = [
-          claudeLine("user", sessionId, iso(session * 10), repeated),
-          claudeLine("assistant", sessionId, iso(session * 10 + 1), [
+          claudeLine("user", sessionId, iso(dayOf(session)), repeated),
+          claudeLine("assistant", sessionId, iso(dayOf(session) + 1), [
             { type: "text", text: "Synthetic assistant output." },
             { type: "tool_use", name: "Edit", id: `tool-${session}`, input: { file_path: join(state.project, "README.md") } },
           ]),
-          claudeLine("user", sessionId, iso(session * 10 + 2), repeated),
-          claudeLine("user", sessionId, iso(session * 10 + 3), "<command-name>/compact</command-name>"),
-          claudeLine("user", sessionId, iso(session * 10 + 4), session === 1 ? `unique redaction probe ${SECRET_SENTINEL}` : repeated),
+          claudeLine("user", sessionId, iso(dayOf(session) + 2), repeated),
+          claudeLine("user", sessionId, iso(dayOf(session) + 3), "<command-name>/compact</command-name>"),
+          claudeLine("user", sessionId, iso(dayOf(session) + 4), session === 1 ? `unique redaction probe ${SECRET_SENTINEL}` : repeated),
+          claudeLine("user", sessionId, iso(dayOf(session) + 5), pastedError),
+          claudeLine("user", sessionId, iso(dayOf(session) + 6), pastedError),
         ];
         const path = join(claudeRoot, `session-${session}.jsonl`);
         await writeFile(path, `${lines.join("\n")}\n`, { mode: 0o600 });
@@ -594,9 +639,11 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       for (let session = 1; session <= 2; session += 1) {
         const sessionId = `codex-dogfood-${session}`;
         const records = [
-          { type: "session_meta", timestamp: iso(session * 20), payload: { id: sessionId, cwd: state.project, source: "cli", git: { branch: "main" } } },
-          { type: "event_msg", timestamp: iso(session * 20 + 1), payload: { type: "user_message", message: repeated, images: [] } },
-          { type: "event_msg", timestamp: iso(session * 20 + 2), payload: { type: "user_message", message: repeated, images: [] } },
+          { type: "session_meta", timestamp: iso(dayOf(session) + 3_600), payload: { id: sessionId, cwd: state.project, source: "cli", git: { branch: "main" } } },
+          { type: "event_msg", timestamp: iso(dayOf(session) + 3_601), payload: { type: "user_message", message: repeated, images: [] } },
+          { type: "event_msg", timestamp: iso(dayOf(session) + 3_602), payload: { type: "user_message", message: repeated, images: [] } },
+          { type: "event_msg", timestamp: iso(dayOf(session) + 3_603), payload: { type: "user_message", message: pastedError, images: [] } },
+          { type: "event_msg", timestamp: iso(dayOf(session) + 3_604), payload: { type: "user_message", message: pastedError, images: [] } },
           { type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: 120, cached_input_tokens: 20 } } } },
         ];
         await writeFile(join(codexRoot, `rollout-${session}.jsonl`), `${records.map(record => JSON.stringify(record)).join("\n")}\n`, { mode: 0o600 });
@@ -607,7 +654,13 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         GRADIENT_HOME: state.home,
         NO_COLOR: "1",
         TERM: "dumb",
-        PATH: `${state.fakeBin}${delimiter}${process.env.PATH ?? ""}`,
+        // Hide any globally installed gradient. The hook installer writes
+        // whichever binary form resolves, so a developer machine with a global
+        // install exercises a different code path from CI and from an npx user
+        // — and the difference only showed up as a CI-only failure.
+        PATH: `${state.fakeBin}${delimiter}${(process.env.PATH ?? "").split(delimiter)
+          .filter(dir => dir && !existsSync(join(dir, "gradient")))
+          .join(delimiter)}`,
         ANTHROPIC_API_KEY: "",
         ANTHROPIC_AUTH_TOKEN: "",
       };
@@ -629,7 +682,13 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       assertion(["checkpoint", "recap", "respond"].every(name => COVERED_COMMANDS.has(name)), "non-advertised hook targets also have dogfood scenarios");
       const bare = await runCli([]);
       equal(bare.exitCode, 0, "bare non-interactive invocation exits zero");
-      assertion(bare.stdout.includes("turn repeated Claude Code and Codex workflows"), "bare non-TTY invocation renders the product surface");
+      // A bare invocation is the report, in a pipe as much as in a terminal.
+      // It used to print help outside a TTY, which meant the one command that
+      // is the product was the one an agent or a pipe never saw.
+      assertion(
+        bare.stdout.includes("prompts ") && bare.stdout.includes("features:") && !bare.stdout.includes("Usage:"),
+        "bare non-TTY invocation renders the report, not help",
+      );
 
       assertion(await pathExists(state.pluginBin), "committed plugin binary exists");
       const pluginVersion = await runPlugin(["--version"]);
@@ -637,7 +696,7 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       equal(pluginVersion.stdout.trim(), state.package.version, "plugin and npm artifact versions match");
       const pluginHelp = await runPlugin(["help"]);
       equal(pluginHelp.exitCode, 0, "plugin help exits zero");
-      assertion(pluginHelp.stdout.includes("gradient review"), "plugin bundle exposes the same CLI help");
+      assertion(pluginHelp.stdout.includes("gradient on|off <feature>"), "plugin bundle exposes the same CLI help");
     }, ["fixtures"]);
 
     await scenario("init", "Initialize both assistants in the isolated home", "setup", async ({ assertion, equal }) => {
@@ -663,8 +722,10 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       equal(both.exitCode, 0, "project scan succeeds");
       assertion(both.stdout.includes("Claude Code") && both.stdout.includes("Codex"), "project scan reports both transcript sources");
       assertion(both.stdout.includes("dogfood-scan"), "Claude-backed classification emits a deterministic suggestion");
+      assertion(both.stdout.includes("restatement filter"),
+        "an artifact that would only repeat its own prompt is refused, and says so");
       let cached = await readJson(await suggestionsPath());
-      assertion(cached.some(suggestion => suggestion.name === "dogfood-scan"), "scan persists its suggestion in the isolated cache");
+      assertion(cached.some(suggestion => suggestion.name.startsWith("dogfood-scan")), "scan persists its suggestion in the isolated cache");
 
       const user = await runCli(["scan", "--user", "--since", "30d", "--no-review"]);
       equal(user.exitCode, 0, "bounded cross-project scan succeeds");
@@ -676,21 +737,30 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       assertion(codex.stdout.includes("sources: Claude Code 0 prompt(s) · Codex"), "Codex collector supplies the mined prompts");
       cached = await readJson(await suggestionsPath());
       assertion(cached.length > 0, "Codex CLI protocol produces validated suggestions");
+      assertion(codex.stdout.includes("restatement filter"),
+        "the Codex path refuses an artifact that would only repeat its own prompt");
       await updateConfig({ targets: ["claude-code", "codex"], backend: "claude-cli" });
     }, ["init"]);
 
     await scenario("review-read", "Inspect, explain, and surface a mined suggestion", "review", async ({ assertion, equal }) => {
       const review = await runCli(["review", "--json"]);
-      equal(review.exitCode, 0, "review --json succeeds");
+      equal(review.exitCode, 0, "the retired review --json alias still succeeds");
       const parsed = JSON.parse(review.stdout);
       assertion(Array.isArray(parsed.suggestions) && parsed.suggestions.length > 0, "review JSON exposes pending suggestions");
       const suggestion = parsed.suggestions[0];
-      const explain = await runCli(["explain", suggestion.name]);
-      equal(explain.exitCode, 0, "explain succeeds for a cached suggestion");
-      assertion(explain.stdout.includes("seen") && explain.stdout.includes(suggestion.name), "explain shows evidence and identity");
+      // `explain` is gone; the evidence it printed now reaches agents through
+      // the JSON and humans through the scan walkthrough.
+      assertion(
+        typeof suggestion.evidence?.count === "number" && typeof suggestion.rationale === "string",
+        "the JSON carries the evidence the retired explain verb printed",
+      );
+      const report = await runCli([]);
+      equal(report.exitCode, 0, "the report succeeds with pending suggestions");
+      assertion(report.stdout.includes("pending suggestions") && report.stdout.includes(suggestion.name),
+        "the report surfaces the pending suggestion by name");
       const sessionStart = await runCli(["session-start"]);
       equal(sessionStart.exitCode, 0, "session-start hook target exits zero");
-      assertion(sessionStart.stdout.includes("gradient review"), "session-start surfaces a high-leverage pending suggestion");
+      assertion(sessionStart.stdout.includes("gradient scan"), "session-start surfaces a high-leverage pending suggestion");
       const detachedComplete = await waitFor(async () => {
         const path = join(state.project, ".gradient", "last-scan.log");
         if (!(await pathExists(path))) return false;
@@ -700,7 +770,7 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       assertion(detachedComplete, "session-start's detached rescan completes with a diagnostic log");
     }, ["scan"]);
 
-    await scenario("migration", "Apply and migrate a legacy command artifact", "artifacts", async ({ assertion, equal }) => {
+    await scenario("migration", "Apply and remove a command-target artifact", "artifacts", async ({ assertion, equal }) => {
       await updateConfig({ targets: ["claude-code"], emitTarget: "command", backend: "claude-cli" });
       const legacy = baseSuggestion("dogfoodlegacy", "dogfood-legacy", {
         type: "command", commandName: "dogfood-legacy",
@@ -712,13 +782,13 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       equal(applied.exitCode, 0, "legacy command apply succeeds");
       const commandPath = join(state.project, ".claude", "commands", `${legacy.name}.md`);
       assertion(await pathExists(commandPath), "legacy command is written through the installed CLI");
-      const dry = await runCli(["migrate", "--dry-run"]);
-      equal(dry.exitCode, 0, "migration dry run succeeds");
-      assertion(dry.stdout.includes("would migrate"), "migration dry run names the candidate");
-      const migrated = await runCli(["migrate"]);
-      equal(migrated.exitCode, 0, "command migration succeeds");
-      assertion(!(await pathExists(commandPath)), "migration removes the owned legacy command");
-      assertion(await pathExists(join(state.project, ".claude", "skills", legacy.name, "SKILL.md")), "migration writes a model-invokable skill");
+      // `migrate` (command → skill) is deleted: a one-time converter for a
+      // format two releases old. The command emit target itself still works,
+      // and `remove` still owns what it wrote.
+      const removed = await runCli(["remove", legacy.name]);
+      equal(removed.exitCode, 0, "command-target artifact removal succeeds");
+      assertion(!(await pathExists(commandPath)), "remove deletes the owned command file");
+      await updateConfig({ targets: ["claude-code"], emitTarget: "skill", backend: "claude-cli" });
     }, ["review-read"]);
 
     await scenario("artifact-matrix", "Apply every generated artifact family and inspect ownership", "artifacts", async ({ assertion, equal }) => {
@@ -787,9 +857,10 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         assertion(Array.isArray(settings.hooks[event]), `${event} hook is installed by approval`);
       }
       const list = await runCli(["list"]);
-      equal(list.exitCode, 0, "artifact list succeeds");
-      for (const name of ["dogfood-skill", "dogfood-rule", "dogfood-loop", "dogfood-playbook"]) {
-        assertion(list.stdout.includes(name), `artifact list includes ${name}`);
+      equal(list.exitCode, 0, "the retired list alias still succeeds");
+      assertion(list.stdout.includes("gradient list is now just gradient"), "the retired alias says where it went");
+      for (const name of ["dogfood-skill", "dogfood-rule", "dogfood-playbook"]) {
+        assertion(list.stdout.includes(name), `the report's installed section includes ${name}`);
       }
 
       const tamperPath = join(state.project, ".claude", "skills", "dogfood-tamper", "SKILL.md");
@@ -815,25 +886,33 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       assertion(disabled.stdout.includes("hooks are disabled"), "hook-export refusal explains the consent boundary");
     }, ["artifact-matrix"]);
 
-    await scenario("recall", "Enable recall, observe a hit, and record adoption", "runtime", async ({ assertion, equal }) => {
-      const on = await runCli(["recall", "on"]);
-      equal(on.exitCode, 0, "recall enable succeeds");
-      const statusResult = await runCli(["recall", "status"]);
-      equal(statusResult.exitCode, 0, "recall status succeeds");
-      assertion(statusResult.stdout.includes("recall: on"), "recall status reports local consent");
+    await scenario("recall", "Retire a leftover recall hook silently", "runtime", async ({ assertion, equal }) => {
+      // `recall` is deleted. The subcommand outlives it so a UserPromptSubmit
+      // entry left in someone's settings removes itself instead of falling
+      // through to the unknown-command handler — that event's stdout is read
+      // by the model as context.
+      const settingsPath = join(state.project, ".claude", "settings.local.json");
+      const before = await readJson(settingsPath);
+      before.hooks = before.hooks ?? {};
+      before.hooks.UserPromptSubmit = [
+        ...(before.hooks.UserPromptSubmit ?? []),
+        { hooks: [{ type: "command", command: "npx -y gradient.md@0.6.1 recall", timeout: 5 }] },
+      ];
+      await writeJson(settingsPath, before);
+
       const hook = await runCli(["recall"], {
-        input: JSON.stringify({
-          prompt: "prepare a deterministic release report",
-          cwd: state.project,
-          session_id: "dogfood-recall-session",
-        }),
+        input: JSON.stringify({ prompt: "anything at all", cwd: state.project, session_id: "dogfood-recall" }),
       });
-      equal(hook.exitCode, 0, "recall hook exits zero");
-      const payload = JSON.parse(hook.stdout);
-      equal(payload.hookSpecificOutput.hookEventName, "UserPromptSubmit", "recall returns the structured hook contract");
-      assertion(payload.hookSpecificOutput.additionalContext.includes("dogfood-skill"), "recall names the matching installed skill");
-      const adoption = await readFile(join(await projectCacheDir(), "recall.adoption.jsonl"), "utf8");
-      assertion(adoption.includes("dogfood-skill") && !adoption.includes("prepare a deterministic"), "adoption log stores metadata, not prompt text");
+      equal(hook.exitCode, 0, "the retired hook target exits zero");
+      equal(hook.stdout, "", "the retired hook target prints nothing into the session");
+
+      const after = await readJson(settingsPath);
+      assertion(!JSON.stringify(after).includes("recall"), "the leftover hook removes itself");
+      assertion(JSON.stringify(after).includes("PreCompact"), "adjacent hooks survive the retirement");
+
+      const manager = await runCli(["recall", "on"]);
+      equal(manager.exitCode, 0, "the retired on/off arguments also exit zero");
+      equal(manager.stdout, "", "the retired manager prints nothing");
     }, ["bundle"]);
 
     await scenario("interactive-review", "Approve a suggestion and re-pin a changed project playbook", "review", async ({ assertion, equal }) => {
@@ -859,8 +938,10 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
 
     await scenario("insights", "Render stats and terminal/HTML insights from composed state", "reporting", async ({ assertion, equal }) => {
       const statsResult = await runCli(["stats"]);
-      equal(statsResult.exitCode, 0, "stats succeeds");
-      assertion(statsResult.stdout.includes("coverage:") && statsResult.stdout.includes("adoption:"), "stats composes coverage and adoption evidence");
+      equal(statsResult.exitCode, 0, "the retired stats alias still succeeds");
+      assertion(statsResult.stdout.includes("installed") && statsResult.stdout.includes("use(s)"),
+        "the report composes adoption evidence stats used to print separately");
+      assertion(statsResult.stdout.includes("features:"), "the report states which background features are on");
       const insights = await runCli(["insights", "--html"]);
       equal(insights.exitCode, 0, "insights HTML succeeds");
       assertion(insights.stdout.includes("prompts") && insights.stdout.includes("wrote"), "terminal insights summarize behavior and report the HTML path");
@@ -870,10 +951,11 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
     }, ["interactive-review"]);
 
     await scenario("continuity", "Round-trip continuity hooks, checkpoint, and recap", "runtime", async ({ assertion, equal }) => {
-      const on = await runCli(["continuity", "on"]);
+      const on = await runCli(["on", "continuity"]);
       equal(on.exitCode, 0, "continuity enable succeeds");
-      const statusOn = await runCli(["continuity", "status"]);
-      assertion(statusOn.stdout.includes("PreCompact): on") && statusOn.stdout.includes("SessionStart): on"), "continuity status reports both hooks on");
+      assertion(on.stdout.includes("continuity on"), "the consent verb names what it turned on");
+      const statusOn = await runCli([]);
+      assertion(/continuity\s+on/.test(statusOn.stdout), "the report shows continuity on");
       const checkpoint = await runCli(["checkpoint"], { input: JSON.stringify({ transcript_path: state.claudeTranscript }) });
       equal(checkpoint.exitCode, 0, "checkpoint hook exits zero");
       equal(checkpoint.stdout, "", "checkpoint hook keeps stdout empty");
@@ -881,10 +963,10 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       equal(recap.exitCode, 0, "recap succeeds");
       assertion(recap.stdout.includes("gradient-continuity-note") && recap.stdout.includes("Progress checkpoint"), "recap returns bounded untrusted checkpoint context");
       assertion(!recap.stdout.includes(SECRET_SENTINEL), "checkpoint/recap redacts the secret sentinel");
-      const off = await runCli(["continuity", "off"]);
+      const off = await runCli(["off", "continuity"]);
       equal(off.exitCode, 0, "continuity disable succeeds");
-      const statusOff = await runCli(["continuity", "status"]);
-      assertion(statusOff.stdout.includes("PreCompact): off") && statusOff.stdout.includes("SessionStart): off"), "continuity status reports both hooks off");
+      const statusOff = await runCli([]);
+      assertion(/continuity\s+off/.test(statusOff.stdout), "the report shows continuity off");
     }, ["insights"]);
 
     await scenario("board", "Observe live sessions, change-only refresh, and consent cleanup", "runtime", async ({ assertion, equal }) => {
@@ -906,8 +988,12 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const enabledConfig = await readJson(configPath);
       equal(enabledConfig.boardProjects, [await realpath(state.project)], "board consent is isolated to the synthetic repository root");
       const settingsPath = join(state.project, ".claude", "settings.local.json");
-      const settingsOn = JSON.stringify(await readJson(settingsPath));
-      assertion(settingsOn.includes("gradient board digest") && settingsOn.includes("gradient board refresh"), "board installs both project hooks");
+      const settingsOn = await readJson(settingsPath);
+      assertion(
+        runsSubcommand(settingsOn, "SessionStart", "board digest") &&
+        runsSubcommand(settingsOn, "UserPromptSubmit", "board refresh"),
+        "board installs both project hooks",
+      );
 
       const digest = await runCli(["board", "digest"], {
         input: JSON.stringify({ session_id: "claude-dogfood-1" }),
@@ -953,8 +1039,12 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       equal(off.exitCode, 0, "board disable succeeds");
       const disabledConfig = await readJson(configPath);
       equal(disabledConfig.boardProjects, [], "board disable revokes repository consent");
-      const settingsOff = JSON.stringify(await readJson(settingsPath));
-      assertion(!settingsOff.includes("gradient board digest") && !settingsOff.includes("gradient board refresh"), "board disable removes only its hooks");
+      const settingsOff = await readJson(settingsPath);
+      assertion(
+        !runsSubcommand(settingsOff, "SessionStart", "board digest") &&
+        !runsSubcommand(settingsOff, "UserPromptSubmit", "board refresh"),
+        "board disable removes only its hooks",
+      );
       assertion(!(await pathExists(boardDir)), "board disable removes private board state");
       const staleHook = await runCli(["board", "digest"], {
         input: JSON.stringify({ session_id: "claude-dogfood-1" }),
@@ -1056,7 +1146,7 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const removedHook = await runCli(["remove", "dogfood-notify"]);
       equal(removedHook.exitCode, 0, "owned hook removal succeeds");
       const after = await readJson(join(state.project, ".claude", "settings.local.json"));
-      assertion(!JSON.stringify(after).includes("gradient notify"), "owned notification hook is removed");
+      assertion(!runsSubcommand(after, "Notification", "notify"), "owned notification hook is removed");
       assertion(JSON.stringify(after).includes("npm run lint") === JSON.stringify(before).includes("npm run lint"), "adjacent reviewed command hook is preserved");
 
       const removedPlaybook = await runCli(["remove", "dogfood-playbook"]);
@@ -1065,10 +1155,10 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       assertion(!playbook.includes("<!-- gradient:dogfoodplaybook -->"), "only the owned tagged line is removed");
       assertion(playbook.includes("Manually reviewed dogfood note"), "manual playbook prose survives removal");
 
-      const recallOff = await runCli(["recall", "off"]);
-      equal(recallOff.exitCode, 0, "recall disable succeeds");
-      const recallStatus = await runCli(["recall", "status"]);
-      assertion(recallStatus.stdout.includes("recall: off"), "recall status reports consent removed");
+      const featureOff = await runCli(["off", "board"]);
+      equal(featureOff.exitCode, 0, "feature consent removal succeeds");
+      const finalReport = await runCli([]);
+      assertion(/board\s+off/.test(finalReport.stdout), "the report shows the feature consent removed");
     }, ["artifact-matrix", "interactive-review", "security"]);
 
     await scenario("evidence", "Validate evidence hygiene and private state modes", "evidence", async ({ assertion, equal }) => {
@@ -1079,13 +1169,16 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         await suggestionsPath(),
         approvalPath,
         join(await projectCacheDir(), "playbook-pin.json"),
-        join(await projectCacheDir(), "recall.json"),
-        join(await projectCacheDir(), "recall.adoption.jsonl"),
         join(state.home, ".config", "gradient", "state", "dogfood-autopilot.json"),
       ];
       for (const path of privatePaths) {
         assertion(await pathExists(path), `${relative(state.home, path)} exists`);
         equal((await stat(path)).mode & 0o077, 0, `${relative(state.home, path)} is private`);
+      }
+      // recall is deleted, and its retirement removes the derived state it wrote.
+      for (const name of ["recall.json", "recall.adoption.jsonl"]) {
+        assertion(!(await pathExists(join(await projectCacheDir(), name))),
+          `retired ${name} is not left behind`);
       }
       const preview = JSON.stringify(state.cases);
       assertion(!preview.includes(SECRET_SENTINEL), "recorded command evidence contains no secret sentinel");

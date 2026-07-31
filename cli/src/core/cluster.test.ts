@@ -91,3 +91,4 @@ describe("cluster", () => {
     expect(merged.memberSignatures).toContain("push and create a pull request");
   });
 });
+

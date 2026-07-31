@@ -51,6 +51,10 @@ export interface Turn {
   assistant?: Assistant;
   /** Tokens consumed by the model turn this prompt initiated, when recorded. */
   usageTokens?: number;
+  /** How the prompt entered the session, when the transcript records it.
+   * Authoritative for human-vs-injected: text heuristics cannot distinguish a
+   * typed request from a skill body the harness expanded into the user role. */
+  promptSource?: string;
 }
 
 /** One tool invocation mined from a transcript. Only Bash and file-edit tools
@@ -106,6 +110,10 @@ export interface Suggestion {
   evidence: {
     count: number;
     sessions: number;
+    /** True when every source was counted from tool invocations rather than read
+     * out of prompt text. Absent means prompt-derived (and on caches written
+     * before the field existed, unknown — which reads the same way). */
+    measured?: boolean;
     assistants?: Assistant[];
     /** Optional: absent on pre-existing caches/fixtures written before this field existed. */
     estMinutesSavedPerMonth?: number;
@@ -149,8 +157,6 @@ export interface Config {
   autopilot?: AutopilotMode;
   /** Canonical project path -> locally consented mode. */
   autopilotProjects?: Record<string, AutopilotMode>;
-  /** Canonical project paths where recall is locally consented. */
-  recallProjects?: string[];
   /** Canonical project paths where checkpoint/recap hooks are locally consented. */
   continuityProjects?: string[];
   /** Canonical board-root paths (git common-dir roots) where cross-session board hooks are consented. */

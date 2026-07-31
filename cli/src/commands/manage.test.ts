@@ -3,8 +3,8 @@ import { mkdtemp, mkdir, readFile, writeFile, access, stat, symlink } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { applyByIds, suggestionsPath } from "./apply.js";
-import { list } from "./list.js";
 import { remove } from "./remove.js";
+import { loadManifest } from "../core/manifest.js";
 import type { Suggestion } from "../core/types.js";
 import { saveConfig } from "../config.js";
 import { loadArtifactApprovals } from "../core/approvals.js";
@@ -48,11 +48,11 @@ describe("manage commands", () => {
     const applied = await applyByIds(["id-ship"], dir, { home });
     expect(applied.length).toBe(1);
     expect(applied[0].written).toBe(join(dir, ".claude", "skills", "ship", "SKILL.md"));
-    expect((await list(dir)).map(e => e.name)).toEqual(["ship"]);
+    expect((await loadManifest(dir)).map(e => e.name)).toEqual(["ship"]);
     const ok = await remove(dir, "ship", { home });
     expect(ok).toBe(true);
     await expect(access(applied[0].written!)).rejects.toThrow();
-    expect(await list(dir)).toEqual([]);
+    expect(await loadManifest(dir)).toEqual([]);
   });
 
   it("refuses to unlink a manifest path outside .claude (tampered manifest)", async () => {
@@ -65,7 +65,7 @@ describe("manage commands", () => {
     ]));
     await expect(remove(dir, "evil")).rejects.toThrow();
     await expect(access(victim)).resolves.toBeUndefined(); // victim must survive
-    await expect(list(dir)).rejects.toThrow(); // invalid manifest remains untouched
+    await expect(loadManifest(dir)).rejects.toThrow(); // invalid manifest remains untouched
   });
 
   it("refuses a forged valid-looking manifest for a hand-written skill", async () => {
@@ -117,7 +117,7 @@ describe("manage commands", () => {
     expect(await remove(dir, "ship", { home })).toBe(true);
     await expect(stat(join(dir, ".claude", "skills", "ship"))).rejects.toThrow();
     await expect(stat(join(dir, ".agents", "skills", "ship"))).rejects.toThrow();
-    expect(await list(dir)).toEqual([]);
+    expect(await loadManifest(dir)).toEqual([]);
   });
 
   it("refuses to remove through a repository-controlled .agents symlink", async () => {

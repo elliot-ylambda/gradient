@@ -11,9 +11,12 @@ import {
   type AssembleOptions,
 } from "../core/board.js";
 import { safeRemoveTree } from "../core/safeFs.js";
+import { gradientHookCommand, isGradientHookFor } from "../core/hookBinary.js";
 
-export const DIGEST_COMMAND = "gradient board digest";
-export const REFRESH_COMMAND = "gradient board refresh";
+export const DIGEST_SUB = "board digest";
+export const REFRESH_SUB = "board refresh";
+export const DIGEST_COMMAND = `gradient ${DIGEST_SUB}`;
+export const REFRESH_COMMAND = `gradient ${REFRESH_SUB}`;
 
 async function consentedRoot(projectDir: string, home?: string): Promise<string | null> {
   const root = await resolveBoardRoot(projectDir);
@@ -33,8 +36,10 @@ export async function setBoard(
   const projects = new Set(config.boardProjects ?? []);
   if (on) {
     try {
-      await installHook(projectDir, "SessionStart", DIGEST_COMMAND);
-      const path = await installHook(projectDir, "UserPromptSubmit", REFRESH_COMMAND);
+      await installHook(projectDir, "SessionStart", gradientHookCommand(DIGEST_SUB),
+        { replacing: [cmd => isGradientHookFor(cmd, DIGEST_SUB)] });
+      const path = await installHook(projectDir, "UserPromptSubmit", gradientHookCommand(REFRESH_SUB),
+        { replacing: [cmd => isGradientHookFor(cmd, REFRESH_SUB)] });
       projects.add(root);
       config.boardProjects = [...projects].sort();
       await saveConfig(config, opts.home);
@@ -43,8 +48,8 @@ export async function setBoard(
       projects.delete(root);
       config.boardProjects = [...projects].sort();
       await saveConfig(config, opts.home).catch(() => undefined);
-      await removeHook(projectDir, "SessionStart", DIGEST_COMMAND).catch(() => undefined);
-      await removeHook(projectDir, "UserPromptSubmit", REFRESH_COMMAND).catch(() => undefined);
+      await removeHook(projectDir, "SessionStart", cmd => isGradientHookFor(cmd, DIGEST_SUB)).catch(() => undefined);
+      await removeHook(projectDir, "UserPromptSubmit", cmd => isGradientHookFor(cmd, REFRESH_SUB)).catch(() => undefined);
       throw error;
     }
   }
@@ -55,8 +60,8 @@ export async function setBoard(
   await saveConfig(config, opts.home);
   const userHome = opts.home ?? homedir();
   await safeRemoveTree(userHome, boardStateDir(root, userHome)).catch(() => undefined);
-  await removeHook(projectDir, "SessionStart", DIGEST_COMMAND);
-  const path = await removeHook(projectDir, "UserPromptSubmit", REFRESH_COMMAND);
+  await removeHook(projectDir, "SessionStart", cmd => isGradientHookFor(cmd, DIGEST_SUB));
+  const path = await removeHook(projectDir, "UserPromptSubmit", cmd => isGradientHookFor(cmd, REFRESH_SUB));
   return { on: false, settingsPath: path };
 }
 

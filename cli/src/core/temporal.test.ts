@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { annotateTemporal, spanDays } from "./temporal.js";
+import { activeWindows, annotateTemporal, spanDays } from "./temporal.js";
 import { cluster } from "./cluster.js";
 import type { Turn } from "./types.js";
 
@@ -13,6 +13,52 @@ describe("spanDays", () => {
   it("is 0 for a single or empty occurrence list", () => {
     expect(spanDays([{ ts: "2026-06-01T00:00:00Z" }])).toBe(0);
     expect(spanDays([])).toBe(0);
+  });
+});
+
+describe("activeWindows", () => {
+  it("counts one occasion for a burst inside a single sitting", () => {
+    expect(activeWindows([
+      { ts: "2026-06-01T09:00:00Z" },
+      { ts: "2026-06-01T09:04:00Z" },
+      { ts: "2026-06-01T17:30:00Z" },
+    ])).toBe(1);
+  });
+
+  it("does not split a sitting that happens to cross midnight", () => {
+    // The exact shape that let the dogfood corpus's top prompt-derived
+    // candidate through the old calendar-day gate: two sends 51 seconds apart,
+    // which distinctDays reports as two active days.
+    const occurrences = [
+      { ts: "2026-06-01T23:59:40Z" },
+      { ts: "2026-06-02T00:00:31Z" },
+    ];
+    expect(activeWindows(occurrences)).toBe(1);
+    expect(new Set(occurrences.map(o => o.ts.slice(0, 10))).size).toBe(2);
+  });
+
+  it("opens a new window once a gap exceeds 24h", () => {
+    expect(activeWindows([
+      { ts: "2026-06-01T09:00:00Z" },
+      { ts: "2026-06-02T10:00:00Z" },
+    ])).toBe(2);
+  });
+
+  it("measures from the window's own start, not from the previous occurrence", () => {
+    // Every step here is 20h — under the window — so a pairwise-gap rule would
+    // see one continuous occasion. Anchoring on the window start splits it once
+    // the run passes 24h, which is what "recurred on another day" means.
+    expect(activeWindows([
+      { ts: "2026-06-01T00:00:00Z" },
+      { ts: "2026-06-01T20:00:00Z" },
+      { ts: "2026-06-02T16:00:00Z" },
+      { ts: "2026-06-03T12:00:00Z" },
+    ])).toBe(2);
+  });
+
+  it("ignores unparseable timestamps and is 0 when none remain", () => {
+    expect(activeWindows([{ ts: "not-a-date" }])).toBe(0);
+    expect(activeWindows([])).toBe(0);
   });
 });
 

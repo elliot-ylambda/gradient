@@ -1,15 +1,16 @@
 import { createInterface } from "node:readline/promises";
 import type { Assistant, Suggestion } from "../core/types.js";
-import { applySuggestion, type ApplyResult } from "../core/apply.js";
+import { applySuggestion, hookNeedsConsent, type ApplyResult } from "../core/apply.js";
 import { isNudge, loadProjectPlaybook, loadPlaybookPin, savePlaybookPin, pinState, type PinState } from "../core/playbook.js";
 import { loadSuggestions, saveSuggestions, syncApprovedPlaybook } from "./apply.js";
 import { loadConfig, resolveCheapModel, resolveTargets } from "../config.js";
-import { refreshRecallIndex } from "./recall.js";
 import { emit, type EmitTarget } from "../core/emit/index.js";
 import { clarifiedWorkflowBody } from "../core/detect.js";
 import { stripUnsafeControls } from "../core/security.js";
 import { proseDiff } from "../core/playbook-splice.js";
 import { addDismissal, isDismissed, loadDismissed } from "../core/dismiss.js";
+import { resolveHookBinary } from "../core/hookBinary.js";
+import { isMeasured } from "../core/classify.js";
 
 export type ReviewDecision = "approve" | "skip" | "explain" | "quit";
 
@@ -58,11 +59,17 @@ function renderedText(
   target: Assistant,
   emitTarget: EmitTarget,
   cheapModel?: string,
+  hookBinary?: string,
 ): string {
   if (target === "codex" && suggestion.payload.type !== "command" && suggestion.payload.type !== "rule") {
     return `[${target}]\n(skipped: this artifact type is not supported)`;
   }
-  const rendered = emit(suggestion, { target: emitTarget, assistant: target, cheapModel });
+  const rendered = emit(suggestion, {
+    target: emitTarget,
+    assistant: target,
+    cheapModel,
+    ...(hookBinary !== undefined ? { hookBinary } : {}),
+  });
   const body = rendered.kind === "command" || rendered.kind === "skill" || rendered.kind === "rule"
     ? `${rendered.path}\n${rendered.content}`
     : rendered.kind === "loop"
@@ -76,16 +83,22 @@ function renderedText(
               `installs a ${rendered.install.event} hook (matcher: ${rendered.install.matcher ?? "all tools"})\n` +
               `that runs automatically: ${rendered.install.command}`
             : `.claude/settings.local.json (merged on approve)\n${rendered.settingsPatch ?? ""}`;
-  return `[${target}]\n${body}`;
+  // Approving a gated hook also grants its consent, which the user must see
+  // before choosing rather than discover afterwards in config.json.
+  const consentNote = suggestion.payload.type === "hook" && hookNeedsConsent(suggestion.payload.subcommand)
+    ? "\napproving also enables continuity for this project (what `gradient on continuity` does);\n" +
+      "without it this hook would install and then do nothing"
+    : "";
+  return `[${target}]\n${body}${consentNote}`;
 }
 
 export function suggestionPreview(
   suggestion: Suggestion,
   emitTarget: EmitTarget,
-  opts: { targets?: Assistant[]; cheapModel?: string } = {},
+  opts: { targets?: Assistant[]; cheapModel?: string; hookBinary?: string } = {},
 ): string {
   return (opts.targets ?? ["claude-code"])
-    .map(target => renderedText(suggestion, target, emitTarget, opts.cheapModel))
+    .map(target => renderedText(suggestion, target, emitTarget, opts.cheapModel, opts.hookBinary))
     .join("\n\n");
 }
 
@@ -120,6 +133,9 @@ export async function review(
   const emitTarget = config.emitTarget ?? "skill";
   const targets = resolveTargets(config);
   const cheapModel = resolveCheapModel(config);
+  // Previews must show the same command the approval will install.
+  const hookBinary = resolveHookBinary();
+  let hookWarned = false;
   const out: ApplyResult[] = [];
   for (let index = 0; index < suggestions.length; index++) {
     let suggestion = suggestions[index];
@@ -146,17 +162,22 @@ export async function review(
         suggestion,
         index,
         suggestions.length,
-        suggestionPreview(suggestion, emitTarget, { targets, cheapModel }),
+        suggestionPreview(suggestion, emitTarget, { targets, cheapModel, hookBinary: hookBinary.command }),
       );
       if (decision === "explain") opts.onExplain?.(suggestionExplanation(suggestion));
     } while (decision === "explain");
     if (decision === "quit") break;
     if (decision === "approve") {
+      if (suggestion.payload.type === "hook" && hookBinary.warning && !hookWarned) {
+        opts.onSkip?.(hookBinary.warning);
+        hookWarned = true;
+      }
       out.push(await applySuggestion(suggestion, projectDir, {
         emitTarget,
         targets,
         cheapModel,
         home: opts.home,
+        hookBinary: hookBinary.command,
       }));
     } else if (decision === "skip") {
       await addDismissal(projectDir, suggestion);
@@ -164,7 +185,6 @@ export async function review(
   }
   if (out.length > 0) {
     await syncApprovedPlaybook(projectDir, cached, opts.home);
-    await refreshRecallIndex(projectDir, opts.home);
   }
   return out;
 }
@@ -173,14 +193,36 @@ function terminalSafeLine(text: string): string {
   return stripUnsafeControls(text).replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim();
 }
 
+/**
+ * The evidence behind one suggestion, shown on demand during review.
+ *
+ * This is what the standalone `explain` verb printed. It deliberately omits
+ * `estMinutesSavedPerMonth`: that number is derived from the occurrence count,
+ * so any count inflation lands straight in it, and presenting a derived guess
+ * beside real measurements invites it to be read as one.
+ */
 export function suggestionExplanation(suggestion: Suggestion): string {
-  const leverage = suggestion.evidence.estMinutesSavedPerMonth;
+  const temporal = suggestion.evidence.temporal;
+  const sources = suggestion.evidence.assistants?.length === 2 ? " · Claude Code + Codex" : "";
   const lines = [
     `  why: ${terminalSafeLine(suggestion.rationale)}`,
-    `  evidence: seen ${suggestion.evidence.count}× across ${suggestion.evidence.sessions} sessions` +
-      (leverage !== undefined ? ` · ≈${leverage}m/month` : ""),
+    `  evidence: ${isMeasured(suggestion) ? "counted from tool events" : "inferred from repeated prompts"}` +
+      ` · seen ${suggestion.evidence.count}× across ${suggestion.evidence.sessions} sessions${sources}`,
   ];
+  if (temporal) {
+    lines.push(
+      `  temporal: longest run ${temporal.maxRunLength} · recurring-run sessions ${temporal.runSessions}` +
+      ` · median gap ${temporal.medianGapMinutes}m · ${temporal.distinctDays} active day(s)` +
+      ` across ${temporal.spanDays} day(s)`,
+    );
+  }
   for (const example of suggestion.examples ?? []) lines.push(`    · ${terminalSafeLine(example)}`);
+  if (suggestion.clarify) {
+    lines.push(`  clarify: ${terminalSafeLine(suggestion.clarify.question)}`);
+    for (const option of suggestion.clarify.options) {
+      lines.push(`    ${suggestion.clarify.chosen === option.label ? "✓" : "·"} ${terminalSafeLine(option.label)}`);
+    }
+  }
   return lines.join("\n");
 }
 
@@ -245,7 +287,7 @@ export function readlinePrompter(
     }
     output.write(`\n${stripUnsafeControls(preview)}\n`);
     if (isNudge(suggestion)) {
-      output.write("  tip: this is what autopilot automates → gradient autopilot nudge\n");
+      output.write("  tip: this is what autopilot automates → gradient on autopilot\n");
     }
     const answer = (await rl.question("  [a]pprove [s]kip [e]xplain [q]uit › ")).trim().toLowerCase();
     rl.close();

@@ -4,6 +4,7 @@ import {
   HOOK_MIN_COUNT,
   HOOK_MIN_SESSIONS,
   hookFromEvents,
+  isMeasured,
   LOOP_MIN_RUN,
   LOOP_MIN_RUN_SESSIONS,
   markLoops,
@@ -211,5 +212,33 @@ describe("hookFromEvents", () => {
     expect(s).not.toBeNull();
     expect(s!.payload).toMatchObject({ type: "hook", event: "PreCompact", subcommand: "checkpoint" });
     expect(s!.evidence).toMatchObject({ count: 12, sessions: 4 });
+  });
+});
+
+describe("isMeasured", () => {
+  const base = {
+    id: "s", name: "n", title: "t", rationale: "r", confidence: "high" as const,
+    payload: { type: "command" as const, commandName: "n", body: "b" },
+  };
+
+  it("tiers a hook as measured", () => {
+    expect(isMeasured({ ...base, evidence: { count: 1, sessions: 1 },
+      payload: { type: "hook", event: "PreCompact", description: "d", subcommand: "checkpoint" } })).toBe(true);
+  });
+
+  // Regression: a recurring-failure guide is counted from tool invocations, so
+  // it belongs in the measured tier even though its artifact is a command. The
+  // old rule keyed on payload shape and filed it under "inferred from repeated
+  // prompts", telling the user to check evidence that was never prompt text.
+  it("tiers a tool-event-derived command as measured", () => {
+    expect(isMeasured({ ...base, evidence: { count: 4, sessions: 2, measured: true } })).toBe(true);
+  });
+
+  it("tiers a prompt-derived command as possible", () => {
+    expect(isMeasured({ ...base, evidence: { count: 9, sessions: 4 } })).toBe(false);
+  });
+
+  it("tiers a cache written before the field existed as possible", () => {
+    expect(isMeasured({ ...base, evidence: { count: 9, sessions: 4, measured: undefined } })).toBe(false);
   });
 });

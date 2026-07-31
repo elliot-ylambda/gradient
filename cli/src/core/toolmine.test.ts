@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandHead, failureLoops, rituals, TOOLMINE } from "./toolmine.js";
+import { commandHead, failureLoops, isDiagnosable, rituals, TOOLMINE } from "./toolmine.js";
 import type { ToolEvent } from "./types.js";
 
 let eventNumber = 0;
@@ -119,5 +119,30 @@ describe("rituals", () => {
     const events = attached(3, 5, 8);
     expect(events.filter(event => event.kind === "edit")).toHaveLength(39);
     expect(rituals(events).map(candidate => candidate.signature)).not.toContain("npm run lint");
+  });
+});
+
+describe("isDiagnosable", () => {
+  it("rejects navigation and inspection builtins that have no guide to write", () => {
+    expect(isDiagnosable("cd /Users/me/projects/app")).toBe(false);
+    expect(isDiagnosable("ls -la")).toBe(false);
+    expect(isDiagnosable("/bin/cat missing.txt")).toBe(false);
+  });
+
+  it("accepts commands whose failure has a cause worth recording", () => {
+    expect(isDiagnosable("pnpm test")).toBe(true);
+    expect(isDiagnosable("cargo build --release")).toBe(true);
+  });
+
+  it("keeps a failing cd out of the mined failure loops entirely", () => {
+    const at = (ts: string, sessionId: string, command: string) => ({
+      ts, sessionId, kind: "bash" as const, command, isError: true, errorHead: "no such file",
+    });
+    const events = [
+      at("2026-07-01T00:00:00Z", "s1", "cd /gone"),
+      at("2026-07-01T00:01:00Z", "s1", "cd /gone"),
+      at("2026-07-02T00:00:00Z", "s2", "cd /gone"),
+    ];
+    expect(failureLoops(events)).toEqual([]);
   });
 });

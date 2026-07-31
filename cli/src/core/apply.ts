@@ -5,6 +5,33 @@ import { assertInside } from "./security.js";
 import { addEntry, artifactHasMarker, loadManifest, manifestTarget } from "./manifest.js";
 import { safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
 import { installHook, removeHook } from "./settings.js";
+import { DEFAULT_HOOK_BINARY } from "./hookBinary.js";
+import { loadConfig, projectKey, saveConfig } from "../config.js";
+
+/**
+ * Hook subcommands that do nothing without a matching per-project consent.
+ *
+ * `checkpoint` and `recap` both return null unless the project is listed in
+ * config.continuityProjects, so installing the hook without granting consent
+ * produces a permanent no-op that still reports success (issue #29). Approving
+ * a specific suggestion in review is the same explicit, per-project act that
+ * `gradient on continuity` asks for, so approval grants it.
+ */
+const CONSENT_REQUIRED: ReadonlySet<string> = new Set(["checkpoint", "recap"]);
+
+export function hookNeedsConsent(subcommand: string | undefined): boolean {
+  return subcommand !== undefined && CONSENT_REQUIRED.has(subcommand);
+}
+
+async function grantContinuityConsent(projectDir: string, home?: string): Promise<void> {
+  const config = await loadConfig(home);
+  const projects = new Set(config.continuityProjects ?? []);
+  const key = projectKey(projectDir);
+  if (projects.has(key)) return;
+  projects.add(key);
+  config.continuityProjects = [...projects].sort();
+  await saveConfig(config, home);
+}
 import { validateSuggestion } from "./validate.js";
 import { hookApprovalContent, recordArtifactApproval } from "./approvals.js";
 import { spliceLine } from "./playbook-splice.js";
@@ -53,11 +80,12 @@ export async function applySuggestion(
     targets?: Assistant[];
     cheapModel?: string;
     home?: string;
+    hookBinary?: string;
   } = {},
 ): Promise<ApplyResult> {
   validateSuggestion(suggestion);
   if (suggestion.confidence === "flagged") {
-    throw new Error("refusing to apply an unresolved flagged suggestion; resolve it through gradient review first");
+    throw new Error("refusing to apply an unresolved flagged suggestion; resolve it through gradient scan first");
   }
   const targets = normalizeTargets(opts.targets);
   const writes: ApplyResult["writes"] = [];
@@ -76,6 +104,7 @@ export async function applySuggestion(
         target: opts.emitTarget,
         assistant: target,
         cheapModel: opts.cheapModel,
+        ...(opts.hookBinary !== undefined ? { hookBinary: opts.hookBinary } : {}),
       });
       let type: ArtifactType;
       let written = "";
@@ -144,11 +173,16 @@ export async function applySuggestion(
         const install = result.install ?? {
           event: suggestion.payload.event,
           ...(suggestion.payload.matcher !== undefined ? { matcher: suggestion.payload.matcher } : {}),
-          command: `gradient ${suggestion.payload.subcommand}`,
+          command: `${opts.hookBinary ?? DEFAULT_HOOK_BINARY} ${suggestion.payload.subcommand}`,
         };
         const settingsFile = await installHook(projectDir, install.event, install.command, {
           ...(install.matcher !== undefined ? { matcher: install.matcher } : {}),
         });
+        // Grant consent only after the hook is actually on disk, so a failed
+        // install never leaves consent recorded for a hook that is not there.
+        if (hookNeedsConsent(suggestion.payload.subcommand)) {
+          await grantContinuityConsent(projectDir, opts.home);
+        }
         installedHook = { ...install, settingsFile };
         type = "hook";
       }

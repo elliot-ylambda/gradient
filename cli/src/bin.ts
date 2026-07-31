@@ -39,21 +39,14 @@ async function readStdinJson(): Promise<Record<string, unknown>> {
 export async function runBinary(argv: string[], io: BinaryIo = {}): Promise<number> {
   const write = io.write ?? (chunk => process.stdout.write(chunk));
 
+  // `recall` is retired. Keep the fast path so a settings entry left behind by
+  // the old feature never reaches the full CLI's unknown-command handler, which
+  // would print usage text into the one hook event that reads stdout as model
+  // context. It removes itself instead.
   if (argv.length === 1 && argv[0] === "recall") {
     try {
-      const [{ recallHook }, input] = await Promise.all([
-        import("./commands/recall.js"),
-        (io.readStdin ?? readStdinJson)(),
-      ]);
-      const result = await recallHook(input, { home: io.home });
-      if (result.context) {
-        write(`${JSON.stringify({
-          hookSpecificOutput: {
-            hookEventName: "UserPromptSubmit",
-            additionalContext: result.context,
-          },
-        })}\n`);
-      }
+      const { retireRecall } = await import("./commands/retire.js");
+      await retireRecall(io.cwd ?? process.cwd(), io.home);
     } catch {
       // Fail open: no output, successful exit, original prompt continues.
     }

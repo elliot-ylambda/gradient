@@ -19,6 +19,34 @@ export function spanDays(occurrences: { ts: string }[]): number {
   return spanFromSorted(sortedTimestamps(occurrences));
 }
 
+export const WINDOW_MS = 86_400_000;
+
+/**
+ * How many separate occasions the occurrences represent: walk them in order and
+ * open a new window whenever one falls more than 24h after the window it would
+ * otherwise join.
+ *
+ * `distinctDays` counts UTC calendar days, which answers a different question
+ * and gets the answer wrong at the boundary — two sends 51 seconds apart read as
+ * two active days if midnight fell between them, which is exactly how the
+ * dogfood corpus's top prompt-derived candidate survived the single-day gate.
+ * Calendar days remain the right unit for deriving a cadence ("daily at 09:00");
+ * they are the wrong unit for asking whether something recurred.
+ */
+export function activeWindows(occurrences: { ts: string }[]): number {
+  const ts = sortedTimestamps(occurrences);
+  if (ts.length === 0) return 0;
+  let windows = 1;
+  let start = ts[0];
+  for (const timestamp of ts) {
+    if (timestamp - start > WINDOW_MS) {
+      windows++;
+      start = timestamp;
+    }
+  }
+  return windows;
+}
+
 function median(nums: number[]): number {
   if (!nums.length) return 0;
   const s = [...nums].sort((a, b) => a - b);
