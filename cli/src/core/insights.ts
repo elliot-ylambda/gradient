@@ -188,7 +188,6 @@ export function buildRecommendations(
   context: {
     autopilotMode: AutopilotMode | undefined;
     avoided: number;
-    recallInstalled: boolean;
     unusedArtifacts: string[];
   },
 ): Recommendation[] {
@@ -227,12 +226,6 @@ export function buildRecommendations(
     recommendations.push({
       metric: "model",
       line: `${metrics.modelSwitches} /model and ${metrics.effortSwitches} /effort switches — pin defaultModel in .claude/settings.json per project`,
-    });
-  }
-  if (!context.recallInstalled) {
-    recommendations.push({
-      metric: "recall",
-      line: "recall hook off — gradient recall on hints when a typed prompt matches an artifact",
     });
   }
   for (const name of context.unusedArtifacts) {

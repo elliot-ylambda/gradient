@@ -31,7 +31,6 @@ import { findHusks, findMissingSessions } from "../core/coverage.js";
 import { selectBackend } from "../llm/index.js";
 import { loadConfig, resolveTargets } from "../config.js";
 import type { LLMBackend } from "../llm/backend.js";
-import { refreshRecallIndex } from "./recall.js";
 import { saveSuggestions } from "./apply.js";
 import { detectPasteCandidates, extractPasteKey } from "../core/paste.js";
 import { ANSWER_MAX_PAIRS, extractAnswerPairs, mineAnswerCandidates } from "../core/answers.js";
@@ -484,6 +483,5 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
 
   await saveSuggestions(projectDir, valid, opts.home);
   log(`found ${valid.length} suggestions → cached`);
-  await refreshRecallIndex(projectDir, opts.home);
   return valid;
 }

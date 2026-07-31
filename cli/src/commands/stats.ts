@@ -7,12 +7,7 @@ import { collectCodex } from "../core/collect-codex.js";
 import { parseTranscriptFile } from "../core/parse.js";
 import { parseCodexFile } from "../core/parse-codex.js";
 import { countArtifactUses } from "../core/usage.js";
-import { adoptionPath } from "./recall.js";
-import { safeReadFile } from "../core/safeFs.js";
-import { homedir } from "node:os";
 import { perOccurrenceSeconds, type LeverageKind } from "../core/leverage.js";
-
-const ADOPTION_LOG_MAX_BYTES = 5_000_000;
 
 export interface StatPattern {
   name: string;
@@ -39,7 +34,6 @@ export interface AdoptionRow {
   createdAt: string;
   uses: number;
   lastUsed?: string;
-  retypesCaught: number;
   /** Realized minutes saved so far: uses × per-occurrence estimate (leverage
    * constants). 0 when there are no uses yet or no chars could be recovered —
    * callers should treat 0 as "nothing to report", not print it. */
@@ -84,13 +78,11 @@ export async function adoptionFromEvents(
   }
   const since = new Map([...logical.values()].map(entry => [entry.name, entry.createdAt]));
   const uses = countArtifactUses(events, since);
-  const retypes = await readRetypes(projectDir, since, opts.home);
   const suggestionsById = new Map((opts.suggestions ?? []).map(suggestion => [suggestion.id, suggestion]));
   const suggestionsByName = new Map((opts.suggestions ?? []).map(suggestion => [suggestion.name, suggestion]));
   const now = opts.now ?? Date.now();
   return [...logical.values()].map(entry => {
     const usage = uses.get(entry.name) ?? { uses: 0, lastUsed: undefined };
-    const retypesCaught = retypes.get(entry.name) ?? 0;
     const suggestion = suggestionsById.get(entry.suggestionId) ?? suggestionsByName.get(entry.name);
     const realizedMinutesSaved = Math.round(
       usage.uses * perOccurrenceSeconds({
@@ -105,14 +97,8 @@ export async function adoptionFromEvents(
       createdAt: entry.createdAt,
       uses: usage.uses,
       lastUsed: usage.lastUsed,
-      retypesCaught,
       realizedMinutesSaved,
-      suggestRemoval: (
-        usage.uses === 0 &&
-        retypesCaught === 0 &&
-        Number.isFinite(age) &&
-        age >= UNUSED_REMOVAL_DAYS * DAY_MS
-      ),
+      suggestRemoval: usage.uses === 0 && Number.isFinite(age) && age >= UNUSED_REMOVAL_DAYS * DAY_MS,
     };
   });
 }
@@ -133,39 +119,6 @@ function suggestionChars(suggestion: Suggestion | undefined): number {
     : suggestion.examples ?? [];
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value.length, 0) / values.length;
-}
-
-async function readRetypes(
-  projectDir: string,
-  since: Map<string, string>,
-  home?: string,
-): Promise<Map<string, number>> {
-  const counts = new Map<string, number>();
-  try {
-    const userHome = home ?? homedir();
-    const raw = await safeReadFile(
-      userHome,
-      adoptionPath(projectDir, userHome),
-      { maxBytes: ADOPTION_LOG_MAX_BYTES },
-    );
-    for (const line of raw.split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        const event = JSON.parse(line) as { ts?: unknown; artifact?: unknown; hinted?: unknown };
-        if (event.hinted !== true || typeof event.artifact !== "string" || !since.has(event.artifact)) continue;
-        if (typeof event.ts !== "string") continue;
-        const eventTime = Date.parse(event.ts);
-        const created = Date.parse(since.get(event.artifact)!);
-        if (!Number.isFinite(eventTime) || (Number.isFinite(created) && eventTime < created)) continue;
-        counts.set(event.artifact, (counts.get(event.artifact) ?? 0) + 1);
-      } catch {
-        // A malformed append-only line must not hide the remaining events.
-      }
-    }
-  } catch {
-    // No adoption log yet.
-  }
-  return counts;
 }
 
 export async function stats(projectDir: string, opts: StatsOptions = {}): Promise<StatsReport> {

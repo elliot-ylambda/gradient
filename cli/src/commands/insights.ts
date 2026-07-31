@@ -16,7 +16,6 @@ import {
   type Recommendation,
   type ToolActivityMetrics,
 } from "../core/insights.js";
-import { hookInstalled } from "../core/settings.js";
 import { DEFAULT_USER_SCOPE_DAYS } from "../core/scope.js";
 import { loadConfig, projectKey, resolveTargets } from "../config.js";
 import { adoptionFromEvents } from "./stats.js";
@@ -25,7 +24,6 @@ import { safeWriteFile } from "../core/safeFs.js";
 import { loadInstructionAudit, type InstructionTally } from "../core/audit.js";
 import { failureLoops as mineFailureLoops, rituals as mineRituals } from "../core/toolmine.js";
 import { capByRecency } from "../core/cap.js";
-import { isGradientHookFor } from "../core/hookBinary.js";
 
 export interface InsightsReport {
   label: string;
@@ -167,7 +165,6 @@ export async function insights(
   };
   if (toolEventsDropped > 0) capped = true;
   const avoided = await sumAutopilotAvoided(opts.home);
-  const recallInstalled = await hookInstalled(opts.projectDir, "UserPromptSubmit", cmd => isGradientHookFor(cmd, "recall"));
   const auditSnapshot = opts.user ? null : await loadInstructionAudit(opts.projectDir, opts.home);
   const instructionEffectiveness = auditSnapshot?.tallies
     .filter(tally => tally.restatements + tally.violations > 0)
@@ -189,7 +186,6 @@ export async function insights(
   const recommendations = buildRecommendations(metrics, {
     autopilotMode: config.autopilotProjects?.[projectKey(opts.projectDir)],
     avoided,
-    recallInstalled,
     unusedArtifacts,
   });
   if (toolActivity.postEditRituals > 0) recommendations.unshift({

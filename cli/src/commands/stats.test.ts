@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { adoptionFromEvents, stats } from "./stats.js";
 import { addEntry } from "../core/manifest.js";
-import { appendAdoption } from "./recall.js";
 import { suggestionsPath } from "./apply.js";
 
 async function seed(home: string): Promise<string> {
@@ -109,7 +108,7 @@ describe("stats", () => {
     expect(report.sessionScanEnabled).toBe(true);
   });
 
-  it("reports transcript uses, last use, and hinted retypes", async () => {
+  it("reports transcript uses and last use", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-stats-adopt-"));
     const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
     await addEntry(dir, {
@@ -119,19 +118,6 @@ describe("stats", () => {
       createdAt: "2026-06-15",
       suggestionId: "ship-id",
     });
-    await appendAdoption(dir, {
-      ts: "2026-07-01T00:00:00Z",
-      artifact: "ship",
-      similarity: 0.8,
-      hinted: true,
-    }, home);
-    await appendAdoption(dir, {
-      ts: "2026-07-02T00:00:00Z",
-      artifact: "ship",
-      similarity: 0.45,
-      hinted: false,
-    }, home);
-
     const report = await stats(dir, {
       home,
       now: Date.parse("2026-07-06T00:00:00Z"),
@@ -149,7 +135,6 @@ describe("stats", () => {
       type: "skill",
       uses: 1,
       lastUsed: "2026-07-03T00:00:00Z",
-      retypesCaught: 1,
       suggestRemoval: false,
     })]);
   });
@@ -192,7 +177,7 @@ describe("stats", () => {
     expect(rows[0]).toMatchObject({ name: "quiet", uses: 0, realizedMinutesSaved: 0 });
   });
 
-  it("suggests removal at 30 unused days with no hinted retypes", async () => {
+  it("suggests removal at 30 unused days", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-stats-unused-"));
     const home = await mkdtemp(join(tmpdir(), "grad-stats-home-"));
     await addEntry(dir, {
@@ -211,7 +196,6 @@ describe("stats", () => {
     expect(report.adoption[0]).toMatchObject({
       name: "dead",
       uses: 0,
-      retypesCaught: 0,
       suggestRemoval: true,
     });
   });

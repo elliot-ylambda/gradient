@@ -30,8 +30,8 @@ describe("config", () => {
     const home = await mkdtemp(join(tmpdir(), "grad-"));
     await mkdir(join(home, ".config", "gradient"), { recursive: true });
     const path = join(home, ".config", "gradient", "config.json");
-    await writeFile(path, JSON.stringify({ recallProjects: "/repo" }));
-    await expect(loadConfig(home)).rejects.toThrow(/recallProjects/);
+    await writeFile(path, JSON.stringify({ continuityProjects: "/repo" }));
+    await expect(loadConfig(home)).rejects.toThrow(/continuityProjects/);
     await writeFile(path, JSON.stringify({ autopilotProjects: { relative: "nudge" } }));
     await expect(loadConfig(home)).rejects.toThrow(/autopilotProjects/);
   });

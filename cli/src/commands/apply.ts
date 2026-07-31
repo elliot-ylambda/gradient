@@ -3,7 +3,6 @@ import { join } from "node:path";
 import type { Suggestion } from "../core/types.js";
 import { applySuggestion, type ApplyResult } from "../core/apply.js";
 import { loadConfig, projectCacheDir, resolveCheapModel, resolveTargets } from "../config.js";
-import { refreshRecallIndex } from "./recall.js";
 import { safeReadFile, safeWriteFile } from "../core/safeFs.js";
 import { validateSuggestion } from "../core/validate.js";
 import { loadManifest } from "../core/manifest.js";
@@ -114,7 +113,6 @@ export async function applyByIds(
   }
   if (out.length > 0) {
     await syncApprovedPlaybook(projectDir, all, opts.home);
-    await refreshRecallIndex(projectDir, opts.home);
   }
   return out;
 }

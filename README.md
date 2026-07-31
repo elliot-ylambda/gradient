@@ -82,7 +82,6 @@ npx gradient.md scan --all  # all projects, no time limit (thorough; can be slow
 npx gradient.md review      # approve, explain, or persistently dismiss ranked suggestions
 npx gradient.md apply <id|name>...  # generate an approved skill / loop / hook
 npx gradient.md migrate     # convert older generated commands into skills
-npx gradient.md recall on   # hint when a typed prompt matches an installed artifact
 npx gradient.md stats       # estimated leverage plus realized minutes saved from actual use
 npx gradient.md insights    # local behavior report + concrete next actions
 npx gradient.md continuity on # checkpoint before compaction, recap after resume
@@ -239,28 +238,20 @@ MCP servers, Chrome, and session persistence disabled. Prompt text is sent over
 stdin rather than process arguments. The model's response text is never relayed;
 only its continue/stand-down decision is used, and continue maps to `Continue.`.
 
-## Recall & adoption
+## Adoption
 
-Generating a skill is only half the loop; remembering it at typing time is the
-other half. `gradient recall` installs a per-project, LLM-free
-`UserPromptSubmit` hook that compares a typed prompt with project and user-level
-commands and skills. A close match adds a one-line context hint so Claude can
-follow the installed workflow without rewriting or blocking the prompt.
+Generating a skill is only half the loop; finding out whether it is ever
+invoked is the other half. `gradient stats` counts uses from `<command-name>`
+turns in your transcripts, reports last use per approved artifact, and suggests
+removing anything unused for 30 days or more. Counting is local and derived from
+history already on disk — no hook, no index, nothing to enable.
 
-```bash
-npx gradient.md recall on      # install the hook and build its local index
-npx gradient.md recall status  # hook state, artifact count, and index timestamp
-npx gradient.md recall off     # remove only the recall hook
-```
-
-The index and adoption log live in private `0600` files under
-`~/.config/gradient/projects/`, keyed by project path—not in the repository.
-Matching events contain only artifact name, timestamp, similarity, and whether
-a hint was shown; prompt text is never logged. Recall also requires local
-per-project consent, so a repository cannot activate it by committing a hook.
-`gradient stats` reports
-uses, last use, and retypes caught for each approved artifact, and suggests
-removing artifacts that remain unused for at least 30 days.
+A `gradient recall` hook shipped in 0.4–0.6 and was removed after measurement:
+across 279 eligible prompts on a real corpus it produced zero hints, while both
+assistants selected skills correctly 90+ times on their own by matching the
+request against each skill's `description`. It re-implemented native skill
+dispatch with a weaker metric. If you enabled it, the leftover hook removes
+itself the first time it fires; nothing else is required.
 
 ## Attention hooks
 
@@ -280,8 +271,8 @@ lifecycle hook.
 `gradient insights` is a local-only report card for the way you work: typed
 nudges, interrupted turns, context deaths and compacts, repeated error pastes,
 and model/effort churn. It makes no model call. Each hot metric points to a
-specific action such as `gradient autopilot nudge`, `gradient scan`, or
-`gradient recall on`; `--user` uses the same recent cross-project window as
+specific action such as `gradient autopilot nudge` or `gradient scan`;
+`--user` uses the same recent cross-project window as
 scan, and `--html` writes a self-contained private
 `.gradient/insights.html`. Project reports also show up to 15 instruction
 effectiveness findings from the most recent scan.
@@ -413,7 +404,7 @@ scan --detach` hook exactly as configured until they rerun `gradient init
 
 Set `emitTarget` to `"command"` in the gradient config only when legacy
 `.claude/commands/` output is required. Phase B
-adds local recall hints and artifact adoption reporting, closing the gap between
+adds artifact adoption reporting, closing the gap between
 generating a workflow and actually using it. Phase C detects repeated pasted
 failures, exact recurring sequences, and repeated low-impact preferences across
 multiple sessions. It produces advisory troubleshooting/checklist skills and

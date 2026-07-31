@@ -4,7 +4,6 @@ import { applySuggestion, hookNeedsConsent, type ApplyResult } from "../core/app
 import { isNudge, loadProjectPlaybook, loadPlaybookPin, savePlaybookPin, pinState, type PinState } from "../core/playbook.js";
 import { loadSuggestions, saveSuggestions, syncApprovedPlaybook } from "./apply.js";
 import { loadConfig, resolveCheapModel, resolveTargets } from "../config.js";
-import { refreshRecallIndex } from "./recall.js";
 import { emit, type EmitTarget } from "../core/emit/index.js";
 import { clarifiedWorkflowBody } from "../core/detect.js";
 import { stripUnsafeControls } from "../core/security.js";
@@ -185,7 +184,6 @@ export async function review(
   }
   if (out.length > 0) {
     await syncApprovedPlaybook(projectDir, cached, opts.home);
-    await refreshRecallIndex(projectDir, opts.home);
   }
   return out;
 }

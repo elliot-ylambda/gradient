@@ -39,7 +39,6 @@ Proposes, then writes only on approval:
 Per-project opt-ins, each installing a hook. Explain what the hook does and get
 explicit consent before running any of them:
 
-- `gradient recall on` — hint when a typed prompt matches an installed artifact.
 - `gradient continuity on` — checkpoint before compaction, recap after resume.
 - `gradient autopilot nudge` — auto-respond when the agent stops.
 

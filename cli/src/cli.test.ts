@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { parseCliArgs, main, posixShellQuote } from "./cli.js";
 import { spawnDetached } from "./core/spawn.js";
 import { migrate } from "./commands/migrate.js";
-import { recallHook, recallStatus, setRecall } from "./commands/recall.js";
 import { stats } from "./commands/stats.js";
 import { insights, writeInsightsHtml } from "./commands/insights.js";
 import { continuityStatus, setContinuity } from "./commands/continuity.js";
@@ -26,11 +25,6 @@ vi.mock("./commands/mirror.js", () => ({ mirror: vi.fn(async () => {}) }));
 vi.mock("./commands/migrate.js", () => ({
   migrate: vi.fn(async () => ({ migrated: ["ship"], skipped: ["ghost"] })),
 }));
-vi.mock("./commands/recall.js", () => ({
-  recallHook: vi.fn(async () => ({ context: "use the installed skill" })),
-  recallStatus: vi.fn(async () => ({ installed: true, entries: 2, builtAt: "2026-07-09T00:00:00Z" })),
-  setRecall: vi.fn(async (on: boolean) => ({ installed: on, settingsPath: "/repo/.claude/settings.local.json" })),
-}));
 vi.mock("./commands/stats.js", () => ({
   stats: vi.fn(async () => ({
     total: 0,
@@ -44,7 +38,6 @@ vi.mock("./commands/stats.js", () => ({
       createdAt: "2026-05-01",
       uses: 0,
       lastUsed: undefined,
-      retypesCaught: 0,
       realizedMinutesSaved: 0,
       suggestRemoval: true,
     }],
@@ -430,66 +423,40 @@ describe("notify dispatch", () => {
   });
 });
 
-describe("recall dispatch", () => {
-  it("lists the recall manager in help", async () => {
+describe("retired recall dispatch", () => {
+  it("does not advertise the removed feature in help", async () => {
     const lines: string[] = [];
     await main(["help"], { log: line => lines.push(line) });
-    expect(lines.join("\n")).toContain("gradient recall <on|off|status>");
+    expect(lines.join("\n")).not.toContain("gradient recall");
   });
 
-  it("prints only structured UserPromptSubmit JSON when the hook hints", async () => {
-    vi.mocked(recallHook).mockResolvedValueOnce({ context: "use the installed skill" });
+  // The leftover UserPromptSubmit hook must not fall through to the
+  // unknown-command handler: its stdout is injected into the model's context,
+  // so the usage text would be read as instructions on every prompt.
+  it("stays silent and exits zero rather than printing usage", async () => {
     const lines: string[] = [];
-    const input = { prompt: "prepare this pull request for shipping", cwd: "/repo" };
-    const code = await main(["recall"], { home: "/home", log: line => lines.push(line), readStdin: async () => input });
-    expect(code).toBe(0);
-    expect(vi.mocked(recallHook)).toHaveBeenCalledWith(input, { home: "/home" });
-    expect(lines).toEqual([
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "UserPromptSubmit",
-          additionalContext: "use the installed skill",
-        },
-      }),
-    ]);
-  });
-
-  it("is silent and exits zero when the hook has no hint", async () => {
-    vi.mocked(recallHook).mockResolvedValueOnce({});
-    const lines: string[] = [];
-    expect(await main(["recall"], { log: line => lines.push(line), readStdin: async () => ({}) })).toBe(0);
+    expect(await main(["recall"], { home: "/home", log: line => lines.push(line), readStdin: async () => ({}) })).toBe(0);
     expect(lines).toEqual([]);
   });
 
-  it("manages on, off, and status explicitly", async () => {
-    vi.mocked(setRecall).mockClear();
-    expect(await main(["recall", "on"], { home: "/home", log: () => {} })).toBe(0);
-    expect(await main(["recall", "off"], { home: "/home", log: () => {} })).toBe(0);
-    expect(vi.mocked(setRecall)).toHaveBeenNthCalledWith(1, true, expect.any(String), "/home");
-    expect(vi.mocked(setRecall)).toHaveBeenNthCalledWith(2, false, expect.any(String), "/home");
-
+  it("stays silent for the old on/off/status arguments too", async () => {
     const lines: string[] = [];
-    expect(await main(["recall", "status"], { home: "/home", log: line => lines.push(line) })).toBe(0);
-    expect(vi.mocked(recallStatus)).toHaveBeenCalledWith(expect.any(String), "/home");
-    expect(lines.join("\n")).toContain("2 artifacts");
-  });
-
-  it("rejects unknown manager actions", async () => {
-    const lines: string[] = [];
-    expect(await main(["recall", "sideways"], { log: line => lines.push(line) })).toBe(2);
-    expect(lines.join("\n")).toContain("unknown recall action");
+    for (const action of ["on", "off", "status", "sideways"]) {
+      expect(await main(["recall", action], { home: "/home", log: line => lines.push(line) })).toBe(0);
+    }
+    expect(lines).toEqual([]);
   });
 });
 
 describe("stats adoption rendering", () => {
-  it("shows uses, last use, retypes caught, and the removal nudge", async () => {
+  it("shows uses, last use, and the removal nudge", async () => {
     vi.mocked(stats).mockClear();
     const lines: string[] = [];
     expect(await main(["stats"], { home: "/home", log: line => lines.push(line) })).toBe(0);
     expect(vi.mocked(stats)).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ home: "/home" }));
     const output = lines.join("\n");
     expect(output).toContain("adoption:");
-    expect(output).toContain("0 use(s) · last never · 0 retype(s) caught");
+    expect(output).toContain("0 use(s) · last never");
     expect(output).toContain("gradient remove dead");
   });
 
@@ -509,7 +476,6 @@ describe("stats adoption rendering", () => {
           createdAt: "2026-05-01",
           uses: 0,
           lastUsed: undefined,
-          retypesCaught: 0,
           realizedMinutesSaved: 0,
           suggestRemoval: true,
         },
@@ -519,7 +485,6 @@ describe("stats adoption rendering", () => {
           createdAt: "2026-06-01",
           uses: 4,
           lastUsed: "2026-07-10T00:00:00Z",
-          retypesCaught: 2,
           realizedMinutesSaved: 6,
           suggestRemoval: false,
         },
@@ -528,9 +493,9 @@ describe("stats adoption rendering", () => {
     const lines: string[] = [];
     expect(await main(["stats"], { log: line => lines.push(line) })).toBe(0);
     const output = lines.join("\n");
-    expect(output).toContain("0 use(s) · last never · 0 retype(s) caught");
+    expect(output).toContain("0 use(s) · last never");
     expect(output).not.toContain("≈0m saved");
-    expect(output).toContain("4 use(s) · ≈6m saved · last 2026-07-10 · 2 retype(s) caught");
+    expect(output).toContain("4 use(s) · ≈6m saved · last 2026-07-10");
   });
 });
 

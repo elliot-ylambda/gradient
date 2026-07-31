@@ -101,7 +101,6 @@ function validateConfig(value: unknown): Config {
     throw new Error("config autopilot must be off, nudge, or full");
   }
   validateAutopilotProjects(config.autopilotProjects);
-  validateProjectList(config.recallProjects, "recallProjects");
   validateProjectList(config.continuityProjects, "continuityProjects");
   validateProjectList(config.boardProjects, "boardProjects");
   if (config.ignorePatterns !== undefined && (

@@ -13,7 +13,7 @@ import { explain } from "./commands/explain.js";
 import { respond, type StopHookInput } from "./commands/respond.js";
 import { setAutopilotMode, autopilotStatus } from "./commands/autopilot.js";
 import { migrate } from "./commands/migrate.js";
-import { recallHook, recallStatus, setRecall, type RecallHookInput } from "./commands/recall.js";
+import { retireRecall } from "./commands/retire.js";
 import { banner, c, confidenceChip, kindLabel } from "./core/ui.js";
 import { isMeasured } from "./core/classify.js";
 import { spawnDetached } from "./core/spawn.js";
@@ -54,8 +54,6 @@ Usage:
   gradient list                 show generated artifacts
   gradient remove <name>        delete a generated artifact
   gradient migrate [--dry-run]  convert generated commands to skills
-  gradient recall <on|off|status>
-                                hint when a prompt matches an artifact
   gradient stats                show pattern coverage + artifact adoption
   gradient insights [--user] [--html]
                                 behavior report + what to automate next
@@ -152,14 +150,6 @@ async function runReview(
     if (a.printed) log(`  ${c.dim("run:")} ${a.printed}`);
     for (const failure of a.failures) log(c.coral(`  ${failure.target}: ${terminalSafeLine(failure.error)}`));
     for (const target of a.skippedTargets) log(c.muted(`  skipped ${target}: artifact type is not portable`));
-  }
-  if (applied.length === 0) return;
-  // Artifacts exist now — recall is what makes them discoverable while typing.
-  const status = await recallStatus(projectDir, home).catch(() => null);
-  if (!status || status.installed) return;
-  if (await confirm("\nEnable recall hints (a nudge when a typed prompt matches an installed artifact)?", false)) {
-    const result = await setRecall(true, projectDir, home);
-    log(`${c.ok("recall hook installed")} ${c.muted(terminalSafeLine(result.settingsPath))}`);
   }
 }
 
@@ -432,47 +422,11 @@ export async function main(
         log(c.dim(`${result.migrated.length} command(s) ${dryRun ? "ready to migrate" : "migrated"}; ${result.skipped.length} skipped`));
         return 0;
       }
+      // Retired. The subcommand outlives the feature only so an installed
+      // UserPromptSubmit hook can remove itself the first time it fires; stdout
+      // stays empty because this event's output is read as model context.
       case "recall": {
-        const action = positionals[0];
-        if (action === "on" || action === "off") {
-          const result = await setRecall(action === "on", projectDir, io.home);
-          log(
-            result.installed
-              ? `${c.ok("recall hook installed")} ${c.muted(result.settingsPath)}`
-              : `${c.muted("recall hook removed:")} ${result.settingsPath}`,
-          );
-          return 0;
-        }
-        if (action === "status") {
-          const status = await recallStatus(projectDir, io.home);
-          const built = status.builtAt ? ` (built ${status.builtAt})` : "";
-          log(
-            `${c.muted("recall:")} ${status.installed ? c.ok("on") : "off"}  ` +
-            c.dim(`index: ${status.entries} artifacts${built}`),
-          );
-          return 0;
-        }
-        if (action !== undefined) {
-          log(c.coral(`unknown recall action: ${action} (use on|off|status)`));
-          return 2;
-        }
-
-        // UserPromptSubmit hook mode. Exit 0 always and keep stdout empty
-        // unless returning the structured additionalContext payload.
-        try {
-          const input = await readStdin();
-          const result = await recallHook(input as RecallHookInput, { home: io.home });
-          if (result.context) {
-            log(JSON.stringify({
-              hookSpecificOutput: {
-                hookEventName: "UserPromptSubmit",
-                additionalContext: result.context,
-              },
-            }));
-          }
-        } catch {
-          // Fail open: Claude processes the original prompt unchanged.
-        }
+        await retireRecall(projectDir, io.home).catch(() => undefined);
         return 0;
       }
       case "stats": {
@@ -495,7 +449,7 @@ export async function main(
               : "";
             log(
               `  ${c.bold(artifact.name)}  ` +
-              c.dim(`${artifact.uses} use(s)${realized} · last ${lastUsed} · ${artifact.retypesCaught} retype(s) caught`) +
+              c.dim(`${artifact.uses} use(s)${realized} · last ${lastUsed}`) +
               removal,
             );
           }

@@ -2,7 +2,6 @@ import { access } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { addEntry, artifactHasMarker, artifactMarker, loadManifest } from "../core/manifest.js";
 import { assertInside, sanitizeName } from "../core/security.js";
-import { refreshRecallIndex } from "./recall.js";
 import { safeReadFile, safeUnlink, safeWriteFile } from "../core/safeFs.js";
 import {
   approvalMatches,
@@ -131,7 +130,6 @@ export async function migrate(
   }
 
   if (!opts.dryRun && migrated.length > 0) {
-    await refreshRecallIndex(projectDir, opts.home);
   }
   return { migrated, skipped };
 }

@@ -157,8 +157,6 @@ export interface Config {
   autopilot?: AutopilotMode;
   /** Canonical project path -> locally consented mode. */
   autopilotProjects?: Record<string, AutopilotMode>;
-  /** Canonical project paths where recall is locally consented. */
-  recallProjects?: string[];
   /** Canonical project paths where checkpoint/recap hooks are locally consented. */
   continuityProjects?: string[];
   /** Canonical board-root paths (git common-dir roots) where cross-session board hooks are consented. */

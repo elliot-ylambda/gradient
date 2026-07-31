@@ -104,13 +104,11 @@ describe("buildRecommendations", () => {
     const recommendations = buildRecommendations(metrics, {
       autopilotMode: undefined,
       avoided: 0,
-      recallInstalled: false,
       unusedArtifacts: ["dead"],
     });
     const all = recommendations.map(recommendation => recommendation.line).join("\n");
     expect(all).toContain("gradient autopilot nudge");
     expect(all).toContain("gradient continuity on");
-    expect(all).toContain("gradient recall on");
     expect(all).toContain("gradient remove dead");
     expect(all).toContain("defaultModel");
     expect(all).toContain("fewer-permission-prompts");
@@ -120,7 +118,6 @@ describe("buildRecommendations", () => {
     const recommendations = buildRecommendations(metrics, {
       autopilotMode: "nudge",
       avoided: 7,
-      recallInstalled: true,
       unusedArtifacts: [],
     });
     expect(recommendations.map(recommendation => recommendation.line).join("\n")).toContain("7 nudge(s) avoided");
@@ -129,7 +126,7 @@ describe("buildRecommendations", () => {
   it("routes effort churn even without model switches", () => {
     const recommendations = buildRecommendations(
       { ...metrics, modelSwitches: 0, effortSwitches: 12 },
-      { autopilotMode: "off", avoided: 0, recallInstalled: true, unusedArtifacts: [] },
+      { autopilotMode: "off", avoided: 0, unusedArtifacts: [] },
     );
     expect(recommendations.map(recommendation => recommendation.line).join("\n")).toContain("defaultModel");
   });
