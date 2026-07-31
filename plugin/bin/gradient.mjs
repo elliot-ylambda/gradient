@@ -376,7 +376,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.6.1" : require2("../package.json").version;
+    VERSION = true ? "0.7.0" : require2("../package.json").version;
   }
 });
 
