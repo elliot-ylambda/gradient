@@ -343,7 +343,21 @@ describe("on|off dispatch", () => {
 
       expect(await main(["off", feature], { home: "/home", log: s => lines.push(s) })).toBe(0);
       expect(vi.mocked(setFeature)).toHaveBeenLastCalledWith(feature, false, expect.any(String), { home: "/home" });
-      expect(lines.join("\n")).toContain(`${feature} off:`);
+      expect(lines.join("\n")).toContain(`${feature} off`);
+    }
+  });
+
+  // Both directions report where the change landed, and report it the same way:
+  // the state on one line, the settings path indented under it. Asserting the
+  // shape rather than the punctuation is deliberate — the previous test pinned
+  // a literal "off:" that only one of the two branches produced.
+  it("reports the settings path on its own line, whichever way it toggled", async () => {
+    for (const direction of ["on", "off"]) {
+      const lines: string[] = [];
+      expect(await main([direction, "continuity"], { home: "/home", log: s => lines.push(s) })).toBe(0);
+      expect(lines[0]).toContain(`continuity ${direction}`);
+      expect(lines[0]).not.toContain("settings.local.json");
+      expect(lines[1]).toMatch(/^ {2}\S*settings\.local\.json$/);
     }
   });
 

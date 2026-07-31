@@ -20764,8 +20764,9 @@ ${c.muted("session-start scan:")} ${r.sessionScanInstalled}`
         }
         const result = await setFeature(feature, command === "on", projectDir, { home: io.home });
         log(
-          result.on ? `${c.ok(`${feature} on`)}${result.detail ? c.dim(` \u2014 ${result.detail}`) : ""} ${c.muted(terminalSafeLine2(result.settingsPath))}` : `${c.muted(`${feature} off:`)} ${terminalSafeLine2(result.settingsPath)}`
+          result.on ? `${c.ok(`${feature} on`)}${result.detail ? c.dim(` \u2014 ${result.detail}`) : ""}` : c.muted(`${feature} off`)
         );
+        log(`  ${c.dim(terminalSafeLine2(result.settingsPath))}`);
         return 0;
       }
       // Aliases for the single consent verb.
