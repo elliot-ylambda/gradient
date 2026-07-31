@@ -376,7 +376,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.6.1" : require2("../package.json").version;
+    VERSION = true ? "0.7.0" : require2("../package.json").version;
   }
 });
 
@@ -2733,6 +2733,63 @@ var init_apply = __esm({
   }
 });
 
+// src/core/restatement.ts
+function bodySubstance(text) {
+  let out = text;
+  for (const pattern of SCAFFOLD) out = out.replace(pattern, " ");
+  return normalize(
+    out.replace(/^[ \t]*\d+[.)][ \t]*/gm, " ").replace(/^[ \t]*[-*][ \t]*/gm, " ").replace(/[`"']/g, " ")
+  );
+}
+function restatementScore(body, examples) {
+  const substance = trigrams(bodySubstance(body));
+  if (substance.size === 0) return 1;
+  const source = trigrams(examples.map(normalize).join(" "));
+  if (source.size === 0) return 0;
+  let shared = 0;
+  for (const gram of substance) if (source.has(gram)) shared++;
+  return shared / substance.size;
+}
+function restatableText(suggestion) {
+  switch (suggestion.payload.type) {
+    case "command":
+      return suggestion.payload.body;
+    case "loop":
+      return suggestion.payload.instruction;
+    // Hooks, rules and playbook entries are not restatements of a prompt: a hook
+    // is derived from counted events, and a rule's value is that it is stated
+    // somewhere the assistant reads, not that it is novel prose.
+    default:
+      return null;
+  }
+}
+function enumeratesSteps(text) {
+  return (text.match(/^[ \t]*\d+[.)][ \t]+\S/gm) ?? []).length >= 2;
+}
+function isRestatement(suggestion) {
+  const text = restatableText(suggestion);
+  if (text === null || enumeratesSteps(text)) return false;
+  const examples = suggestion.examples ?? [];
+  if (examples.length === 0) return false;
+  return restatementScore(text, examples) >= RESTATEMENT_THRESHOLD;
+}
+var SCAFFOLD, RESTATEMENT_THRESHOLD;
+var init_restatement = __esm({
+  "src/core/restatement.ts"() {
+    "use strict";
+    init_cluster();
+    SCAFFOLD = [
+      // The standing-authorization preamble every command/loop payload carries.
+      /this artifact records an observed habit[\s\S]*?spending actions\./i,
+      /observed (?:workflow|checklist)[^:\n]*:/i,
+      /\(not permission to execute later steps\)/i,
+      /first show the checklist[\s\S]*?approval of another\./i,
+      /\breminder:/i
+    ];
+    RESTATEMENT_THRESHOLD = 0.9;
+  }
+});
+
 // src/commands/apply.ts
 import { homedir as homedir5 } from "node:os";
 import { join as join12 } from "node:path";
@@ -2755,13 +2812,21 @@ async function loadSuggestions(projectDir, opts = {}) {
       return [];
     }
     const suggestions = [];
+    let restated = 0;
     for (const candidate of parsed) {
       try {
         validateSuggestion(candidate);
+        if (isRestatement(candidate)) {
+          restated++;
+          continue;
+        }
         suggestions.push(candidate);
       } catch (error) {
         onSkip(`skipping invalid cached suggestion: ${error.message}`);
       }
+    }
+    if (restated > 0) {
+      onSkip(`dropped ${restated} cached suggestion(s) that restate their own prompts; rescan to refresh`);
     }
     return suggestions;
   } catch (error) {
@@ -2826,6 +2891,7 @@ var init_apply2 = __esm({
     init_config();
     init_safeFs();
     init_validate();
+    init_restatement();
     init_manifest();
     init_playbook();
     init_hookBinary();
@@ -3772,63 +3838,6 @@ var init_scope = __esm({
     DEFAULT_USER_SCOPE_DAYS = 7;
     DEFAULT_MAX_PROMPTS = 1500;
     DEFAULT_DETECT_WINDOW = 24;
-  }
-});
-
-// src/core/restatement.ts
-function bodySubstance(text) {
-  let out = text;
-  for (const pattern of SCAFFOLD) out = out.replace(pattern, " ");
-  return normalize(
-    out.replace(/^[ \t]*\d+[.)][ \t]*/gm, " ").replace(/^[ \t]*[-*][ \t]*/gm, " ").replace(/[`"']/g, " ")
-  );
-}
-function restatementScore(body, examples) {
-  const substance = trigrams(bodySubstance(body));
-  if (substance.size === 0) return 1;
-  const source = trigrams(examples.map(normalize).join(" "));
-  if (source.size === 0) return 0;
-  let shared = 0;
-  for (const gram of substance) if (source.has(gram)) shared++;
-  return shared / substance.size;
-}
-function restatableText(suggestion) {
-  switch (suggestion.payload.type) {
-    case "command":
-      return suggestion.payload.body;
-    case "loop":
-      return suggestion.payload.instruction;
-    // Hooks, rules and playbook entries are not restatements of a prompt: a hook
-    // is derived from counted events, and a rule's value is that it is stated
-    // somewhere the assistant reads, not that it is novel prose.
-    default:
-      return null;
-  }
-}
-function enumeratesSteps(text) {
-  return (text.match(/^[ \t]*\d+[.)][ \t]+\S/gm) ?? []).length >= 2;
-}
-function isRestatement(suggestion) {
-  const text = restatableText(suggestion);
-  if (text === null || enumeratesSteps(text)) return false;
-  const examples = suggestion.examples ?? [];
-  if (examples.length === 0) return false;
-  return restatementScore(text, examples) >= RESTATEMENT_THRESHOLD;
-}
-var SCAFFOLD, RESTATEMENT_THRESHOLD;
-var init_restatement = __esm({
-  "src/core/restatement.ts"() {
-    "use strict";
-    init_cluster();
-    SCAFFOLD = [
-      // The standing-authorization preamble every command/loop payload carries.
-      /this artifact records an observed habit[\s\S]*?spending actions\./i,
-      /observed (?:workflow|checklist)[^:\n]*:/i,
-      /\(not permission to execute later steps\)/i,
-      /first show the checklist[\s\S]*?approval of another\./i,
-      /\breminder:/i
-    ];
-    RESTATEMENT_THRESHOLD = 0.9;
   }
 });
 
@@ -20755,8 +20764,9 @@ ${c.muted("session-start scan:")} ${r.sessionScanInstalled}`
         }
         const result = await setFeature(feature, command === "on", projectDir, { home: io.home });
         log(
-          result.on ? `${c.ok(`${feature} on`)}${result.detail ? c.dim(` \u2014 ${result.detail}`) : ""} ${c.muted(terminalSafeLine2(result.settingsPath))}` : `${c.muted(`${feature} off:`)} ${terminalSafeLine2(result.settingsPath)}`
+          result.on ? `${c.ok(`${feature} on`)}${result.detail ? c.dim(` \u2014 ${result.detail}`) : ""}` : c.muted(`${feature} off`)
         );
+        log(`  ${c.dim(terminalSafeLine2(result.settingsPath))}`);
         return 0;
       }
       // Aliases for the single consent verb.

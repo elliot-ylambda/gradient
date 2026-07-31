@@ -485,11 +485,16 @@ export async function main(
           return 2;
         }
         const result = await setFeature(feature, command === "on", projectDir, { home: io.home });
+        // Path on its own line, both ways. Inline it and an absolute settings
+        // path runs straight on from the feature description with nothing
+        // between them; the two branches also used to disagree on punctuation,
+        // so turning a feature off did not look like turning one on.
         log(
           result.on
-            ? `${c.ok(`${feature} on`)}${result.detail ? c.dim(` — ${result.detail}`) : ""} ${c.muted(terminalSafeLine(result.settingsPath))}`
-            : `${c.muted(`${feature} off:`)} ${terminalSafeLine(result.settingsPath)}`,
+            ? `${c.ok(`${feature} on`)}${result.detail ? c.dim(` — ${result.detail}`) : ""}`
+            : c.muted(`${feature} off`),
         );
+        log(`  ${c.dim(terminalSafeLine(result.settingsPath))}`);
         return 0;
       }
       // Aliases for the single consent verb.
