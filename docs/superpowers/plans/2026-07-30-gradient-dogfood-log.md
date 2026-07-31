@@ -53,6 +53,7 @@ than the exit code. Three rules earned their place:
 | F23 | `gradient` and `gradient scan` disagreed about the same corpus | 451 prompts vs 349; 2 failure loops vs 0 | the report now uses `promptSource` and the same replay dedupe | both report 333 and 0 |
 | F24 | The instruction audit could not reach its own threshold | best score 0.184 across 1,680 pairs, floor 0.7 | **deleted** (see gate) | measurement script |
 | F25 | The suite failed spuriously on unmodified main | git-dependent tests timing out at 5s under concurrent git activity | raise the vitest timeout | 905 pass |
+| F26 | 0.7.0 kept serving the noise 0.7.0 removes | 3 of 4 cached suggestions scored 1.000 restatement; cache written 2026-07-19 | re-apply the filter in `loadSuggestions` | 3 pending → 1, real cache |
 
 ## Three gates, three verdicts
 
@@ -136,6 +137,52 @@ cannot say anything its prompt did not. The restatement filter enforces that
 directly, and exempts multi-step checklists, where the composition is the
 contribution even when every step is borrowed wording.
 
+## The release that would have shipped its own noise
+
+The first thing done after merging the consolidation was to run the bare report
+against gradient's own repo at v0.7.0 — a capture for the docs page, not a test.
+It listed three pending suggestions. Two of them were `hi` and `continue`.
+
+```
+isRestatement  score   name
+true           1.000   reply-with-exactly
+true           1.000   hi
+true           1.000   continue
+false            n/a   notify-when-waiting
+```
+
+The cache was written on 2026-07-19, eleven days before the restatement filter
+existed. Its format is a bare JSON array with no envelope, so nothing records
+which release produced it, and no reader can tell a stale entry from a fresh one.
+Every user who had ever scanned would upgrade to 0.7.0 and keep seeing — and be
+invited to install — precisely the suggestions 0.7.0 exists to stop generating.
+One of them was already installed in this repo.
+
+The fix re-applies the filter on read rather than versioning the cache and
+discarding it. `isRestatement` is a pure predicate over a finished suggestion:
+body against examples, both already stored. So it costs nothing, needs no model
+call, keeps the one good suggestion, and makes every future tightening clean up
+old caches retroactively. The gates that need mining state — recurrence needs
+occurrence timestamps, the nudge filter needs the raw cluster signature — cannot
+work this way, which is exactly why this one belongs at the read boundary and
+they belong beside the miner.
+
+`loadSuggestions` is the single door; `sessionStart` is the reader that matters,
+because it injects what it reads into a live session.
+
+The general lesson is narrower than "version your caches": **a filter added to a
+generator only takes effect for users who regenerate.** Shipping a precision fix
+without a read-side path means the improvement is invisible to exactly the
+population that already has the problem.
+
+### Deliberately not fixed
+
+`instruction-audit.json` survives in every project cache that ever ran the
+deleted audit. Nothing reads or writes it — 65 inert bytes. A cleanup path would
+mean carrying a growing list of dead filenames forward forever, which costs more
+than it saves. `retireRecall` exists only because a stale `recall` hook would
+have executed and printed into the model's context; an unread file does nothing.
+
 ## Numbers
 
 | Metric | Baseline | After correctness | Now |
@@ -182,13 +229,19 @@ Every retired verb still routes and prints a one-line redirect, for one release.
 
 ## Still open
 
-- **Adoption is still ~zero** (2 artifacts across ~105 projects, both in
-  gradient's own repo). The confound — `apply` was broken until 2026-07-30 — is
-  now removed, so re-measure in a month before concluding.
-- `recap` has not yet been observed firing on a real resume.
-- The `possible` tier is now empty on this corpus. If it stays empty after the
-  adoption re-measurement, drop prompt-derived generation entirely rather than
-  keeping a tier that never has anything in it.
-- `gradient hook <target>` is accepted but never written into settings. Switch
-  the installers after a release has passed, so a downgrade cannot orphan hooks.
-- The retired aliases need a dated removal ticket, not "later".
+Each of these is gated on elapsed time rather than on effort, so each now has a
+dated ticket instead of a line here that says "later".
+
+- [#33](https://github.com/elliot-ylambda/gradient/issues/33) — **2026-08-30**:
+  re-measure adoption, now that the confound (`apply` was broken until
+  2026-07-30) is gone, and drop prompt-derived generation entirely if the
+  `possible` tier is still empty. Also the first realistic chance to observe
+  `recap` firing on a real resume, which has still never been seen.
+- [#34](https://github.com/elliot-ylambda/gradient/issues/34) — **0.8.0**: make
+  the installers write `gradient hook <target>`, which 0.7.0 accepts but never
+  writes. Gated so a downgrade cannot leave a live hook naming a verb the older
+  binary lacks.
+- [#35](https://github.com/elliot-ylambda/gradient/issues/35) — **0.8.0, not
+  before 2026-08-30**: delete the retired aliases. Ordered strictly after #34:
+  the bare forms are what users' existing settings contain, so deleting them
+  first would break every hook installed by 0.6.x.
