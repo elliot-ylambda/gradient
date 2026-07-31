@@ -55,11 +55,16 @@ than the exit code. Three rules earned their place:
 | F25 | The suite failed spuriously on unmodified main | git-dependent tests timing out at 5s under concurrent git activity | raise the vitest timeout | 905 pass |
 | F26 | 0.7.0 kept serving the noise 0.7.0 removes | 3 of 4 cached suggestions scored 1.000 restatement; cache written 2026-07-19 | re-apply the filter in `loadSuggestions` | 3 pending → 1, real cache |
 
-## Three gates, three verdicts
+## Five gates, five verdicts
 
 The novelty screen — "can Claude Code already do this, and does it fire at all?"
-— was written for new ideas. Applied to shipped ones it deleted two features and
-saved building a third.
+— was written for new ideas. Applied to shipped ones it deleted two features;
+applied to the remaining planned ones it stopped three more from being built.
+
+Nothing that ran the gate survived it. That is worth stating plainly rather than
+filing as a coincidence: every one of these was believed valuable by the person
+who wrote the plan, including the two the plan singled out as its most
+defensible. Belief and frequency turned out to be unrelated.
 
 ### `recall` — deleted
 
@@ -106,6 +111,76 @@ gradient already parses every Bash invocation — was built and measured too.
 Across the same 61 projects only two rules genuinely name a forbidden command
 (`pnpm start`, `fly secrets set …`); the other ~28 extractions were filenames,
 model names and table names sitting in a backtick after a negation. Abandoned.
+
+### 3.4 cross-session collision guard — not built
+
+The plan called this "highest practical value for anyone running parallel
+agents, which the dogfood shows is exactly how this repo is used." The premise
+is right; the conclusion does not survive counting.
+
+```
+1,972 sessions · 288 with file edits · 844 time-overlapping pairs in one cwd
+pairs sharing an edited file within 10 min (raw)      82
+  of those, fork/resume replay of one lineage          9
+  genuinely concurrent, distinct writes               73
+distinct (repo, file) ever genuinely co-edited         6
+```
+
+Seventy-three pairs collapse to **six files**, because the same file collides
+across many pairs. Two of the six are `MEMORY.md` — infrastructure written by
+the memory system on almost every session, so a guard would fire on it
+constantly and correctly be ignored. One is inside a shared worktree. That
+leaves **three real source-file collisions in months of heavy parallel use**,
+none showing evidence of lost work.
+
+The first pass nearly reported 82. Every collision in it was `0m apart`, which
+is the fork/resume signature: a resumed session inherits its parent's events
+verbatim, timestamps included. Same bug as F13 and F20, third sighting.
+
+Cost matters here as much as frequency. This would be a `PreToolUse` hook on
+Edit/Write — it runs before *every* file write. In the session that measured it,
+that is 160 invocations to maybe fire three times in six months, in the hot path,
+with "blocks an edit" as its failure mode.
+
+And the information already ships. `gradient`'s board section prints
+`editing: cli/src/commands/apply.ts, …` for every live session, passively, at no
+marginal cost. The guard would re-deliver what the report already says.
+
+### 3.3 context-death forensics — not built
+
+The promise: attribute context growth to its sources, and emit something you can
+act on — the plan's own example is "reading `*.jsonl` fixtures accounted for ~40%
+of context in 6 sessions" turning into a `.claudeignore` entry.
+
+Measured in characters, the answer looked spectacular: **45% of context in
+compacted sessions was `*.png`**. It was an artifact. Base64 characters are not
+tokens — an image costs the model a fixed ~1.5k tokens regardless of how many
+bytes its encoding runs to. Transcripts carry real per-turn usage, so the honest
+unit was available all along:
+
+```
+context at a turn = input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+```
+
+Re-run on token deltas across the same 78 compacted sessions, `*.png` disappears
+from the table entirely, and the actual shape of context death appears:
+
+```
+median share of the single largest source, per session     26.0%
+sessions where any one source exceeds 40% of growth         2 / 78
+share attributable to file reads (the .claudeignore lever)  32.1%
+   …spread across *.md, *.py, *.tsx, *.ts — i.e. the source code
+```
+
+**Context death is diffuse.** In 76 of 78 sessions there is no dominant culprit
+to name, so there is nothing to put in a `.claudeignore`. The largest single
+"source" overall is `$ cd` at 17%, which is just the command head of long
+compound shell invocations — not a thing anyone can act on.
+
+The mitigation also already ships. Bare `gradient` reports `context deaths` and
+`compacts` and points at `gradient on continuity`, which makes a context death
+cost a paragraph instead of a re-explanation. Forensics would explain why
+something happened that already has a fix.
 
 ### `insights` / `board` — kept, and merged into the report
 
