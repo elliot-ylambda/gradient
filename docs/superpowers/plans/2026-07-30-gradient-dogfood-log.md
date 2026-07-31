@@ -54,6 +54,7 @@ than the exit code. Three rules earned their place:
 | F24 | The instruction audit could not reach its own threshold | best score 0.184 across 1,680 pairs, floor 0.7 | **deleted** (see gate) | measurement script |
 | F25 | The suite failed spuriously on unmodified main | git-dependent tests timing out at 5s under concurrent git activity | raise the vitest timeout | 905 pass |
 | F26 | 0.7.0 kept serving the noise 0.7.0 removes | 3 of 4 cached suggestions scored 1.000 restatement; cache written 2026-07-19 | re-apply the filter in `loadSuggestions` | 3 pending → 1, real cache |
+| F27 | A documented alias was never wired | `gradient explain` → `unknown command`, from the published 0.7.0 tarball | `RETIRED` map, and the test drives it | test fails without the fix |
 
 ## Five gates, five verdicts
 
@@ -257,6 +258,42 @@ deleted audit. Nothing reads or writes it — 65 inert bytes. A cleanup path wou
 mean carrying a growing list of dead filenames forward forever, which costs more
 than it saves. `retireRecall` exists only because a stale `recall` hook would
 have executed and printed into the model's context; an unread file does nothing.
+
+## The alias the test could not see
+
+0.7.0 published, then the release was smoke-tested the way a user meets it —
+`npm install gradient.md@0.7.0` into an empty directory, run the binary, then
+try every retired verb. Fifteen of seventeen printed a redirect. Two did not:
+
+```
+✗ explain        UNKNOWN COMMAND
+✗ migrate        UNKNOWN COMMAND
+```
+
+`migrate` is correct — the surface table documents it as deleted outright, so
+"unknown command" is the honest answer. `explain` is not: the same table
+promises `scan review explain → gradient scan`, and it had no case at all.
+
+There *was* a test for this, added because the plan asked for one. It read:
+
+```ts
+for (const alias of ["stats", "mirror", "list"]) { … }
+```
+
+A hand-written list of three, in a file whose implementation also hand-writes
+its list. **A test that repeats the implementation's enumeration cannot catch
+the implementation's omission** — the two share it. This is the second rule in
+this document ("assert the invariant, not the string") in a form it had not
+taken before: the string was fine, the *set* was wrong.
+
+The fix exports one `RETIRED` map and drives the test from it, so adding a name
+without wiring it fails the suite. Verified the only way this is worth anything
+— by deleting the fix and watching the new test fail on `explain should not read
+as a typo` before restoring it.
+
+Worth noting what found it. The suite was green, CI was green, the dogfood gate
+was green, and the packaged plugin bundle was green. It took installing the
+published artifact from the registry and typing the retired verbs by hand.
 
 ## Numbers
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseCliArgs, main, posixShellQuote } from "./cli.js";
+import { parseCliArgs, main, posixShellQuote, RETIRED } from "./cli.js";
 import { spawnDetached } from "./core/spawn.js";
 import { insights, writeInsightsHtml } from "./commands/insights.js";
 import { recap } from "./commands/recap.js";
@@ -463,6 +463,44 @@ describe("report rendering", () => {
     await main([], { log: line => lines.push(line) });
     expect(lines.join("\n")).toContain("features:");
     expect(lines.join("\n")).toContain("continuity");
+  });
+});
+
+// The compatibility promise is "no retired verb reads as a typo for one
+// release", and the way to break it is to document a verb and forget to wire
+// it — which is what happened to `explain` in 0.7.0. So this drives the
+// exported list rather than repeating it: adding a name to RETIRED without
+// handling it fails here instead of shipping `unknown command`.
+describe("retired verbs never read as typos", () => {
+  it("resolves every verb the surface still documents", async () => {
+    // Verbs with behaviour of their own, plus the sentence-only ones. Both
+    // kinds must exit 0; only the reason differs.
+    const documented = [
+      "insights", "stats", "mirror", "list", "board", "review",
+      "continuity", "autopilot", ...RETIRED.keys(),
+    ];
+    for (const verb of documented) {
+      const lines: string[] = [];
+      const code = await main([verb], { home: "/home", log: line => lines.push(line) });
+      expect(lines.join("\n"), `${verb} should not read as a typo`).not.toContain("unknown command");
+      expect(code, `${verb} should exit 0`).toBe(0);
+    }
+  });
+
+  it("still rejects a genuine typo, and a verb documented as deleted", async () => {
+    for (const verb of ["stats-report", "migrate"]) {
+      const lines: string[] = [];
+      expect(await main([verb], { home: "/home", log: line => lines.push(line) })).toBe(2);
+      expect(lines.join("\n")).toContain("unknown command");
+    }
+  });
+
+  it("names the replacement for each sentence-only retirement", async () => {
+    for (const [verb, replacement] of RETIRED) {
+      const lines: string[] = [];
+      expect(await main([verb], { home: "/home", log: line => lines.push(line) })).toBe(0);
+      expect(lines.join("\n")).toContain(`gradient ${verb} is now ${replacement}`);
+    }
   });
 });
 
