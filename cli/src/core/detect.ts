@@ -109,6 +109,11 @@ function deterministicTitle(c: Candidate): string {
   const signature = boundedOneLine(c.signature, 120);
   if (c.kind === "paste") return `Advisory troubleshooting guide for “${signature}”`;
   if (c.kind === "sequence") return `Observed workflow checklist: ${signature}`;
+  // A failure guide and a post-edit ritual are counted from tool invocations,
+  // not from anything the user asked for. Calling either a "reusable workflow"
+  // told the reader to look for a request that was never made.
+  if (c.kind === "toolfail") return `Recurring failure guide for “${signature}”`;
+  if (c.kind === "ritual") return `Observed post-edit step: ${signature}`;
   return `Reusable workflow for “${signature}”`;
 }
 
@@ -148,6 +153,11 @@ export function byLeverage(a: Suggestion, b: Suggestion): number {
     a.name.localeCompare(b.name);
 }
 
+/** Candidate kinds counted from tool invocations rather than read out of prompt
+ * text. A suggestion sourced from one of these is a measurement; everything
+ * else is an interpretation of what repeated phrasing meant. */
+const TOOL_EVENT_KINDS: ReadonlySet<Candidate["kind"]> = new Set(["toolfail", "ritual"]);
+
 function evidenceFor(matched: Candidate[], payloadType: SuggestionPayload["type"]): Suggestion["evidence"] {
   if (matched.length === 0) throw new Error("cannot derive evidence without a source candidate");
   const count = matched.reduce((n, c) => n + c.count, 0);
@@ -158,6 +168,7 @@ function evidenceFor(matched: Candidate[], payloadType: SuggestionPayload["type"
   return {
     count,
     sessions,
+    ...(matched.every(candidate => TOOL_EVENT_KINDS.has(candidate.kind)) ? { measured: true } : {}),
     ...(assistants.length ? { assistants } : {}),
     estMinutesSavedPerMonth: estMinutesSavedPerMonth({
       count,

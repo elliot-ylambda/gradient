@@ -174,6 +174,9 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
     (evidence.sessions as number) > 1_000_000_000) {
     throw new Error("suggestion.evidence must contain non-negative integer counts");
   }
+  if (evidence.measured !== undefined && typeof evidence.measured !== "boolean") {
+    throw new Error("suggestion.evidence measured must be a boolean when present");
+  }
   if (evidence.assistants !== undefined && (
     !Array.isArray(evidence.assistants) ||
     evidence.assistants.length > 2 ||

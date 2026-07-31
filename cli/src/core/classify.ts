@@ -115,5 +115,8 @@ export function hookFromEvents(events: CommandEvent[]): Suggestion | null {
  * present them as separate tiers rather than interleaving them by an estimate.
  */
 export function isMeasured(suggestion: Suggestion): boolean {
-  return suggestion.payload.type === "hook";
+  // Hooks are always event-derived; a command or rule is measured only when
+  // detect recorded that every source candidate came from tool invocations —
+  // a recurring-failure guide is a measurement, a repeated sentence is not.
+  return suggestion.payload.type === "hook" || suggestion.evidence.measured === true;
 }

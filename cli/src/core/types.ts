@@ -110,6 +110,10 @@ export interface Suggestion {
   evidence: {
     count: number;
     sessions: number;
+    /** True when every source was counted from tool invocations rather than read
+     * out of prompt text. Absent means prompt-derived (and on caches written
+     * before the field existed, unknown — which reads the same way). */
+    measured?: boolean;
     assistants?: Assistant[];
     /** Optional: absent on pre-existing caches/fixtures written before this field existed. */
     estMinutesSavedPerMonth?: number;

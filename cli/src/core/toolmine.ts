@@ -15,6 +15,22 @@ export function commandHead(command: string): string {
   return command.replace(/\s+/g, " ").trim().slice(0, TOOLMINE.HEAD_MAX);
 }
 
+/**
+ * Shell navigation and inspection builtins. A repeatedly failing `cd` is a real
+ * signal about a stale path, but there is no guide to write for it — the fix is
+ * a correct path, not a workflow. Mining them produces artifacts titled after a
+ * directory that nobody would ever invoke.
+ */
+const UNDIAGNOSABLE = new Set([
+  "cd", "ls", "pwd", "cat", "echo", "which", "type", "export", "source", ".",
+  "true", "false", "exit", "clear", "history",
+]);
+
+export function isDiagnosable(head: string): boolean {
+  const executable = head.split(" ")[0]?.split("/").pop()?.toLowerCase() ?? "";
+  return executable.length > 0 && !UNDIAGNOSABLE.has(executable);
+}
+
 interface Group {
   count: number;
   sessionIds: Set<string>;
@@ -69,7 +85,7 @@ export function failureLoops(events: ToolEvent[]): Candidate[] {
   for (const event of events) {
     if (event.kind !== "bash" || !event.isError || !event.command) continue;
     const key = commandHead(event.command);
-    if (!key) continue;
+    if (!key || !isDiagnosable(key)) continue;
     grow(groups, key, event.sessionId, event.ts, event.errorHead);
   }
   return rankedCandidates(groups, "toolfail", group =>
