@@ -107,8 +107,8 @@ describe("buildRecommendations", () => {
       unusedArtifacts: ["dead"],
     });
     const all = recommendations.map(recommendation => recommendation.line).join("\n");
-    expect(all).toContain("gradient autopilot nudge");
-    expect(all).toContain("gradient continuity on");
+    expect(all).toContain("gradient on autopilot");
+    expect(all).toContain("gradient on continuity");
     expect(all).toContain("gradient remove dead");
     expect(all).toContain("defaultModel");
     expect(all).toContain("fewer-permission-prompts");
@@ -170,7 +170,7 @@ describe("renderInsightsHtml", () => {
       effortSwitches: 0,
       errorPastes: 1,
     },
-    recommendations: [{ metric: "nudges", line: "try <gradient autopilot nudge> & friends" }],
+    recommendations: [{ metric: "nudges", line: "try <gradient on autopilot> & friends" }],
     costs: [{ metric: "nudges" as const, tokens: 123, prompts: 3, recoverable: false, line: "≈123 tokens · 3 nudges" }],
     toolActivity: { failureLoops: 2, postEditRituals: 1 },
   };
@@ -180,7 +180,7 @@ describe("renderInsightsHtml", () => {
     expect(html).toContain("<style>");
     expect(html).not.toContain("<script");
     expect(html).not.toMatch(/https?:\/\//);
-    expect(html).toContain("&lt;gradient autopilot nudge&gt; &amp; friends");
+    expect(html).toContain("&lt;gradient on autopilot&gt; &amp; friends");
     expect(html).toContain("project scope");
     expect(html).toContain("cost of unautomated habits");
     expect(html).toContain("≈123 tokens");

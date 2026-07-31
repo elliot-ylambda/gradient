@@ -18,10 +18,10 @@ import {
 import { compileIgnorePatterns, filterPrompts, hasTemplateFloodSupport, isTemplateFlood } from "../core/filter.js";
 import { boundedPromptLimit, capByRecency, MAX_PROMPTS_HARD_CAP } from "../core/cap.js";
 import { DEFAULT_DETECT_WINDOW, DEFAULT_MAX_PROMPTS } from "../core/scope.js";
-import { cluster, dedupeReplayedOccurrences, normalize } from "../core/cluster.js";
+import { cluster, normalize } from "../core/cluster.js";
 import { activeWindows, annotateTemporal } from "../core/temporal.js";
 import { isRestatement } from "../core/restatement.js";
-import { commandEventIdentity, dedupeReplayedEvents, toolEventIdentity } from "../core/replay.js";
+import { commandEventIdentity, dedupeReplayedEvents, toolEventIdentity, turnIdentity } from "../core/replay.js";
 import { hookFromEvents, markLoops } from "../core/classify.js";
 import { markCorrections } from "../core/corrections.js";
 import { mineSequences, SEQ_MAX_BIGRAMS } from "../core/sequence.js";
@@ -222,8 +222,17 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
     log(`coverage check failed: ${(error as Error).message}`);
   }
 
-  const prompts = filterPrompts(turns, ignore);
-  log(`prompts: ${prompts.length} after filtering injected text`);
+  // Replay dedupe before counting, matching the events above and the report:
+  // one prompt a resumed session inherited from its parent is one prompt, and
+  // any other answer makes `gradient` and `gradient scan` disagree about the
+  // same corpus.
+  const filtered = filterPrompts(turns, ignore);
+  const deduped = dedupeReplayedEvents(filtered, turnIdentity);
+  const prompts = deduped.kept;
+  log(
+    `prompts: ${prompts.length} after filtering injected text` +
+    (deduped.dropped > 0 ? ` and ${deduped.dropped} session replay(s)` : ""),
+  );
   const { kept, dropped } = capByRecency(prompts, max);
   if (dropped > 0) log(`capped to most recent ${max} prompts; ${dropped} older dropped (raise with --max-prompts)`);
 
@@ -336,13 +345,10 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
       toolCandidates = toolCandidates.slice(0, toolCandidateCap);
     }
   }
-  // Collapse fork/resume replays before any counting: a resumed session copies
-  // its parent's turns verbatim, so one typed prompt can otherwise present as
-  // several occurrences across several session ids and inflate every downstream
-  // count, including the ranking key.
-  const allCandidates = dedupeReplayedOccurrences(
-    [...nonSequenceCandidates, ...sequenceCandidates, ...toolCandidates, ...auditCandidates],
-  );
+  // Replays were already collapsed at the turn and event level, before any of
+  // these producers saw their input, so counts here are of distinct sends.
+  const allCandidates =
+    [...nonSequenceCandidates, ...sequenceCandidates, ...toolCandidates, ...auditCandidates];
   // Runs are computed over the full kept stream, not clusterInput: a paste turn
   // sitting between two cluster members must break the run like any non-member.
   annotateTemporal(kept, allCandidates);
@@ -384,7 +390,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const gated = dayGated.filter(candidate =>
     !!candidate.cadence || !isNudgeText(candidate.signature));
   if (gated.length < dayGated.length) {
-    log(`nudge filter → ${dayGated.length - gated.length} approval phrase(s) dropped; see gradient autopilot nudge`);
+    log(`nudge filter → ${dayGated.length - gated.length} approval phrase(s) dropped; see gradient on autopilot`);
   }
   log(`mining → ${gated.length} candidate patterns; sending top ${window} to llm`);
 

@@ -10,6 +10,7 @@ import { stripUnsafeControls } from "../core/security.js";
 import { proseDiff } from "../core/playbook-splice.js";
 import { addDismissal, isDismissed, loadDismissed } from "../core/dismiss.js";
 import { resolveHookBinary } from "../core/hookBinary.js";
+import { isMeasured } from "../core/classify.js";
 
 export type ReviewDecision = "approve" | "skip" | "explain" | "quit";
 
@@ -85,7 +86,7 @@ function renderedText(
   // Approving a gated hook also grants its consent, which the user must see
   // before choosing rather than discover afterwards in config.json.
   const consentNote = suggestion.payload.type === "hook" && hookNeedsConsent(suggestion.payload.subcommand)
-    ? "\napproving also enables continuity for this project (what `gradient continuity on` does);\n" +
+    ? "\napproving also enables continuity for this project (what `gradient on continuity` does);\n" +
       "without it this hook would install and then do nothing"
     : "";
   return `[${target}]\n${body}${consentNote}`;
@@ -192,14 +193,36 @@ function terminalSafeLine(text: string): string {
   return stripUnsafeControls(text).replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim();
 }
 
+/**
+ * The evidence behind one suggestion, shown on demand during review.
+ *
+ * This is what the standalone `explain` verb printed. It deliberately omits
+ * `estMinutesSavedPerMonth`: that number is derived from the occurrence count,
+ * so any count inflation lands straight in it, and presenting a derived guess
+ * beside real measurements invites it to be read as one.
+ */
 export function suggestionExplanation(suggestion: Suggestion): string {
-  const leverage = suggestion.evidence.estMinutesSavedPerMonth;
+  const temporal = suggestion.evidence.temporal;
+  const sources = suggestion.evidence.assistants?.length === 2 ? " · Claude Code + Codex" : "";
   const lines = [
     `  why: ${terminalSafeLine(suggestion.rationale)}`,
-    `  evidence: seen ${suggestion.evidence.count}× across ${suggestion.evidence.sessions} sessions` +
-      (leverage !== undefined ? ` · ≈${leverage}m/month` : ""),
+    `  evidence: ${isMeasured(suggestion) ? "counted from tool events" : "inferred from repeated prompts"}` +
+      ` · seen ${suggestion.evidence.count}× across ${suggestion.evidence.sessions} sessions${sources}`,
   ];
+  if (temporal) {
+    lines.push(
+      `  temporal: longest run ${temporal.maxRunLength} · recurring-run sessions ${temporal.runSessions}` +
+      ` · median gap ${temporal.medianGapMinutes}m · ${temporal.distinctDays} active day(s)` +
+      ` across ${temporal.spanDays} day(s)`,
+    );
+  }
   for (const example of suggestion.examples ?? []) lines.push(`    · ${terminalSafeLine(example)}`);
+  if (suggestion.clarify) {
+    lines.push(`  clarify: ${terminalSafeLine(suggestion.clarify.question)}`);
+    for (const option of suggestion.clarify.options) {
+      lines.push(`    ${suggestion.clarify.chosen === option.label ? "✓" : "·"} ${terminalSafeLine(option.label)}`);
+    }
+  }
   return lines.join("\n");
 }
 
@@ -264,7 +287,7 @@ export function readlinePrompter(
     }
     output.write(`\n${stripUnsafeControls(preview)}\n`);
     if (isNudge(suggestion)) {
-      output.write("  tip: this is what autopilot automates → gradient autopilot nudge\n");
+      output.write("  tip: this is what autopilot automates → gradient on autopilot\n");
     }
     const answer = (await rl.question("  [a]pprove [s]kip [e]xplain [q]uit › ")).trim().toLowerCase();
     rl.close();

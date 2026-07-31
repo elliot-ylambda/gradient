@@ -1,5 +1,5 @@
 import type { Turn, CommandEvent, AutopilotMode } from "./types.js";
-import { classifyPrompt } from "./filter.js";
+import { classifyTurn } from "./filter.js";
 import { extractPasteKey, PASTE_MIN_COUNT } from "./paste.js";
 import { cleanupStale, listStateFiles, loadState } from "./state.js";
 import type { InstructionTally } from "./audit.js";
@@ -56,7 +56,11 @@ export function computeMetrics(turns: Turn[], events: CommandEvent[] = [], ignor
       continue;
     }
 
-    switch (classifyPrompt(text, ignore)) {
+    // classifyTurn, not classifyPrompt: the transcript records how a prompt
+    // entered the session, and text heuristics cannot tell a typed request from
+    // a skill body the harness expanded into the user role. Using the weaker
+    // test here made the report and `scan` disagree about the same corpus.
+    switch (classifyTurn(turn, ignore)) {
       case "continuation":
         metrics.continuations++;
         continue;
@@ -141,7 +145,7 @@ export function buildCostRows(turns: Turn[], ignore: RegExp[] = []): CostRow[] {
   };
   for (const turn of turns) {
     if (turn.role !== "user" || !turn.text) continue;
-    const classification = classifyPrompt(turn.text, ignore);
+    const classification = classifyTurn(turn, ignore);
     if (classification === "continuation") {
       totals.continuations.prompts++;
       totals.continuations.tokens += tokensFor(turn);
@@ -166,7 +170,7 @@ export function buildCostRows(turns: Turn[], ignore: RegExp[] = []): CostRow[] {
     metric: "continuations",
     ...totals.continuations,
     recoverable: true,
-    line: costLine(totals.continuations.tokens, totals.continuations.prompts, "context re-explain(s)", "gradient continuity on"),
+    line: costLine(totals.continuations.tokens, totals.continuations.prompts, "context re-explain(s)", "gradient on continuity"),
   });
   if (totals.pastes.prompts > 0) rows.push({
     metric: "pastes",
@@ -178,7 +182,7 @@ export function buildCostRows(turns: Turn[], ignore: RegExp[] = []): CostRow[] {
     metric: "nudges",
     ...totals.nudges,
     recoverable: false,
-    line: attentionLine(totals.nudges.tokens, totals.nudges.prompts, "nudge prompt(s)", "gradient autopilot nudge"),
+    line: attentionLine(totals.nudges.tokens, totals.nudges.prompts, "nudge prompt(s)", "gradient on autopilot"),
   });
   return rows;
 }
@@ -201,13 +205,13 @@ export function buildRecommendations(
   } else if (metrics.nudges > 10) {
     recommendations.push({
       metric: "nudges",
-      line: `you typed ${metrics.nudges} nudges — try: gradient autopilot nudge`,
+      line: `you typed ${metrics.nudges} nudges — try: gradient on autopilot`,
     });
   }
   if (metrics.continuations + metrics.compacts > 10) {
     recommendations.push({
       metric: "context",
-      line: `${metrics.continuations} context death(s), ${metrics.compacts} compact(s) — try: gradient continuity on`,
+      line: `${metrics.continuations} context death(s), ${metrics.compacts} compact(s) — try: gradient on continuity`,
     });
   }
   if (metrics.interrupts > 20) {
@@ -292,7 +296,7 @@ ${report.costs?.length ? `<h1>cost of unautomated habits</h1>
 <ul>${report.costs.map(cost => `<li>${escapeHtml(cost.line)}</li>`).join("")}</ul>` : ""}
 ${report.instructionEffectiveness?.length ? `<h1>Instruction effectiveness</h1>
 <ul>${report.instructionEffectiveness.map(tally => `<li>${escapeHtml(instructionEffectivenessLine(tally))}</li>`).join("")}</ul>
-<p>These instructions aren't holding — run <code>gradient review</code> to convert them.</p>` : ""}
+<p>These instructions aren't holding — run <code>gradient scan</code> to convert them.</p>` : ""}
 <h1>next</h1>
 <ul>${report.recommendations.map(recommendation => `<li>${escapeHtml(recommendation.line)}</li>`).join("")}</ul>
 </body></html>\n`;

@@ -66,7 +66,7 @@ describe("scan → review continuation", () => {
     const code = await main(["scan"], { log: m => logs.push(m), home: await tmpHome(), confirm: async () => false });
     expect(code).toBe(0);
     expect(review).not.toHaveBeenCalled();
-    expect(logs.join("\n")).toContain("gradient review");
+    expect(logs.join("\n")).toContain("gradient scan");
   });
 
   it("--no-review never asks", async () => {

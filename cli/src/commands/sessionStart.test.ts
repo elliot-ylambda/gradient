@@ -38,7 +38,7 @@ describe("sessionStart", () => {
       spawnDetachedFn: (args, projectDir) => { order.push(`spawn:${args.join(" ")}:${projectDir}`); },
     });
     expect(order).toEqual([
-      "print:gradient: large workflow (≈20m/month) — run `gradient review`",
+      "print:gradient: large workflow (≈20m/month) — run `gradient scan`",
       "spawn:scan:/repo",
     ]);
   });

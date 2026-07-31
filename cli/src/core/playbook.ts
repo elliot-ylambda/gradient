@@ -16,11 +16,11 @@ export const DEFAULT_PLAYBOOK = `# gradient.md — autopilot playbook
 
 The Rules section is yours — edit freely. Nothing but the region between the
 mined markers is ever rewritten, and only suggestions you approve land there:
-\`gradient scan\` proposes, \`gradient review\` approves, and approval is what
+\`gradient scan\` proposes and walks the proposals, and approval is what
 updates this file.
 
 ${MINED_START}
-_(approve suggestions with \`gradient review\` to mine your habits into this section)_
+_(approve suggestions with \`gradient scan\` to mine your habits into this section)_
 ${MINED_END}
 
 ## Rules

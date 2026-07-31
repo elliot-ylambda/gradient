@@ -51,7 +51,7 @@ export async function sessionStart(projectDir: string, deps: SessionStartDeps = 
     const suggestion = topSurfaceableSuggestion(suggestions, manifest, dismissed);
     if (suggestion) {
       const minutes = suggestion.evidence.estMinutesSavedPerMonth!;
-      line = `gradient: ${oneLine(suggestion.title)} (≈${minutes}m/month) — run \`gradient review\``;
+      line = `gradient: ${oneLine(suggestion.title)} (≈${minutes}m/month) — run \`gradient scan\``;
     }
   } catch {
     // Invalid or unavailable cache/state produces no hook output.

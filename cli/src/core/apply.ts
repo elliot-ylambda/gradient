@@ -15,7 +15,7 @@ import { loadConfig, projectKey, saveConfig } from "../config.js";
  * config.continuityProjects, so installing the hook without granting consent
  * produces a permanent no-op that still reports success (issue #29). Approving
  * a specific suggestion in review is the same explicit, per-project act that
- * `gradient continuity on` asks for, so approval grants it.
+ * `gradient on continuity` asks for, so approval grants it.
  */
 const CONSENT_REQUIRED: ReadonlySet<string> = new Set(["checkpoint", "recap"]);
 
@@ -85,7 +85,7 @@ export async function applySuggestion(
 ): Promise<ApplyResult> {
   validateSuggestion(suggestion);
   if (suggestion.confidence === "flagged") {
-    throw new Error("refusing to apply an unresolved flagged suggestion; resolve it through gradient review first");
+    throw new Error("refusing to apply an unresolved flagged suggestion; resolve it through gradient scan first");
   }
   const targets = normalizeTargets(opts.targets);
   const writes: ApplyResult["writes"] = [];

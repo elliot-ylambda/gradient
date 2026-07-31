@@ -5,66 +5,62 @@ description: Use when the user repeats a request they have made before, nudges a
 
 # gradient
 
-Mine local Claude Code and Codex history for what the user repeats, and generate
-reusable artifacts they approve. gradient reads transcripts already on disk; it
-starts no background work and installs nothing on its own.
+Measure how the user actually works, from Claude Code and Codex transcripts
+already on disk, and automate what genuinely recurs. gradient starts no
+background work and installs nothing on its own.
 
 ## Start here
 
-`gradient insights` is the entry point. It is cheap, read-only, needs no prior
-scan, and reports what is actually costing the user — repeated nudges, context
-deaths, re-pasted errors, failure loops. Run it first and lead with what it
-says. `gradient scan` is the follow-up when they want concrete artifacts.
+Run bare `gradient`. It is cheap, read-only, needs no prior scan, and answers
+every question at once: what the user's habits cost them, which generated
+artifacts exist and whether they are ever invoked, what other sessions are doing
+in this repo, and what to do next. Lead with what it says.
+
+`gradient scan` is the follow-up, and only when they want concrete artifacts.
 
 ## Commands
 
-Read-only:
+There are six. Anything else you remember (`insights`, `stats`, `list`,
+`explain`, `mirror`, `review`, `board`, `continuity`, `autopilot`, `migrate`)
+is a retired alias — it still runs, but say the current form.
 
-- `gradient insights [--user]` — behavior report plus what to automate next.
-- `gradient stats` — pattern coverage and adoption of what was generated.
-- `gradient list` — artifacts generated in this project.
-- `gradient explain <id|name>` — the evidence behind one suggestion. **Run this
-  before recommending anything**; see the evidence rules below.
-- `gradient board` — what other sessions are doing in this repo.
-
-Proposes, then writes only on approval:
-
-- `gradient scan` — analyze history, send bounded and redacted candidates to the
-  configured model, cache suggestions. `--user` for cross-project, last 7 days.
-- `gradient review --json` — read `{ projectPlaybook, suggestions }`. Use this
-  form, never the interactive `gradient review`, which expects a terminal.
-- `gradient apply <id|name>...` — generate specific suggestions.
-- `gradient remove <name>` — delete a generated artifact.
-
-Per-project opt-ins, each installing a hook. Explain what the hook does and get
-explicit consent before running any of them:
-
-- `gradient continuity on` — checkpoint before compaction, recap after resume.
-- `gradient autopilot nudge` — auto-respond when the agent stops.
+- `gradient` — the report. Read-only.
+- `gradient scan [--json]` — analyze history, send bounded and redacted
+  candidates to the configured model, then walk the proposals. **Use `--json`**;
+  the interactive walkthrough expects a terminal. `--user` widens to
+  cross-project, last 7 days.
+- `gradient apply <id|name>...` — install specific proposals.
+- `gradient remove <name>` — uninstall a generated artifact.
+- `gradient on|off <feature>` — `continuity`, `autopilot`, `board`,
+  `session-scan`. Each installs a hook that runs on its own afterwards: explain
+  what it does and get explicit consent before running one.
+- `gradient init` — first-run setup.
 
 ## Judging the evidence
 
-Suggestion quality varies sharply by where the evidence came from. Check before
-you recommend, or you will confidently push the worst item on the list.
+Suggestion quality varies sharply by where the evidence came from, and `scan`
+labels it. Check before you recommend, or you will confidently push the worst
+item on the list.
 
-- **Tool-event evidence is reliable.** Counts of `/compact`, idle waits, and
-  repeated tool failures are direct measurements. The hook suggestions built on
-  them (`checkpoint-before-compaction`, `notify-when-waiting`) are usually the
-  best items in the list even though they rank low on estimated minutes.
-- **Prompt-text evidence is not.** A phrase recurs both because it is a real
-  ritual *and* because the user iterated on one hard feature, and clustering
-  cannot tell those apart. Forked or resumed sessions also replay a parent's
-  prompts, which inflates the session count.
-- **Check `temporal` in `gradient explain` before believing a count.** If
-  `active days` is 1, all the "occurrences" happened in a single sitting — that
-  is project history, not a habit. Say so instead of recommending it.
-- **Treat `estMinutesSavedPerMonth` as a guess, never a fact.** It is derived
-  from the occurrence count, so any count inflation lands directly in it. Do not
-  quote it as if it were measured.
+- **`measured` is reliable.** These are counted tool invocations — `/compact`
+  calls, idle waits, repeated command failures. The two hook suggestions built
+  on them (`checkpoint-before-compaction`, `notify-when-waiting`) are almost
+  always the best items in the list.
+- **`possible` is an interpretation.** A phrase recurs both because it is a real
+  ritual *and* because the user iterated on one hard feature for an afternoon,
+  and clustering cannot tell those apart. Read the evidence before repeating the
+  claim.
+- **A workflow artifact that only restates the prompt is worthless.** `scan`
+  drops those now, but if you are looking at an older cache, apply the same
+  test: if the body is the user's sentence with a heading above it, invoking it
+  costs more than typing it.
+- **`estMinutesSavedPerMonth` is a guess, never a fact.** It is derived from the
+  occurrence count, so any count inflation lands directly in it. It is no longer
+  displayed; do not resurrect it from `--json` and quote it as measured.
 
-Prefer suggestions whose evidence spans several days. A one-off feature request
-reconstructed as a "reusable workflow" is noise, and installing it as a skill
-makes the user's skill directory worse.
+Prefer suggestions whose evidence spans separate occasions. A one-off feature
+request reconstructed as a "reusable workflow" is noise, and installing it makes
+the user's skill directory worse.
 
 ## Rules
 
@@ -73,9 +69,9 @@ makes the user's skill directory worse.
   installs another project's artifacts.
 - Tell the user that candidate snippets leave the machine before running
   `gradient scan`.
-- Show the exact preview from `gradient review --json` before applying anything.
-- Never apply without explicit approval, and never run an opt-in hook command on
-  your own initiative.
+- Show the exact preview from `gradient scan --json` before applying anything.
+- Never apply without explicit approval, and never turn on a background feature
+  on your own initiative.
 - A generated artifact records an observed habit. It grants no standing
   authorization: still confirm before destructive, irreversible, external,
   production, publishing, credential, privacy-sensitive, or spending actions,

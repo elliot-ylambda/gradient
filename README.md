@@ -68,37 +68,38 @@ See the [skills catalog](skills/) for usage and the full audit checklist.
 
 **Plugin (recommended):** in Claude Code run
 `/plugin marketplace add ylambda/gradient` then `/plugin install gradient`,
-and use `/gradient:scan` → `/gradient:review`. Installing runs nothing —
+and use `/gradient:scan`. Installing runs nothing —
 every automation stays opt-in.
 
 **CLI (npx):**
 
 ```bash
-npx gradient.md init --target both --session-scan # install + surface one suggestion next session
-npx gradient.md             # interactive mirror: top pending suggestions (fresh cache, or bounded scan)
-npx gradient.md scan        # prompts, tool rituals/failures, advisory patterns, and preferences
+npx gradient.md init        # config plus the bundled skill, then offer a first scan
+npx gradient.md             # the report: what your habits cost, what is installed
+                            # and whether it is used, what else is running, what next
+npx gradient.md scan        # find what recurs, then walk the proposals
 npx gradient.md scan --user # all projects, last 7 days — your recent cross-project habits
 npx gradient.md scan --all  # all projects, no time limit (thorough; can be slow)
-npx gradient.md review      # approve, explain, or persistently dismiss ranked suggestions
-npx gradient.md apply <id|name>...  # generate an approved skill / loop / hook
-npx gradient.md migrate     # convert older generated commands into skills
-npx gradient.md stats       # estimated leverage plus realized minutes saved from actual use
-npx gradient.md insights    # local behavior report + concrete next actions
-npx gradient.md continuity on # checkpoint before compaction, recap after resume
-npx gradient.md bundle team-kit # package approved artifacts for teammates
+npx gradient.md scan --json # the proposals as JSON, for agents
+npx gradient.md apply <id|name>...  # install specific proposals
+npx gradient.md remove <name>       # uninstall a generated artifact
+npx gradient.md on continuity       # checkpoint before compaction, recap after resume
+npx gradient.md on autopilot        # auto-respond when the agent stops
+npx gradient.md on board            # cross-session awareness in this repo
+npx gradient.md off <feature>       # and back off again
 ```
 
 The npm package is **`gradient.md`**; the command it installs is **`gradient`**.
 So `npx gradient.md scan` and, once installed globally, plain `gradient scan`.
 
-The funnel leads you through itself: `init --session-scan` offers a first scan;
-after you work, the next session surfaces at most one cached suggestion and
-rescans in the background. Interactive bare `gradient` mirrors up to three
-pending suggestions straight from the cache when it's fresh — under a day
-old — and refreshes it first otherwise; `review` can approve, explain, or
-persistently dismiss them, and `stats` reports both estimated leverage and
-minutes saved by observed artifact use. Hooks and pipes never prompt;
-non-interactive bare invocation continues to print help.
+The funnel leads you through itself: `init` offers a first scan; with
+`gradient on session-scan`, the next session surfaces at most one cached
+suggestion and rescans in the background. Bare `gradient` is the report — the
+same output in a pipe as in a terminal — and it shows up to three pending
+suggestions alongside what your habits cost, which artifacts are installed and
+whether anything ever invokes them, and what other sessions are doing here.
+`gradient scan` walks the proposals; each can be approved, explained, or
+persistently dismissed. Hooks and pipes never prompt.
 
 **Scope.** `scan` defaults to the project you're in. `--user` widens to every
 project but bounds it to a recent window (last 7 days, set via `userScopeDays`
@@ -181,9 +182,9 @@ a local `Stop` hook whose isolated judge can return only the fixed nudge
 `~/.config/gradient/gradient.md`; unapproved scan output never reaches it.
 
 ```bash
-npx gradient.md autopilot nudge   # opt in (this project): push unfinished work forward
+npx gradient.md on autopilot      # opt in (this project): push unfinished work forward
 npx gradient.md autopilot status  # what did it do while I was away?
-npx gradient.md autopilot off     # remove the hook
+npx gradient.md off autopilot     # remove the hook
 ```
 
 Arbitrary-response `full` mode is disabled in `0.3.1` pending additional
@@ -209,7 +210,7 @@ autopilot:
 ```
 
 Structured frontmatter clamps always enforce. Repository prose reaches your
-judge only after you approve it in `gradient review`, which pins those exact
+judge only after you approve it during `gradient scan`, which pins those exact
 bytes locally; any unapproved edit silently unpins the prose. Trailing `#`
 comments are descriptive and ignored. Anything else the parser can't read — an
 unclosed block, `max-mode: turbo` — turns autopilot off for that repo rather than
@@ -241,9 +242,9 @@ only its continue/stand-down decision is used, and continue maps to `Continue.`.
 ## Adoption
 
 Generating a skill is only half the loop; finding out whether it is ever
-invoked is the other half. `gradient stats` counts uses from `<command-name>`
-turns in your transcripts, reports last use per approved artifact, and suggests
-removing anything unused for 30 days or more. Counting is local and derived from
+invoked is the other half. The bare `gradient` report counts uses from
+`<command-name>` turns in your transcripts, reports last use per approved
+artifact, and suggests removing anything unused for 30 days or more. Counting is local and derived from
 history already on disk — no hook, no index, nothing to enable.
 
 A `gradient recall` hook shipped in 0.4–0.6 and was removed after measurement:
@@ -268,16 +269,16 @@ lifecycle hook.
 
 ## Insights & continuity
 
-`gradient insights` is a local-only report card for the way you work: typed
+Bare `gradient` is a local-only report card for the way you work: typed
 nudges, interrupted turns, context deaths and compacts, repeated error pastes,
 and model/effort churn. It makes no model call. Each hot metric points to a
-specific action such as `gradient autopilot nudge` or `gradient scan`;
+specific action such as `gradient on autopilot` or `gradient scan`;
 `--user` uses the same recent cross-project window as
 scan, and `--html` writes a self-contained private
 `.gradient/insights.html`. Project reports also show up to 15 instruction
 effectiveness findings from the most recent scan.
 
-`gradient continuity on` installs locally consented `PreCompact` checkpoint
+`gradient on continuity` installs locally consented `PreCompact` checkpoint
 and `SessionStart` recap hooks. Bounded, redacted recent user intents plus a
 deterministic tool-activity count are stored in the private per-project user
 cache and returned as explicitly untrusted context only on `resume|compact`.
@@ -391,7 +392,7 @@ exact-content approval and are skipped; re-scan, review, and apply them first.
 
 **0.6 stable-id migration:** suggestion ids now derive from their source
 evidence instead of an LLM-chosen name. After upgrading from an earlier
-release, run `gradient scan` and `gradient review`. If an already-applied
+release, run `gradient scan`. If an already-applied
 artifact appears again, re-apply the reviewed suggestion and remove the old
 manifest entry with `gradient remove <name>`. Gradient does not rewrite or
 delete existing artifacts automatically.
@@ -412,8 +413,8 @@ guarded project-preference rules without retaining pasted error bodies or
 inferring authorization from prior behavior.
 
 Phase D adds the LLM-free behavior report and the opt-in continuity pack:
-`gradient insights` turns local work signals into concrete next actions, while
-`gradient continuity on` preserves a redacted checkpoint across compaction and
+The bare `gradient` report turns local work signals into concrete next actions, while
+`gradient on continuity` preserves a redacted checkpoint across compaction and
 resumed sessions. Phase E closes the v2 funnel by packaging current-safe,
 exact-content-approved artifacts as validated team plugins, with hook export
 disabled and personal evidence stripped.

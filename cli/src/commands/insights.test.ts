@@ -14,8 +14,10 @@ beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), "grad-insh-"));
 });
 
+// Distinct instants: twelve nudges sharing one timestamp across twelve
+// sessions is a resumed session replaying its parent, and counts once.
 const nudgeTurns: Turn[] = Array.from({ length: 12 }, (_, index) => ({
-  ts: "2026-07-01T00:00:00Z",
+  ts: `2026-07-01T00:${String(index).padStart(2, "0")}:00Z`,
   project: "p",
   role: "user",
   sessionId: `s${index}`,
@@ -46,7 +48,7 @@ describe("insights", () => {
       },
     );
     expect(report.toolActivity).toEqual({ failureLoops: 1, postEditRituals: 1 });
-    expect(report.recommendations.map(item => item.line).join("\n")).toContain("gradient scan, then gradient review");
+    expect(report.recommendations.map(item => item.line).join("\n")).toContain("run gradient scan");
   });
 
   it("loads at most 15 instruction-effectiveness rows from the private audit cache", async () => {
@@ -88,7 +90,7 @@ describe("insights", () => {
       { collectFn: async () => ["f"], parseFn: async () => ({ turns: nudgeTurns, events: [] }) },
     );
     expect(report.metrics.nudges).toBe(12);
-    expect(report.recommendations.map(item => item.line).join("\n")).toContain("gradient autopilot nudge");
+    expect(report.recommendations.map(item => item.line).join("\n")).toContain("gradient on autopilot");
     expect(report.label).toContain("project");
   });
 

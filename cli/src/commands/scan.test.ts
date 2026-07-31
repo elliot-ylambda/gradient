@@ -393,7 +393,7 @@ describe("scan", () => {
     const { suggestions, log } = await runLoopScan("continue");
     expect(suggestions).toEqual([]);
     expect(log).toContain("nudge filter → 1 approval phrase(s) dropped");
-    expect(log).toContain("gradient autopilot nudge");
+    expect(log).toContain("gradient on autopilot");
     expect(log).not.toContain("restatement filter");
   });
 
@@ -663,9 +663,11 @@ describe("scan", () => {
     // Redacted sample from the dogfood security-review injector: one identical
     // prompt per session across all 1,318 affected sessions.
     const flood = "Review this change for security vulnerabilities. Changed files (you may read these and any other file in the repo): " + "x".repeat(200);
+    // Distinct instants: the injector fired once per session, and identical
+    // (timestamp, text) across sessions is a replay rather than 1,318 sends.
     const turns = Array.from({ length: 1_318 }, (_, i) => ({
-      ts: `2026-07-0${(i % 9) + 1}T00:00:00Z`, project: "p", role: "user" as const,
-      sessionId: `s${i}`, text: flood,
+      ts: `2026-07-0${(i % 9) + 1}T${String(Math.floor(i / 60) % 24).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}:00Z`,
+      project: "p", role: "user" as const, sessionId: `s${i}`, text: flood,
     }));
     const logs: string[] = [];
     const out = await scan(
@@ -698,8 +700,8 @@ describe("scan", () => {
     const projectDir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const errorBody = `make dev\n${"error: boom SENSITIVE_BODY\n".repeat(40)}`;
-    const turns = ["s1", "s2", "s3"].map(sessionId => ({
-      ts: "2026-07-01T00:00:00Z",
+    const turns = ["s1", "s2", "s3"].map((sessionId, index) => ({
+      ts: `2026-07-0${index + 1}T00:00:00Z`,
       project: "p",
       role: "user" as const,
       sessionId,
