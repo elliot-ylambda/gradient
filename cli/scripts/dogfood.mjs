@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -40,6 +41,19 @@ const COVERED_COMMANDS = new Set([
   "hook", "session-start", "notify", "recap", "checkpoint", "respond", "recall",
   "review", "insights", "stats", "list", "mirror", "continuity", "autopilot", "board", "bundle",
 ]);
+
+
+/** Hook commands are written in whichever binary form resolves here: a bare
+ *  `gradient` when it is on PATH, `<node> <script>` otherwise. CI has no global
+ *  install, so assert on the subcommand a hook runs rather than on one spelling
+ *  of the binary that happens to be true on a developer's machine. */
+function installedHookCommands(settings, event) {
+  return (settings?.hooks?.[event] ?? []).flatMap(entry => (entry.hooks ?? []).map(hook => hook.command ?? ""));
+}
+
+function runsSubcommand(settings, event, subcommand) {
+  return installedHookCommands(settings, event).some(command => command.trim().endsWith(` ${subcommand}`));
+}
 
 function parseOptions(argv) {
   let output = join(repoRoot, "artifacts", "dogfood");
@@ -640,7 +654,13 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         GRADIENT_HOME: state.home,
         NO_COLOR: "1",
         TERM: "dumb",
-        PATH: `${state.fakeBin}${delimiter}${process.env.PATH ?? ""}`,
+        // Hide any globally installed gradient. The hook installer writes
+        // whichever binary form resolves, so a developer machine with a global
+        // install exercises a different code path from CI and from an npx user
+        // — and the difference only showed up as a CI-only failure.
+        PATH: `${state.fakeBin}${delimiter}${(process.env.PATH ?? "").split(delimiter)
+          .filter(dir => dir && !existsSync(join(dir, "gradient")))
+          .join(delimiter)}`,
         ANTHROPIC_API_KEY: "",
         ANTHROPIC_AUTH_TOKEN: "",
       };
@@ -968,8 +988,12 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const enabledConfig = await readJson(configPath);
       equal(enabledConfig.boardProjects, [await realpath(state.project)], "board consent is isolated to the synthetic repository root");
       const settingsPath = join(state.project, ".claude", "settings.local.json");
-      const settingsOn = JSON.stringify(await readJson(settingsPath));
-      assertion(settingsOn.includes("gradient board digest") && settingsOn.includes("gradient board refresh"), "board installs both project hooks");
+      const settingsOn = await readJson(settingsPath);
+      assertion(
+        runsSubcommand(settingsOn, "SessionStart", "board digest") &&
+        runsSubcommand(settingsOn, "UserPromptSubmit", "board refresh"),
+        "board installs both project hooks",
+      );
 
       const digest = await runCli(["board", "digest"], {
         input: JSON.stringify({ session_id: "claude-dogfood-1" }),
@@ -1015,8 +1039,12 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       equal(off.exitCode, 0, "board disable succeeds");
       const disabledConfig = await readJson(configPath);
       equal(disabledConfig.boardProjects, [], "board disable revokes repository consent");
-      const settingsOff = JSON.stringify(await readJson(settingsPath));
-      assertion(!settingsOff.includes("gradient board digest") && !settingsOff.includes("gradient board refresh"), "board disable removes only its hooks");
+      const settingsOff = await readJson(settingsPath);
+      assertion(
+        !runsSubcommand(settingsOff, "SessionStart", "board digest") &&
+        !runsSubcommand(settingsOff, "UserPromptSubmit", "board refresh"),
+        "board disable removes only its hooks",
+      );
       assertion(!(await pathExists(boardDir)), "board disable removes private board state");
       const staleHook = await runCli(["board", "digest"], {
         input: JSON.stringify({ session_id: "claude-dogfood-1" }),
@@ -1118,7 +1146,7 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const removedHook = await runCli(["remove", "dogfood-notify"]);
       equal(removedHook.exitCode, 0, "owned hook removal succeeds");
       const after = await readJson(join(state.project, ".claude", "settings.local.json"));
-      assertion(!JSON.stringify(after).includes("gradient notify"), "owned notification hook is removed");
+      assertion(!runsSubcommand(after, "Notification", "notify"), "owned notification hook is removed");
       assertion(JSON.stringify(after).includes("npm run lint") === JSON.stringify(before).includes("npm run lint"), "adjacent reviewed command hook is preserved");
 
       const removedPlaybook = await runCli(["remove", "dogfood-playbook"]);
