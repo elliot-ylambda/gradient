@@ -1,6 +1,6 @@
 # gradient consolidation and value plan
 
-Status: proposed
+Status: executed — see the [dogfood log](2026-07-30-gradient-dogfood-log.md)
 Date: 2026-07-30
 Grounding: a full dogfood of scan → review → apply → remove against
 `clinch-terminal` (187 transcripts, 447 mined prompts, 5,100 tool events) plus
@@ -265,6 +265,45 @@ Keep the old verbs as hidden aliases that print a one-line redirect for one
 minor release, then delete. Hook targets already in users' settings.json must
 keep working — `isGradientHookFor` already matches any binary form, so the
 alias layer only needs to keep the subcommand names resolvable.
+
+## Execution record
+
+Parts 0–2 are done and shipped on `fix/dogfood-findings`. Part 3 was gated and
+mostly deleted rather than built. What actually happened, against what was
+planned:
+
+| Planned | Outcome |
+| --- | --- |
+| 0.1 gate `recall` | Failed. Deleted (−951 LOC). |
+| 1.1 fix recall's metric | Skipped, as the gate directed. |
+| 1.2 checkpoint consent | Done. Approval grants continuity consent. |
+| 1.3 rank by evidence class | Done, and extended: the restatement filter, a 24h recurrence window, replay dedupe at the source, and tiering on evidence class rather than payload shape. |
+| 2 five user verbs | Six, not five. `init` kept — see below. 22 → 6. |
+| 2 delete stats/mirror/migrate/list/explain | Done; `stats`'s adoption computation rescued into `core/adoption.ts` and shown by the report. |
+| 2 delete `bundle` | Not done. Kept, hidden from help: packaging artifacts for a team is a capability nothing else provides. |
+| 3.1 recurring-failure ledger | Partly superseded. Failure loops are mined and tiered as measured; the cross-session ledger is unbuilt, and the replay fix showed most "recurring" failures were one failure counted twice. |
+| 3.2 instruction effectiveness | **Gated and deleted.** Rebuilt both halves first, measured 0 true positives in 31 candidates across 61 projects, then removed it (−1,015 LOC). |
+| 3.3 context-death forensics | Not started. |
+| 3.4 cross-session collision guard | Not started. |
+
+Two deliberate deviations, both argued at the commit:
+
+- **`init` stays a verb.** The plan folded it into an implicit first-run prompt
+  with "non-interactive callers get a clear error naming the one-liner to run."
+  That is a regression: today every command works in an unconfigured project off
+  config defaults, and requiring setup would break CI and agent callers. Setup
+  is a consent decision, not a toggle, and it earns its verb.
+- **`gradient hook <target>` dispatches but is not yet written into settings.**
+  The bare subcommands are what users' settings already contain, and
+  `isGradientHookFor` matches both, so the namespace can be adopted by the
+  installers after a release has passed without risking orphaned hooks on a
+  downgrade.
+
+The plan's own falsifier fired, twice. It said: *"If `scan` precision stays low
+after 1.3, prompt-derived suggestions should be dropped entirely rather than
+tiered."* Precision did not stay low — it went to 2/2 — but only because
+everything prompt-derived was filtered out. The `possible` tier is now empty on
+the dogfood corpus, which is the same result by a different route.
 
 ## Part 3 — Capabilities that do not already exist
 
