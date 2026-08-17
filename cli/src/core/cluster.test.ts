@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalize, similarity, cluster } from "./cluster.js";
+import { cluster, containment, normalize, similarity } from "./cluster.js";
 import type { Turn } from "./types.js";
 
 const u = (text: string, sessionId = "s"): Turn => ({ ts: "t", project: "p", role: "user", text, sessionId });
@@ -92,3 +92,23 @@ describe("cluster", () => {
   });
 });
 
+
+describe("containment", () => {
+  it("scores a short phrase sitting inside a longer instruction near 1", () => {
+    // The dead-letter case: what the user typed is already written down, and
+    // Jaccard scores it low only because the instruction says more.
+    const typed = "push and open a pr";
+    const written = "push and open a pr when the work is done";
+    expect(containment(typed, written)).toBeGreaterThan(0.9);
+    expect(similarity(typed, written)).toBeLessThan(0.7);
+  });
+
+  it("is directional", () => {
+    expect(containment("a much longer sentence than the other", "short")).toBeLessThan(0.3);
+  });
+
+  it("handles identical and empty input", () => {
+    expect(containment("same", "same")).toBe(1);
+    expect(containment("", "anything")).toBe(0);
+  });
+});

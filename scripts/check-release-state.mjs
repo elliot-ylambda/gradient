@@ -30,13 +30,14 @@ async function main() {
   const expected = pkg.version;
   const headers = { "User-Agent": "gradient-release-check" };
 
-  const [npm, release, site] = await Promise.all([
-    fetchOk("https://registry.npmjs.org/gradient.md/latest", { headers }).then((response) => response.json()),
+  // gradient is distributed as files in this repository — the plugin via the
+  // marketplace, the skills by copy — so the GitHub release and the site are
+  // the only two surfaces that carry a version of their own.
+  const [release, site] = await Promise.all([
     fetchOk("https://api.github.com/repos/elliot-ylambda/gradient/releases/latest", { headers }).then((response) => response.json()),
     fetchOk("https://gradient.md", { headers }).then((response) => response.text()),
   ]);
   const actual = {
-    npm: npm.version ?? null,
     "GitHub Release": typeof release.tag_name === "string" ? release.tag_name.replace(/^v/, "") : null,
     website: websiteVersion(site),
   };
@@ -44,7 +45,7 @@ async function main() {
   if (mismatches.length) {
     throw new Error(`release state is inconsistent:\n- ${mismatches.join("\n- ")}`);
   }
-  console.log(`release ${expected} is aligned across npm, GitHub Releases, and gradient.md`);
+  console.log(`release ${expected} is aligned across GitHub Releases and gradient.md`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

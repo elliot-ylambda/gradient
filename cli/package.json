@@ -1,21 +1,8 @@
 {
   "name": "gradient.md",
-  "version": "0.7.1",
-  "description": "Turn repeated Claude Code and Codex workflows into skills, rules, insights, and team plugins.",
-  "keywords": [
-    "claude",
-    "claude-code",
-    "codex",
-    "openai",
-    "agent-skills",
-    "cli",
-    "automation",
-    "skills",
-    "plugins",
-    "hooks",
-    "developer-tools",
-    "ai"
-  ],
+  "version": "0.8.0",
+  "private": true,
+  "description": "Keep your Claude Code and Codex setup honest: mine your own history, check the configuration they load, and apply the changes you approve.",
   "homepage": "https://gradient.md",
   "repository": {
     "type": "git",
@@ -28,16 +15,9 @@
   "license": "MIT",
   "author": "ylambda",
   "type": "module",
-  "bin": {
-    "gradient": "dist/bin.js"
-  },
   "engines": {
     "node": ">=20"
   },
-  "files": [
-    "dist",
-    "src/skill"
-  ],
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/bin.js',0o755)\"",
@@ -47,8 +27,7 @@
     "smoke:bin": "node scripts/smoke-bin.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "prepublishOnly": "npm test && npm run build && npm run build:plugin && npm run smoke:bin && npm run dogfood:run"
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3"

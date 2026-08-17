@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { access, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { insights, writeInsightsHtml } from "./insights.js";
+import { insights } from "./insights.js";
 import type { CommandEvent, ToolEvent, Turn } from "../core/types.js";
 
 let dir: string;
@@ -47,7 +47,7 @@ describe("insights", () => {
       },
     );
     expect(report.toolActivity).toEqual({ failureLoops: 1, postEditRituals: 1 });
-    expect(report.recommendations.map(item => item.line).join("\n")).toContain("run gradient scan");
+    expect(report.recommendations.map(item => item.line).join("\n")).toContain("run gradient optimize");
   });
 
   it("assembles metrics and recommendations for project scope", async () => {
@@ -129,26 +129,7 @@ describe("insights", () => {
     expect(report.recommendations.map(item => item.line)).toContain("unused 30d+: gradient remove dead");
   });
 
-  it("writes the HTML report inside .gradient", async () => {
-    const report = await insights(
-      { projectDir: dir, home },
-      { collectFn: async () => [], parseFn: async () => ({ turns: [], events: [] }) },
-    );
-    const path = await writeInsightsHtml(dir, report);
-    expect(path).toBe(join(dir, ".gradient", "insights.html"));
-    expect(await readFile(path, "utf8")).toContain("gradient insights");
-  });
 
-  it("refuses a symlinked HTML output directory", async () => {
-    const outside = await mkdtemp(join(tmpdir(), "grad-victim-"));
-    await symlink(outside, join(dir, ".gradient"));
-    const report = await insights(
-      { projectDir: dir, home },
-      { collectFn: async () => [], parseFn: async () => ({ turns: [], events: [] }) },
-    );
-    await expect(writeInsightsHtml(dir, report)).rejects.toThrow(/symlink/);
-    await expect(access(join(outside, "insights.html"))).rejects.toThrow();
-  });
 
   it("combines enabled Claude Code and Codex turns in metrics and token costs", async () => {
     const report = await insights(

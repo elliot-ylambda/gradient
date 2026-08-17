@@ -1,11 +1,18 @@
 import type { Suggestion } from "../types.js";
+import { redact } from "../security.js";
+import { entryTag } from "../playbook-splice.js";
 
-/** Codex standing guidance is deliberately print-only: AGENTS.md may contain
- * hand-written team policy, so gradient never edits it automatically. */
-export function emitCodexRule(s: Suggestion): { printed: string } {
+/**
+ * One tagged bullet for the repository's AGENTS.md.
+ *
+ * Codex has no `rules/` directory, so a standing instruction for it has to live
+ * in a file the user also writes in. The tag is what makes that acceptable:
+ * gradient owns exactly its own line under its own heading, applies
+ * idempotently, and removes by splicing that line out rather than touching the
+ * file as a whole.
+ */
+export function emitCodexRule(s: Suggestion): { line: string } {
   if (s.payload.type !== "rule") throw new Error("emitCodexRule needs a rule payload");
-  const destination = s.payload.target === "project" ? "the repository AGENTS.md" : "~/.codex/AGENTS.md";
-  return {
-    printed: `Codex rule (manual): add this to ${destination}:\n- ${s.payload.text}`,
-  };
+  const text = redact(s.payload.text).replace(/[\r\n\t]+/g, " ").trim().slice(0, 500);
+  return { line: `- ${text} ${entryTag(s.id)}` };
 }

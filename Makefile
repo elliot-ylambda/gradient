@@ -1,7 +1,7 @@
-CLI := cli
-PKG := gradient.md
+CLI  := cli
+REPO := elliot-ylambda/gradient
 
-.PHONY: test build publish-dry publish release-check
+.PHONY: test build artifacts publish-dry publish release-check
 
 test:
 	cd $(CLI) && npm test
@@ -9,42 +9,50 @@ test:
 build:
 	cd $(CLI) && npm run build
 
-# Preview exactly what `make publish` would ship (tarball contents, version).
-publish-dry:
-	cd $(CLI) && npm publish --dry-run
+# Rebuild every committed artifact: the plugin bundle and the three copy-install
+# skill directories. gradient ships as files in this repository, so these are
+# the release — a stale bundle here is a stale release.
+artifacts:
+	cd $(CLI) && npm run build:plugin
 
-# Verify the already-published version is aligned across npm, GitHub Releases,
-# and the deployed marketing site. Run after completing every release.
-release-check:
-	node scripts/check-release-state.mjs
+# Show what a release would ship, and whether the committed artifacts are
+# current. Rebuilds, then reports any file the build changed.
+publish-dry: artifacts
+	@git status --porcelain plugin skills | sed 's/^/  stale: /' || true
+	@[ -z "$$(git status --porcelain plugin skills)" ] && echo "committed artifacts are current" || \
+		{ echo "commit the rebuilt artifacts before releasing"; exit 1; }
+	@v=$$(node -p "require('./$(CLI)/package.json').version"); \
+	echo "would release v$$v: plugin/ + skills/gradient-* (tag v$$v, GitHub release)"
 
-# Release cli/ as gradient.md: publish to npm, push the v<version> tag, and
-# create the GitHub release with the exact registry tarball attached.
-# prepublishOnly runs test + build + smoke:bin, so a red suite aborts.
-# Guarded: refuses when npm or gh is unauthenticated, the tree is dirty, or
-# HEAD is not origin/main's tip (a stale checkout once shipped the wrong bits).
+# Release: tag, and publish a GitHub release carrying the skill directories as
+# one tarball so a Codex user can install without cloning. There is no package
+# registry in this path — the Claude Code plugin is served from this repository
+# by the marketplace, and the skills are copied from it.
+# Guarded: refuses when gh is unauthenticated, the tree is dirty, HEAD is not
+# origin/main's tip, or the artifacts on disk do not match a fresh build.
 # Convergent: rerunning completes whichever steps a failed run left missing.
-publish:
-	@npm whoami >/dev/null 2>&1 || { echo "not logged in to npm — run: npm login"; exit 1; }
+publish: artifacts
 	@gh auth status >/dev/null 2>&1 || { echo "gh is not authenticated — run: gh auth login"; exit 1; }
-	@[ -z "$$(git status --porcelain)" ] || { echo "working tree not clean — commit or stash first"; exit 1; }
+	@[ -z "$$(git status --porcelain)" ] || { echo "working tree not clean (rebuilt artifacts differ, or uncommitted work) — commit or stash first"; exit 1; }
 	@git fetch -q origin main && \
 	[ "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" ] || { echo "HEAD is not origin/main's tip — merge to main first; releases ship only main"; exit 1; }
 	@set -e; \
 	v=$$(node -p "require('./$(CLI)/package.json').version"); \
-	live=$$(npm view $(PKG) version 2>/dev/null || echo none); \
-	if [ "$$v" = "$$live" ] && git ls-remote --exit-code origin "refs/tags/v$$v" >/dev/null 2>&1 && gh release view "v$$v" >/dev/null 2>&1; then \
-		echo "$(PKG)@$$v is already fully released — bump the version first"; exit 1; \
+	if git ls-remote --exit-code origin "refs/tags/v$$v" >/dev/null 2>&1 && gh release view "v$$v" >/dev/null 2>&1; then \
+		echo "v$$v is already fully released — bump the version first"; exit 1; \
 	fi; \
-	if [ "$$v" != "$$live" ]; then (cd $(CLI) && npm publish); fi; \
 	git rev-parse -q --verify "refs/tags/v$$v" >/dev/null || git tag "v$$v"; \
 	git push origin "v$$v"; \
 	if ! gh release view "v$$v" >/dev/null 2>&1; then \
 		tmp=$$(mktemp -d); \
-		for i in 1 2 3 4 5; do (cd "$$tmp" && npm pack "$(PKG)@$$v" --silent) >/dev/null 2>&1 && break; echo "registry not serving $$v yet — retrying ($$i/5)"; sleep 4; done; \
-		[ -f "$$tmp/$(PKG)-$$v.tgz" ] || { echo "could not fetch the registry tarball for $$v"; exit 1; }; \
-		gh release create "v$$v" --title "gradient $$v" --generate-notes "$$tmp/$(PKG)-$$v.tgz"; \
+		tar -czf "$$tmp/gradient-skills.tar.gz" -C skills gradient-optimize gradient-report gradient-features; \
+		gh release create "v$$v" --title "gradient $$v" --generate-notes "$$tmp/gradient-skills.tar.gz"; \
 		rm -rf "$$tmp"; \
 	fi; \
-	echo "$(PKG)@$$v released: npm + v$$v tag + GitHub release"; \
+	echo "v$$v released: tag + GitHub release with the skill tarball"; \
 	echo "next: update gradient-web, then verify with: make release-check"
+
+# Verify the released version is aligned across GitHub Releases and the
+# deployed marketing site. Run after completing every release.
+release-check:
+	node scripts/check-release-state.mjs

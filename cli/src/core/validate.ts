@@ -1,8 +1,8 @@
 import type { Suggestion } from "./types.js";
-import { AUTHORIZATION_GUARD, clarifiedWorkflowBody } from "./detect.js";
+import { AUTHORIZATION_GUARD } from "./propose.js";
 import { redact, sanitizeName, stripUnsafeControls } from "./security.js";
 
-export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "scan", "session-start", "recap", "notify"]);
+export const KNOWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["checkpoint", "session-start", "session-end", "recap", "notify"]);
 const TYPES = new Set(["command", "loop", "hook", "rule", "project-playbook"]);
 const CONFIDENCES = new Set(["high", "inferred", "flagged"]);
 const HOOK_EVENTS = new Set(["PreCompact", "SessionStart", "Notification", "PostToolUse"]);
@@ -23,8 +23,11 @@ function validHookTuple(payload: Record<string, unknown>): boolean {
   }
   if (payload.event === "SessionStart") {
     if (payload.subcommand === "session-start") return payload.matcher === undefined;
-    return (payload.subcommand === "scan" || payload.subcommand === "recap") &&
+    return payload.subcommand === "recap" &&
       (payload.matcher === undefined || payload.matcher === "resume|compact");
+  }
+  if (payload.event === "SessionEnd") {
+    return payload.subcommand === "session-end" && payload.matcher === undefined;
   }
   if (payload.event === "Notification") {
     return payload.subcommand === "notify" && payload.matcher === NOTIFICATION_MATCHER;
@@ -129,41 +132,6 @@ export function validateSuggestion(x: unknown): asserts x is Suggestion {
     }
     if ((payload.text as string).includes("<!--") || (payload.text as string).includes("-->")) {
       throw new Error("project-playbook text must not contain comment markers");
-    }
-  }
-
-  if (s.clarify !== undefined) {
-    if (payload.type !== "command") throw new Error("suggestion.clarify is supported only for commands");
-    const clarify = s.clarify as Record<string, unknown> | null;
-    if (!clarify || typeof clarify !== "object" || !validOneLine(clarify.question, 300)) {
-      throw new Error("suggestion.clarify needs a safe bounded one-line question");
-    }
-    if (!Array.isArray(clarify.options) || clarify.options.length < 2 || clarify.options.length > 3) {
-      throw new Error("suggestion.clarify needs 2-3 options");
-    }
-    const labels: string[] = [];
-    for (const option of clarify.options) {
-      const fields = option as Record<string, unknown> | null;
-      if (!fields || typeof fields !== "object" || !validOneLine(fields.label, 100) ||
-        !validText(fields.body) || fields.body !== clarifiedWorkflowBody(fields.label)) {
-        throw new Error("suggestion.clarify options must use safe labels and locally reconstructed bodies");
-      }
-      labels.push(fields.label);
-    }
-    if (new Set(labels).size !== labels.length) throw new Error("suggestion.clarify option labels must be unique");
-    if (clarify.chosen !== undefined) {
-      if (typeof clarify.chosen !== "string" || !labels.includes(clarify.chosen)) {
-        throw new Error("suggestion.clarify chosen must match an option");
-      }
-      if (s.confidence !== "high") throw new Error("resolved suggestion confidence must be high");
-      if (payload.body !== clarifiedWorkflowBody(clarify.chosen)) {
-        throw new Error("resolved clarification payload must use its locally reconstructed body");
-      }
-    } else if (s.confidence !== "flagged") {
-      throw new Error("unresolved clarification requires flagged confidence");
-    }
-    if (!(payload.body as string).includes(AUTHORIZATION_GUARD)) {
-      throw new Error("clarified command is missing its authorization guard");
     }
   }
 

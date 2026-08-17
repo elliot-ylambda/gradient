@@ -5,11 +5,10 @@ import { projectCacheDir } from "../config.js";
 import type { ArtifactType, Assistant, ManifestEntry } from "./types.js";
 import { sanitizeName } from "./security.js";
 import { safeReadFile, safeWriteFile } from "./safeFs.js";
-import { manifestTarget } from "./manifest.js";
+import { ARTIFACT_TYPES, manifestTarget } from "./manifest.js";
 
 const APPROVAL_LEDGER_MAX_BYTES = 1_000_000;
 const APPROVAL_LEDGER_MAX_ENTRIES = 1_000;
-const ARTIFACT_TYPES = new Set<ArtifactType>(["command", "loop", "hook", "skill", "rule", "playbook-entry"]);
 const ASSISTANTS = new Set<Assistant>(["claude-code", "codex"]);
 
 /** Increment this whenever the generator's authority or content-safety

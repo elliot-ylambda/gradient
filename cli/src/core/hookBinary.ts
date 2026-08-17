@@ -1,47 +1,115 @@
 import { accessSync, constants } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { delimiter, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { VERSION } from "../version.js";
+import { BUNDLED } from "../version.js";
 
-/** What a hook command looks like when `gradient` is a real command on PATH. */
-export const DEFAULT_HOOK_BINARY = "gradient";
-
-/** npx materializes a package under a cache directory it is free to evict. A
- *  hook pinned there keeps working until the cache is cleaned and then fails
- *  with status 127 — silently, because hooks have nowhere to report. */
-const EPHEMERAL_INSTALL = /[\\/]_npx[\\/]/;
-
-export interface HookBinary {
-  /** Command prefix; callers append the subcommand. */
-  command: string;
-  /** True when the command should keep resolving after this process exits. */
-  durable: boolean;
-  /** Set whenever the command is anything other than a bare `gradient`. */
-  warning?: string;
-}
+/**
+ * The command a pre-0.8 install wrote, back when gradient was an npm package and
+ * `npm i -g gradient.md` put a `gradient` on PATH. Nothing writes it any more —
+ * gradient ships as a plugin or a copied skill directory, neither of which
+ * touches PATH — but `off` still has to recognise it to remove those hooks from
+ * the machines that already have them.
+ */
+const LEGACY_PATH_BINARY = "gradient";
 
 /** Quote for a POSIX shell only when the value actually needs it. */
 export function shellQuote(value: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** gradient's own executable entry, located from this module rather than from
- *  process.argv — argv[1] is the *host* process (a test runner, or any program
- *  embedding this package), which must never be baked into a user's hook. */
+/**
+ * gradient's own runnable entry point.
+ *
+ * Located from this module rather than from process.argv — argv[1] is the *host*
+ * process (a test runner, or any program embedding this package), which must
+ * never be baked into a user's hook.
+ *
+ * The two builds keep the entry in different places, and that difference is the
+ * whole reason this used to give up and shell out to npx. In the tsc build this
+ * module is one file inside dist/ and the entry is dist/bin.js. In the bundle —
+ * the plugin's bin/gradient.mjs, and the copy each installed skill carries —
+ * every module is inlined, so this module IS the entry. Resolving only
+ * `../bin.js` looked for plugin/bin.js, found nothing, and concluded gradient
+ * was unreachable while running from the very file it was looking for.
+ */
 function ownBinPath(): string | null {
-  try {
-    const candidate = join(dirname(fileURLToPath(import.meta.url)), "..", "bin.js");
-    accessSync(candidate, constants.R_OK);
-    return candidate;
-  } catch {
-    return null;
+  const here = fileURLToPath(import.meta.url);
+  // Bundled is the only shape gradient ships in — the plugin and every copied
+  // skill directory carry the bundle — so the two candidates below are reached
+  // only from a source checkout: dist/bin.js after a build, src/bin.ts when
+  // vitest runs the sources directly. Both are genuinely where the program
+  // starts for that tree; neither can end up in a released artifact.
+  const candidates = BUNDLED
+    ? [here]
+    : [join(dirname(here), "..", "bin.js"), join(dirname(here), "..", "bin.ts")];
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, constants.R_OK);
+      return candidate;
+    } catch {
+      // Not this one.
+    }
   }
+  return null;
 }
 
-function onPath(name: string, env: NodeJS.ProcessEnv): boolean {
-  const raw = env.PATH ?? env.Path;
-  if (!raw) return false;
-  for (const dir of raw.split(delimiter)) {
+/**
+ * The command prefix an installed hook should run.
+ *
+ * There is exactly one honest answer now: this node, running this install's own
+ * entry point. No PATH lookup, because nothing puts `gradient` on PATH. No npx
+ * fallback, because there is no package to fetch — and because that fallback was
+ * silently broken: it pinned hooks to `npx -y gradient.md@<version>`, a registry
+ * coordinate that need not exist for the build doing the pinning, and hooks have
+ * nowhere to report a failure.
+ *
+ * The resolved path is stable across upgrades. Claude Code re-clones a plugin in
+ * place at `~/.claude/plugins/cache/<marketplace>/<plugin>`, and a copied skill
+ * directory is the user's own. It stops resolving only when gradient is removed,
+ * which is when a gradient hook should stop resolving.
+ */
+export function gradientCommand(opts: { execPath?: string; scriptPath?: string | null } = {}): string {
+  const scriptPath = opts.scriptPath === undefined ? ownBinPath() : opts.scriptPath;
+  if (!scriptPath) {
+    throw new Error(
+      "cannot locate gradient's own entry point, so any hook written now would never run — reinstall the gradient plugin or skill",
+    );
+  }
+  return `${shellQuote(opts.execPath ?? process.execPath)} ${shellQuote(scriptPath)}`;
+}
+
+/** The command an installed hook should run for one gradient subcommand. Every
+ *  hook installer must go through this rather than composing `gradient <sub>`,
+ *  which resolves nowhere. */
+export function gradientHookCommand(
+  subcommand: string,
+  opts: Parameters<typeof gradientCommand>[0] = {},
+): string {
+  return `${gradientCommand(opts)} ${subcommand}`;
+}
+
+/**
+ * Whether an installed hook command is gradient's own invocation of a subcommand.
+ *
+ * Removal cannot compare against a freshly resolved string: a hook installed
+ * from one location reads `<node> <that script> recall`, while `off` run from
+ * another would resolve somewhere else and match nothing, silently orphaning the
+ * hook. Match on the subcommand instead, still requiring the command to name
+ * gradient so a user's unrelated hook is never removed.
+ */
+export function isGradientHookFor(command: string, subcommand: string): boolean {
+  const trimmed = command.trim();
+  const targetsSubcommand = trimmed === `${LEGACY_PATH_BINARY} ${subcommand}` ||
+    trimmed.endsWith(` ${subcommand}`);
+  return targetsSubcommand && /gradient/i.test(trimmed);
+}
+
+let displayCache: string | undefined;
+
+/** Whether a bare command name resolves to something executable. */
+function onPath(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  for (const dir of (env.PATH ?? env.Path ?? "").split(delimiter)) {
     if (!dir) continue;
     try {
       accessSync(join(dir, name), constants.X_OK);
@@ -54,65 +122,46 @@ function onPath(name: string, env: NodeJS.ProcessEnv): boolean {
 }
 
 /**
- * Decide how an installed hook should invoke gradient.
+ * How to tell the reader to run gradient again.
  *
- * Writing a bare `gradient` is correct only when `gradient` is on PATH. Anyone
- * who reached this CLI through `npx gradient.md` has no such command, so a bare
- * name produces a hook that exits 127 on every fire — and Claude Code surfaces
- * nothing, so the failure is invisible. Resolve it at install time instead.
+ * The same command a hook gets, shortened for a human without ceasing to be the
+ * command: nothing puts `gradient` on PATH any more, so a printed
+ * `gradient optimize --apply <id>` is one the reader cannot run.
+ *
+ * Two shortenings, both of which a shell undoes exactly:
+ *
+ * - `node`, when a `node` on PATH exists to undo it. A hook cannot assume that
+ *   — it runs with a minimal environment and no shell profile — but a person
+ *   reading a report has the shell that just printed it.
+ * - `~` for the home prefix. Shorter, and it keeps gradient from printing the
+ *   user's account name into a report they may well paste somewhere. Tilde
+ *   expansion is not word-split, so this survives a home directory with a space
+ *   in it — but the rest of the path is, so anything needing quotes stays
+ *   absolute rather than becoming a command that silently splits in two.
+ *
+ * Terminal output only. Anything gradient writes *into* a user's repository — a
+ * rule's removal comment, the playbook header — names the verb with no path at
+ * all, because those files are shared and a home directory is not portable.
  */
-export function resolveHookBinary(opts: {
-  env?: NodeJS.ProcessEnv;
-  execPath?: string;
-  scriptPath?: string;
-  version?: string;
-} = {}): HookBinary {
-  const env = opts.env ?? process.env;
-  if (onPath(DEFAULT_HOOK_BINARY, env)) return { command: DEFAULT_HOOK_BINARY, durable: true };
+export function displayCommand(opts: { execPath?: string; scriptPath?: string | null; home?: string; env?: NodeJS.ProcessEnv } = {}): string {
+  if (displayCache !== undefined && Object.keys(opts).length === 0) return displayCache;
 
-  const execPath = opts.execPath ?? process.execPath;
+  const absolute = gradientCommand(opts);
   const scriptPath = opts.scriptPath ?? ownBinPath();
-  if (scriptPath && !EPHEMERAL_INSTALL.test(scriptPath)) {
-    return {
-      command: `${shellQuote(execPath)} ${shellQuote(scriptPath)}`,
-      durable: true,
-      warning: `gradient is not on PATH, so the hook was pinned to this install: ${scriptPath}. ` +
-        `Install globally (npm i -g gradient.md) and re-apply for a portable hook.`,
-    };
+  const home = opts.home ?? homedir();
+  const execPath = opts.execPath ?? process.execPath;
+
+  let command = absolute;
+  if (scriptPath?.startsWith(home + sep)) {
+    // Test the part after the tilde, not the whole string: `~` is not a
+    // shell-safe character, so quoting the tilde-prefixed path always differs
+    // from it — and quoting the tilde is exactly what stops it expanding.
+    const rest = scriptPath.slice(home.length);
+    if (shellQuote(rest) === rest) {
+      const node = onPath("node", opts.env ?? process.env) ? "node" : shellQuote(execPath);
+      command = `${node} ~${rest}`;
+    }
   }
-
-  const spec = `gradient.md@${opts.version ?? VERSION}`;
-  return {
-    command: `npx -y ${spec}`,
-    durable: false,
-    warning: `gradient is not on PATH and this process runs from a temporary npx cache, ` +
-      `so the hook falls back to "npx -y ${spec}" — slower per fire, and it needs the npm cache. ` +
-      `Install globally (npm i -g gradient.md) and re-apply for a direct command.`,
-  };
-}
-
-/** The command an installed hook should run for one gradient subcommand. Every
- *  hook installer must go through this rather than composing `gradient <sub>`,
- *  which only resolves for globally installed users. */
-export function gradientHookCommand(
-  subcommand: string,
-  opts: Parameters<typeof resolveHookBinary>[0] = {},
-): string {
-  return `${resolveHookBinary(opts).command} ${subcommand}`;
-}
-
-/**
- * Whether an installed hook command is gradient's own invocation of a subcommand.
- *
- * Removal cannot compare against a freshly resolved string: a hook installed
- * before a global install reads `<node> <script> recall`, while `off` afterwards
- * would resolve to `gradient recall` and match nothing, silently orphaning the
- * hook. Match on the subcommand instead, still requiring the command to name
- * gradient so a user's unrelated hook is never removed.
- */
-export function isGradientHookFor(command: string, subcommand: string): boolean {
-  const trimmed = command.trim();
-  const targetsSubcommand = trimmed === `${DEFAULT_HOOK_BINARY} ${subcommand}` ||
-    trimmed.endsWith(` ${subcommand}`);
-  return targetsSubcommand && /gradient/i.test(trimmed);
+  if (Object.keys(opts).length === 0) displayCache = command;
+  return command;
 }

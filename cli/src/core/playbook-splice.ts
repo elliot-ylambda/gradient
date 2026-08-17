@@ -1,7 +1,25 @@
-/** Line-surgical edits for the committed <repo>/gradient.md. Appends never
- * rewrite existing lines; removal deletes exactly one tagged line. */
+/**
+ * Line-surgical edits to a markdown file gradient shares with a human author.
+ *
+ * Appends never rewrite an existing line, removal deletes exactly the one line
+ * it tagged, and everything outside the target section is left byte-identical.
+ * Built for the committed `<repo>/gradient.md`; AGENTS.md reuses it whole,
+ * because Codex has no `rules/` directory and a rule for Codex therefore has to
+ * live inside a file the user also writes in. Tagged lines are what make that
+ * safe: each rule is individually removable without touching its neighbours.
+ */
 
 export type PlaybookSection = "rules" | "workflows";
+
+/** The heading gradient owns inside a file it does not own. */
+export const SHARED_FILE_HEADING = "## gradient";
+
+/** Skeleton for an AGENTS.md gradient has to create. Deliberately minimal: the
+ *  file belongs to the user, and gradient is only claiming one section of it. */
+export const AGENTS_MD_TEMPLATE = `# AGENTS.md
+
+${SHARED_FILE_HEADING}
+`;
 
 const SECTION_HEADINGS: Record<PlaybookSection, string> = {
   rules: "## Rules",
@@ -25,9 +43,23 @@ export function spliceLine(
   line: string,
   suggestionId: string,
 ): string {
-  const base = existing ?? PROJECT_PLAYBOOK_TEMPLATE;
+  return spliceUnderHeading(existing, SECTION_HEADINGS[section], line, suggestionId, PROJECT_PLAYBOOK_TEMPLATE);
+}
+
+/**
+ * Insert `line` at the end of `heading`'s section, creating the section (and
+ * the file's skeleton) if absent. Idempotent on the tag, so re-applying a
+ * finding is a no-op rather than a duplicate.
+ */
+export function spliceUnderHeading(
+  existing: string | null,
+  heading: string,
+  line: string,
+  suggestionId: string,
+  template = "",
+): string {
+  const base = existing ?? template;
   if (base.includes(entryTag(suggestionId))) return base; // idempotent re-apply
-  const heading = SECTION_HEADINGS[section];
   const lines = base.split("\n");
   const headingIndex = lines.findIndex(candidate => candidate.trim() === heading);
   if (headingIndex === -1) {
@@ -46,6 +78,28 @@ export function spliceLine(
   }
   if (last === headingIndex) lines.splice(headingIndex + 1, 0, "", line);
   else lines.splice(last + 1, 0, line);
+  return lines.join("\n");
+}
+
+/**
+ * Drop a heading gradient added once its last entry is gone.
+ *
+ * Without this, removing every gradient rule from a user's AGENTS.md leaves an
+ * empty `## gradient` heading behind forever — litter in a file gradient was
+ * only ever a guest in.
+ */
+export function dropEmptyHeading(content: string, heading: string): string {
+  const lines = content.split("\n");
+  const index = lines.findIndex(candidate => candidate.trim() === heading);
+  if (index === -1) return content;
+  let end = lines.length;
+  for (let i = index + 1; i < lines.length; i++) {
+    if (/^#{1,6}\s/.test(lines[i])) { end = i; break; }
+  }
+  if (lines.slice(index + 1, end).some(candidate => candidate.trim() !== "")) return content;
+  lines.splice(index, end - index);
+  // Collapse the blank-line pair the removal can leave behind.
+  while (lines.length > 1 && lines[lines.length - 1] === "" && lines[lines.length - 2] === "") lines.pop();
   return lines.join("\n");
 }
 

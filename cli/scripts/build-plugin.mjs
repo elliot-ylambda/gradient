@@ -1,11 +1,18 @@
 import { build } from "esbuild";
-import { readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SKILLS, codexName, forCodex } from "./skill-render.mjs";
 
 const cliDir = join(dirname(fileURLToPath(import.meta.url)), "..");
-const pluginDir = join(cliDir, "..", "plugin");
+const repoDir = join(cliDir, "..");
+const pluginDir = join(repoDir, "plugin");
 const outfile = join(pluginDir, "bin", "gradient.mjs");
+
+// gradient ships in exactly two shapes, and both carry this bundle: the Claude
+// Code plugin, and the skill directories a Codex user copies into
+// ~/.agents/skills. `dist/` is multi-file tsc output that also needs
+// node_modules; one self-contained file can simply be copied.
 
 const pkg = JSON.parse(await readFile(join(cliDir, "package.json"), "utf8"));
 
@@ -59,3 +66,13 @@ const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 manifest.version = pkg.version;
 await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
 console.log(`plugin bundle → ${outfile} (v${pkg.version})`);
+
+// The Codex copies are derived from the plugin's SKILL.md files; see
+// skill-render.mjs for why, and skills.test.ts for the guard that they match.
+for (const name of SKILLS) {
+  const dir = join(repoDir, "skills", codexName(name));
+  await mkdir(join(dir, "bin"), { recursive: true });
+  await writeFile(join(dir, "SKILL.md"), forCodex(await readFile(join(pluginDir, "skills", name, "SKILL.md"), "utf8"), name));
+  await copyFile(outfile, join(dir, "bin", "gradient.mjs"));
+  console.log(`codex skill   → ${dir}`);
+}

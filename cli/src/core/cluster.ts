@@ -21,6 +21,24 @@ export function similarity(a: string, b: string): number {
   return union === 0 ? 0 : inter / union;
 }
 
+/**
+ * How much of `needle` appears in `haystack`, as a fraction of the needle.
+ *
+ * Jaccard is the wrong question when one string is expected to sit inside the
+ * other: a typed prompt matching a longer written instruction scores low on
+ * similarity purely because the instruction says more. Containment asks the
+ * question that actually matters — is this already written down?
+ */
+export function containment(needle: string, haystack: string): number {
+  if (!needle) return 0;
+  if (needle === haystack) return 1;
+  const target = trigrams(needle);
+  const source = trigrams(haystack);
+  let shared = 0;
+  for (const gram of target) if (source.has(gram)) shared++;
+  return target.size === 0 ? 0 : shared / target.size;
+}
+
 interface Bucket {
   signature: string;
   examples: string[];

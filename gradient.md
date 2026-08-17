@@ -17,9 +17,9 @@ descriptive — the parser strips them.
 
 ## Rules
 
-- Never push, deploy, publish, or open a PR from autopilot. `npm publish` is
-  especially off-limits: the `gradient` name on npm belongs to an unrelated
-  package, so publishing would be wrong in a way that is hard to undo.
+- Never push, deploy, publish, or open a PR from autopilot. `make publish` is
+  especially off-limits: it pushes a tag and creates a public GitHub release,
+  neither of which is easy to undo.
 - Never commit directly to `main`. Work on a branch.
 - Never green-light a destructive git operation — `reset --hard`, `branch -D`,
   force-push, remote branch deletion. Stand down and let me run it.

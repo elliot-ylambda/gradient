@@ -145,29 +145,27 @@ describe("scan", () => {
     }
     await writeFile(transcript, `${lines.join("\n")}\n`);
 
-    let candidates: Array<{ kind?: string; signature: string }> = [];
-    await scan(
+    const suggestions = await scan(
       { scope: "project", projectPath: projectDir, home },
       {
         config: {},
         collectFn: async () => [transcript],
-        backend: {
-          name: "recording",
-          available: async () => true,
-          complete: async ({ prompt }: { prompt: string }) => {
-            candidates = JSON.parse(prompt);
-            return JSON.stringify({ suggestions: [] });
-          },
-        },
         gitLogFn: async () => "",
         attentionFn: async () => null,
       },
     );
 
-    expect(candidates.map(candidate => [candidate.kind, candidate.signature])).toEqual([
-      ["ritual", "npm run lint"],
-      ["toolfail", "npm test"],
-    ]);
+    // The ritual is a safe one-line command, so it earns a PostToolUse hook;
+    // the failure loop earns the preventive rule rather than a skill nobody
+    // would think to invoke mid-failure.
+    const ritual = suggestions.find(s => s.payload.type === "hook" && s.payload.event === "PostToolUse");
+    expect(ritual?.payload).toMatchObject({ command: "npm run lint", matcher: "Edit|Write|NotebookEdit" });
+    const failure = suggestions.find(s => s.payload.type === "rule");
+    expect(failure?.payload).toMatchObject({ type: "rule", target: "project" });
+    if (failure?.payload.type === "rule") expect(failure.payload.text).toContain("npm test");
+    // Both are counted from tool invocations, so both are measured evidence.
+    expect(ritual?.evidence.measured).toBe(true);
+    expect(failure?.evidence.measured).toBe(true);
   });
 
   it("suggests a matched Notification hook when attention gaps cross the session floor", async () => {
@@ -311,7 +309,7 @@ describe("scan", () => {
     }
   });
 
-  it("does not auto-emit a correction rule when the classifier is unavailable", async () => {
+  it("mines a repeated correction into a guarded project rule", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const projectDir = await mkdtemp(join(tmpdir(), "grad-project-"));
     const turns = ["s1", "s2", "s3"].map((sessionId, index) => ({
@@ -320,9 +318,14 @@ describe("scan", () => {
     }));
     const suggestions = await scan(
       { scope: "project", projectPath: projectDir, home },
-      { backend: null, collectFn: async () => ["f"], parseFn: async () => ({ turns, events: [] }) },
+      { collectFn: async () => ["f"], parseFn: async () => ({ turns, events: [] }) },
     );
-    expect(suggestions).toEqual([]);
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0].payload).toMatchObject({ type: "rule", target: "project" });
+    if (suggestions[0].payload.type === "rule") {
+      expect(suggestions[0].payload.text).toContain("don't add comments");
+      expect(suggestions[0].payload.text).toContain("not authorization");
+    }
   });
 
   // Regression: 12 /compact events across 4 sessions produce the PreCompact hook
@@ -383,7 +386,7 @@ describe("scan", () => {
     expect(hooks).toHaveLength(1);
   });
 
-  it("sends up to DEFAULT_DETECT_WINDOW candidates to the llm", async () => {
+  it("proposes from at most DEFAULT_DETECT_WINDOW candidates", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const logs: string[] = [];
     // 30 distinct prompts, each repeated 3× → 30 candidates over minCount
@@ -416,18 +419,9 @@ describe("scan", () => {
 
   it("applies --since to individual turns, not only transcript file mtime", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-since-"));
-    const seen: string[] = [];
-    const backend = {
-      name: "fake", available: async () => true,
-      complete: async (request: { prompt: string }) => {
-        seen.push(request.prompt);
-        return JSON.stringify({ suggestions: [] });
-      },
-    };
-    await scan(
+    const out = await scan(
       { scope: "all", projectPath: dir, sinceDays: 7, now: Date.parse("2026-07-09T00:00:00Z") },
       {
-        backend,
         collectFn: async () => ["recently-touched.jsonl"],
         parseFn: async () => ({
           turns: [
@@ -438,26 +432,15 @@ describe("scan", () => {
         }),
       },
     );
-    expect(seen.join("\n")).not.toContain("OLD-CONFIDENTIAL-PROMPT");
+    expect(JSON.stringify(out)).not.toContain("OLD-CONFIDENTIAL-PROMPT");
   });
 
-  it("runs the pipeline with a mock backend and caches suggestions", async () => {
+  it("runs the pipeline and caches suggestions", async () => {
     const projectDir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    const fakeBackend = {
-      name: "fake", available: async () => true,
-      complete: async ({ prompt }: { prompt: string }) => {
-        const [candidate] = JSON.parse(prompt);
-        return JSON.stringify({ suggestions: [{
-          sourceIds: [candidate.id],
-          name: "ship", confidence: "high",
-          payload: { type: "command", commandName: "ship" },
-        }] });
-      },
-    };
     // A repeated error paste, because its artifact is an advisory diagnosis the
     // user never typed. A plain repeated instruction cannot reach the cache any
-    // more: detect rebuilds a command body from the prompt itself, so the
+    // more: propose rebuilds a command body from the prompt itself, so the
     // artifact would be the prompt with a preamble and is dropped upstream.
     const paste = "pnpm test\nError: Cannot find module '@scope/pkg'\n" + "  at Module._resolveFilename\n".repeat(20);
     const at = (ts: string, sessionId: string) =>
@@ -465,7 +448,6 @@ describe("scan", () => {
     const out = await scan(
       { scope: "project", projectPath: projectDir, home },
       {
-        backend: fakeBackend,
         collectFn: async () => ["fake.jsonl"],
         parseFn: async () => ({
           // Distinct days: a habit by definition spans more than one sitting,
@@ -479,7 +461,8 @@ describe("scan", () => {
         }),
       },
     );
-    expect(out[0].name).toBe("ship");
+    expect(out[0].payload.type).toBe("command");
+    expect(out[0].payload).toMatchObject({ triggers: [expect.stringContaining("help with")] });
     const cached = JSON.parse(await readFile(suggestionsPath(projectDir, home), "utf8"));
     expect(cached.length).toBe(1);
   });
@@ -584,20 +567,10 @@ describe("scan", () => {
       sessionId,
       text: errorBody,
     }));
-    let seenPrompt = "";
     const logs: string[] = [];
-    const backend = {
-      name: "fake",
-      available: async () => true,
-      complete: async ({ prompt }: { prompt: string }) => {
-        seenPrompt = prompt;
-        return JSON.stringify({ suggestions: [] });
-      },
-    };
-    await scan(
+    const out = await scan(
       { scope: "project", projectPath: projectDir, home },
       {
-        backend,
         collectFn: async () => ["f"],
         parseFn: async () => ({ turns, events: [] }),
         parseDialogueFn: async () => [],
@@ -605,32 +578,15 @@ describe("scan", () => {
       },
     );
     expect(logs.join("\n")).toMatch(/1 paste pattern/);
-    expect(JSON.parse(seenPrompt)).toHaveLength(1);
-    expect(seenPrompt).not.toContain("SENSITIVE_BODY");
+    expect(out).toHaveLength(1);
+    // The paste's key becomes the artifact; its 40-line body never does.
+    expect(JSON.stringify(out)).not.toContain("SENSITIVE_BODY");
   });
 
   it("feeds repeated structured answers into rule detection", async () => {
     const projectDir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
     const logs: string[] = [];
-    let seenKind = "";
-    const backend = {
-      name: "fake",
-      available: async () => true,
-      complete: async ({ prompt }: { prompt: string }) => {
-        const [candidate] = JSON.parse(prompt);
-        seenKind = candidate.kind;
-        return JSON.stringify({ suggestions: [{
-          sourceIds: [candidate.id],
-          name: "prefer-pnpm",
-          confidence: "inferred",
-          payload: {
-            type: "rule",
-            ruleName: "prefer-pnpm",
-          },
-        }] });
-      },
-    };
     const dialogue = ["s1", "s2", "s3"].flatMap(sessionId => [
       { role: "assistant" as const, text: "Which package manager should I use?", sessionId, ts: "t1" },
       { role: "user" as const, text: "pnpm", sessionId, ts: "t2" },
@@ -638,7 +594,6 @@ describe("scan", () => {
     const suggestions = await scan(
       { scope: "project", projectPath: projectDir, home },
       {
-        backend,
         collectFn: async () => ["f"],
         parseFn: async () => ({ turns: [], events: [] }),
         parseDialogueFn: async () => dialogue,
@@ -646,8 +601,10 @@ describe("scan", () => {
       },
     );
     expect(logs.join("\n")).toMatch(/1 repeated-answer pattern/);
-    expect(seenKind).toBe("answer");
-    expect(suggestions[0].payload).toMatchObject({ type: "rule", ruleName: "prefer-pnpm" });
+    expect(suggestions[0].payload).toMatchObject({ type: "rule", ruleName: "pnpm" });
+    if (suggestions[0].payload.type === "rule") {
+      expect(suggestions[0].payload.text).toContain("pnpm");
+    }
     if (suggestions[0].payload.type === "rule") {
       expect(suggestions[0].payload.text).toContain("not authorization");
     }
@@ -689,27 +646,17 @@ describe("scan", () => {
       sessionId: `s${i}`,
       text: `review-build\n${"error: generated review payload\n".repeat(20)}`,
     }));
-    let seenPrompt = "unset";
     const logs: string[] = [];
-    const backend = {
-      name: "fake",
-      available: async () => true,
-      complete: async ({ prompt }: { prompt: string }) => {
-        seenPrompt = prompt;
-        return JSON.stringify({ suggestions: [] });
-      },
-    };
-    await scan(
+    const out = await scan(
       { scope: "project", projectPath: projectDir, home },
       {
-        backend,
         collectFn: async () => ["f"],
         parseFn: async () => ({ turns, events: [] }),
         parseDialogueFn: async () => [],
         log: message => logs.push(message),
       },
     );
-    expect(JSON.parse(seenPrompt)).toEqual([]);
+    expect(out).toEqual([]);
     expect(logs.join("\n")).toContain("excluded 1 machine-template pattern");
   });
 

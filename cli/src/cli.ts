@@ -1,253 +1,183 @@
 import { parseArgs } from "node:util";
-import { basename, relative } from "node:path";
-import { scan } from "./commands/scan.js";
-import { review, readlineClarifier, readlinePlaybookPrompter, readlinePrompter, reviewJson } from "./commands/review.js";
-import * as reviewCommands from "./commands/review.js";
-import { applyByIds } from "./commands/apply.js";
+import { displayCommand } from "./core/hookBinary.js";
 import { remove } from "./commands/remove.js";
-import { init } from "./commands/init.js";
 import { checkpoint } from "./commands/checkpoint.js";
 import { respond, type StopHookInput } from "./commands/respond.js";
-import { autopilotStatus } from "./commands/autopilot.js";
 import { FEATURES, isFeatureName, setFeature } from "./commands/features.js";
-import { retireRecall } from "./commands/retire.js";
-import { banner, c, confidenceChip } from "./core/ui.js";
-import { isMeasured } from "./core/classify.js";
-import { spawnDetached } from "./core/spawn.js";
-import { resolveScanScope } from "./core/scope.js";
-import { isNudge } from "./core/playbook.js";
-import { loadConfig, resolveCheapModel, resolveTargets } from "./config.js";
-import { VERSION } from "./version.js";
-import { insights, writeInsightsHtml, type InsightsReport } from "./commands/insights.js";
-import { buildReport } from "./commands/report.js";
-import { renderReport } from "./commands/report-render.js";
+import { optimize, optimizeJson, undo } from "./commands/optimize.js";
+import { banner, c, severityChip } from "./core/ui.js";
 import { boardDigest, boardRefresh } from "./commands/board.js";
 import { recap } from "./commands/recap.js";
-import { bundleCommand } from "./commands/bundle.js";
 import { notify } from "./commands/notify.js";
-import type { Assistant, Suggestion } from "./core/types.js";
-import { stripUnsafeControls } from "./core/security.js";
-import { readlineConfirm, type Confirm } from "./core/confirm.js";
+import { buildReport } from "./commands/report.js";
+import { renderReport } from "./commands/report-render.js";
 import { sessionStart } from "./commands/sessionStart.js";
+import { scheduleSnippet, sessionEnd } from "./commands/sessionEnd.js";
+import { VERSION } from "./version.js";
+import { stripUnsafeControls } from "./core/security.js";
+import type { Finding } from "./core/findings.js";
 
 /** Subcommands that exist to be invoked by settings.json, never typed. They stay
  *  dispatchable under their bare names because that is the form already written
  *  into users' settings; `gradient hook <target>` is the form to write from now
- *  on. `recall` is retired and only removes itself. */
+ *  on. */
 const HOOK_TARGETS: ReadonlySet<string> = new Set([
-  "checkpoint", "recap", "notify", "respond", "session-start", "recall",
+  "checkpoint", "recap", "notify", "respond", "session-start", "session-end",
 ]);
 
-/**
- * Retired verbs with no behaviour left to run, which must still not read as
- * typos while the docs and people's fingers name them.
- *
- * Verbs that kept behaviour keep their own `case` above; this is only for the
- * ones where the answer is a sentence. It is also the list `cli.test.ts` drives:
- * the previous alias test enumerated three names by hand, so `explain` — which
- * the surface table promises redirects to `gradient scan`, and which was never
- * wired up — was invisible to it and shipped in 0.7.0 as `unknown command`.
- * A test that repeats the implementation's list cannot catch the
- * implementation's omission.
- *
- * `migrate` is deliberately absent: it is documented as deleted outright, not
- * redirected, so `unknown command` is the honest answer for it.
- */
-export const RETIRED: ReadonlyMap<string, string> = new Map([
-  ["explain", "part of gradient scan — every proposal now arrives with its evidence"],
-]);
+const help = (): string => `gradient — measure how you actually work, and keep your setup current
 
-const HELP = `gradient — measure how you actually work, and automate what recurs
+gradient installs as a Claude Code plugin or a copied skill directory, so there
+is no \`gradient\` on your PATH. Run it as:
+
+  ${displayCommand()} <command>
+
+which is written \`gradient\` below. Normally you do not type it at all — ask
+your assistant to optimize your setup and the skill runs these for you.
 
 Usage:
   gradient                      the report: what it cost you, what is installed,
                                 what other sessions are doing, what to do next
-  gradient scan                 find recurring patterns, then walk the proposals
-    [--user] [--all] [--since 7d] [--limit N] [--max-prompts N] [--no-review] [--json]
-  gradient apply <id|name>...   install specific proposals
+  gradient optimize             find what recurs and what has gone stale, across
+                                Claude Code and Codex, then propose the changes
+    [--target claude-code|codex|both]   which assistants to optimize for
+    [--apply <id>...] [--deny <id>...] [--auto] [--undo <runId>]
+    [--json] [--page]                   findings for an agent, or a local page
+    [--print-schedule]                  a scheduling snippet for this platform
+    [--user] [--all] [--since 7d] [--limit N] [--max-prompts N]
   gradient remove <name>        uninstall a generated artifact
-  gradient on|off <feature>     continuity | autopilot | board | session-scan
-  gradient init [--target claude-code|codex|both]
-                                first-run setup: config plus the bundled skill
+  gradient on|off <feature>     ${FEATURES.join(" | ")}
   gradient help                 show this help
 `;
 
 export function parseCliArgs(argv: string[]): {
   command: string;
   positionals: string[];
-  flags: Record<string, string | boolean>;
+  flags: Record<string, string | boolean | string[]>;
 } {
   const command = argv[0] ?? "";
   const { values, positionals } = parseArgs({
     args: argv.slice(1),
     allowPositionals: true,
     options: {
+      target: { type: "string" },
+      apply: { type: "string", multiple: true },
+      deny: { type: "string", multiple: true },
+      auto: { type: "boolean" },
+      undo: { type: "string" },
+      page: { type: "boolean" },
+      "print-schedule": { type: "boolean" },
+      json: { type: "boolean" },
       user: { type: "boolean" },
       all: { type: "boolean" },
       since: { type: "string" },
       limit: { type: "string" },
       "max-prompts": { type: "string" },
-      "no-skill": { type: "boolean" },
-      "session-scan": { type: "boolean" },
-      "no-review": { type: "boolean" },
-      "no-scan": { type: "boolean" },
-      detach: { type: "boolean" },
-      json: { type: "boolean" },
-      "dry-run": { type: "boolean" },
-      html: { type: "boolean" },
-      verbose: { type: "boolean" },
-      "with-hooks": { type: "boolean" },
-      target: { type: "string" },
     },
   });
-  return { command, positionals, flags: values as Record<string, string | boolean> };
+  return { command, positionals, flags: values as Record<string, string | boolean | string[]> };
 }
 
-function sinceDays(flag: string | boolean | undefined): number | undefined {
+type Flag = string | boolean | string[] | undefined;
+
+function sinceDays(flag: Flag): number | undefined {
   if (typeof flag !== "string") return undefined;
   const m = /^(\d+)d?$/.exec(flag.trim());
   return m ? Number(m[1]) : undefined;
 }
 
-/** Quote one argument for POSIX shells. JSON/double-quote escaping is not shell
- * escaping: command substitutions remain active inside double quotes. */
-export function posixShellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+function numberFlag(flag: Flag): number | undefined {
+  return typeof flag === "string" ? Number(flag) : undefined;
 }
 
-function terminalSafePath(value: string): string | undefined {
-  return /[\u0000-\u001f\u007f-\u009f]/.test(value) ? undefined : value;
+/** `--apply a,b --apply c` and `--apply a --apply b` mean the same thing. */
+function idList(flag: Flag): string[] {
+  const raw = Array.isArray(flag) ? flag : typeof flag === "string" ? [flag] : [];
+  return raw.flatMap(value => value.split(",")).map(value => value.trim()).filter(Boolean);
 }
 
 function terminalSafeLine(value: unknown): string {
   return stripUnsafeControls(String(value)).replace(/[\r\n\t]+/g, " ");
 }
 
-function initTargets(flag: string | boolean | undefined): Assistant[] | undefined {
-  if (flag === undefined) return undefined;
-  if (flag === "claude-code") return ["claude-code"];
-  if (flag === "codex") return ["codex"];
-  if (flag === "both") return ["claude-code", "codex"];
-  throw new Error(`unknown init target: ${String(flag)} (use claude-code|codex|both)`);
-}
-
 type LogFn = (s: string) => void;
 
-async function runReview(
-  projectDir: string,
-  home: string | undefined,
-  log: LogFn,
-  confirm: Confirm,
-): Promise<void> {
-  const config = await loadConfig(home);
-  const playbookPrompter = Object.prototype.hasOwnProperty.call(reviewCommands, "readlinePlaybookPrompter")
-    ? readlinePlaybookPrompter()
-    : undefined;
-  const applied = await review(projectDir, readlinePrompter({
-    targets: resolveTargets(config),
-    cheapModel: resolveCheapModel(config),
-  }), { home, onSkip: log, onExplain: log, clarifier: readlineClarifier(), playbookPrompter });
-  log(`\n${c.ok(`applied ${applied.length} suggestion(s).`)}`);
-  for (const a of applied) {
-    for (const write of a.writes) {
-      log(`${c.ok("wrote")} ${c.muted(terminalSafeLine(write.path))}${write.target === "codex" ? c.dim(" [codex]") : ""}`);
-    }
-    if (a.printed) log(`  ${c.dim("run:")} ${a.printed}`);
-    for (const failure of a.failures) log(c.coral(`  ${failure.target}: ${terminalSafeLine(failure.error)}`));
-    for (const target of a.skippedTargets) log(c.muted(`  skipped ${target}: artifact type is not portable`));
-  }
-}
-
-async function runScanFlow(
-  opts: {
-    user: boolean;
-    all: boolean;
-    since?: number;
-    limit?: number;
-    maxPrompts?: number;
-    noReview: boolean;
-  },
-  projectDir: string,
-  home: string | undefined,
-  log: LogFn,
-  confirm: Confirm,
-): Promise<void> {
-  const config = await loadConfig(home);
-  const resolved = resolveScanScope(
-    { user: opts.user, all: opts.all, since: opts.since },
-    config,
-  );
-  log(c.dim(resolved.label));
-  const out = await scan(
-    {
-      scope: resolved.scope,
-      projectPath: projectDir,
-      sinceDays: resolved.sinceDays,
-      limit: opts.limit,
-      maxPrompts: opts.maxPrompts,
-      home,
-    },
-    { log, config },
-  );
-  // Two tiers, measured first. Suggestions built from counted tool events
-  // (compactions, idle waits, failure loops) are direct measurements; those
-  // built from prompt text are interpretations of what repeated phrasing meant.
-  // Dogfooding found every good suggestion in the first group and most of the
-  // noise in the second, so the split is the ranking that matters.
-  const measured = out.filter(isMeasured);
-  const possible = out.filter(s => !isMeasured(s));
-  const renderSuggestion = (s: Suggestion): void => {
-    // estMinutesSavedPerMonth is derived from the occurrence count, so any
-    // count inflation lands straight in it. Kept in the cache, never shown.
-    log(
-      `  ${confidenceChip(s.confidence)} ${c.bold(terminalSafeLine(s.name))}  ${c.muted(terminalSafeLine(s.title))}  ${c.dim(`(seen ${s.evidence.count}× · ${s.evidence.sessions} session(s))`)}`,
-    );
-    if (isNudge(s)) {
-      log(`      ${c.dim("tip: this is what autopilot automates →")} ${c.violet("gradient on autopilot")}`);
-    }
-  };
-  if (measured.length > 0) {
-    log(`\n${c.bold("measured")} ${c.dim("— counted from tool events")}`);
-    for (const s of measured) renderSuggestion(s);
-  }
-  if (possible.length > 0) {
-    log(`\n${c.bold("possible")} ${c.dim("— inferred from repeated prompts; check the evidence before installing")}`);
-    for (const s of possible) renderSuggestion(s);
-  }
-  if (out.length === 0) {
-    log(`\n${c.dim("no suggestions found — try a wider scan:")} ${c.violet("gradient scan --user")}`);
+/** Findings grouped by family, in the order the ranking already put them. */
+function renderFindings(findings: Finding[], log: LogFn): void {
+  if (findings.length === 0) {
+    log(`\n${c.ok("nothing to change")} ${c.dim("— your setup matches how you actually work")}`);
     return;
   }
-  if (!opts.noReview && await confirm(`\nReview these ${out.length} suggestion(s) now?`, true)) {
-    await runReview(projectDir, home, log, confirm);
-    return;
+  let family = "";
+  for (const finding of findings) {
+    if (finding.family !== family) {
+      family = finding.family;
+      log(`\n${c.bold(family)}`);
+    }
+    log(`  ${severityChip(finding.severity)} ${c.dim(finding.id)}  ${terminalSafeLine(finding.title)}`);
+    log(`      ${c.muted(terminalSafeLine(finding.evidence))}`);
   }
-  log(`\n${c.dim("Next:")} ${c.violet("gradient scan")}`);
+  const ids = findings.slice(0, 3).map(finding => finding.id).join(",");
+  log(`\n${c.dim("apply:")} ${c.violet(`${displayCommand()} optimize --apply ${ids}`)}`);
+  log(`${c.dim("or hand the whole list to your assistant:")} ${c.violet(`${displayCommand()} optimize --json`)}`);
 }
 
-
-/** `autopilot status` kept as an alias: mode, budget, clamps, and recent
- *  decisions are too specific to fold into the report's one-line feature row. */
-async function autopilotStatusReport(
+async function runOptimize(
   projectDir: string,
-  io: { home?: string },
+  flags: Record<string, Flag>,
+  home: string | undefined,
   log: LogFn,
 ): Promise<number> {
-  const s = await autopilotStatus(projectDir, { home: io.home });
-  log(banner(VERSION));
-  log(`${c.muted("mode:")} ${c.bold(s.mode)}${s.effectiveMode !== s.mode ? c.dim(` → ${s.effectiveMode} here (clamped by project gradient.md)`) : ""}`);
-  log(`${c.muted("budget:")} ${s.budget} judge attempts/session${s.effectiveBudget !== s.budget ? c.dim(` → ${s.effectiveBudget} here (clamped by project gradient.md)`) : ""}`);
-  log(`${c.muted("gradient.md:")} ${s.playbookPath}${s.playbookExists ? "" : c.dim(" (not yet generated — approve a suggestion first)")}`);
-  log(
-    `${c.muted("project gradient.md:")} ${s.projectPlaybookExists
-      ? s.projectPlaybookPath + (s.projectMalformed ? c.coral(" (malformed — autopilot off here)") : "")
-      : c.dim("none in this repo")}`,
-  );
-  log(`${c.muted("project gradient.md pin:")} ${s.projectPlaybookExists ? s.projectPlaybookPin : "none"}`);
-  log(`${c.muted("stop hook here:")} ${s.hookInstalled ? c.ok("installed") : "not installed"}`);
-  for (const e of s.recent) {
-    log(`  ${c.dim(e.ts)} ${e.action === "continue" ? c.ok("continued") : c.muted("stood down")}  ${c.dim(e.why)}`);
+  if (flags["print-schedule"]) {
+    log(scheduleSnippet(process.platform, projectDir));
+    return 0;
   }
+
+  if (typeof flags.undo === "string") {
+    const outcome = await undo(flags.undo, { home });
+    for (const path of outcome.restored) log(`${c.ok("restored")} ${c.muted(terminalSafeLine(path))}`);
+    for (const path of outcome.conflicted) {
+      log(c.coral(`changed since the run, left alone: ${terminalSafeLine(path)}`));
+    }
+    if (outcome.restored.length === 0 && outcome.conflicted.length === 0) log(c.dim("nothing to restore"));
+    return 0;
+  }
+
+  const quiet = !!flags.json;
+  const since = sinceDays(flags.since);
+  const limit = numberFlag(flags.limit);
+  const maxPrompts = numberFlag(flags["max-prompts"]);
+  const result = await optimize(projectDir, {
+    ...(typeof flags.target === "string" ? { target: flags.target } : {}),
+    user: !!flags.user,
+    all: !!flags.all,
+    ...(since !== undefined ? { since } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(maxPrompts !== undefined ? { maxPrompts } : {}),
+    apply: idList(flags.apply),
+    deny: idList(flags.deny),
+    auto: !!flags.auto,
+    page: !!flags.page,
+    home,
+  }, { log: quiet ? () => {} : message => log(c.dim(message)) });
+
+  if (quiet) {
+    log(optimizeJson(result));
+    return 0;
+  }
+
+  renderFindings(result.findings, log);
+  if (result.pagePath) {
+    log(`\n${c.dim("checkup page:")} ${c.violet(`file://${terminalSafeLine(result.pagePath)}`)}`);
+  }
+  for (const entry of result.applied) {
+    log(`\n${c.ok("applied")} ${terminalSafeLine(entry.title)}`);
+    for (const path of entry.paths) log(`  ${c.muted(terminalSafeLine(path))}`);
+  }
+  for (const entry of result.skipped) {
+    log(c.coral(`skipped ${entry.id}: ${terminalSafeLine(entry.reason)}`));
+  }
+  if (result.runId) log(`\n${c.dim("undo:")} ${c.violet(`${displayCommand()} optimize --undo ${result.runId}`)}`);
   return 0;
 }
 
@@ -272,32 +202,17 @@ async function boardHook(
   return 0;
 }
 
-/** The bare report minus everything that needs project scope. `--user` asks the
- *  same questions across projects, where installed artifacts and other sessions
- *  in this repository are not the answer. */
-function renderInsightsOnly(report: InsightsReport): string[] {
-  return renderReport({
-    insights: report,
-    adoption: [],
-    pending: [],
-    features: [],
-    board: null,
-  });
-}
-
 export async function main(
   argv: string[],
   io: {
     log?: (s: string) => void;
     readStdin?: () => Promise<Record<string, unknown>>;
     home?: string;
-    confirm?: Confirm;
     isTTY?: boolean;
   } = {},
 ): Promise<number> {
   const log = io.log ?? ((s: string) => process.stdout.write(s + "\n"));
   const readStdin = io.readStdin ?? readStdinJson;
-  const confirm = io.confirm ?? readlineConfirm();
 
   // A bare invocation is the report — the thing gradient is for — in a pipe as
   // much as in a terminal. It is a foreground command, not a hook target, so a
@@ -324,12 +239,8 @@ export async function main(
     log(VERSION);
     return 0;
   }
-  if (argv[0] === "--help" || argv[0] === "-h") {
-    log(`${banner(VERSION)}\n\n${HELP}`);
-    return 0;
-  }
-  if (argv[0] === "help") {
-    log(`${banner(VERSION)}\n\n${HELP}`);
+  if (argv[0] === "--help" || argv[0] === "-h" || argv[0] === "help") {
+    log(`${banner(VERSION)}\n\n${help()}`);
     return 0;
   }
 
@@ -340,7 +251,7 @@ export async function main(
     parsed = parseCliArgs(argv);
   } catch (e) {
     log(c.coral(terminalSafeLine((e as Error).message.split(".")[0])));
-    log(`\n${HELP}`);
+    log(`\n${help()}`);
     return 2;
   }
   const { command, positionals, flags } = parsed;
@@ -348,148 +259,16 @@ export async function main(
 
   try {
     switch (command) {
-      case "init": {
-        const r = await init({
-          installSkill: !flags["no-skill"],
-          sessionScan: !!flags["session-scan"],
-          home: io.home,
-          projectDir,
-          targets: initTargets(flags.target),
-        });
-        log(banner(VERSION));
-        log(
-          `${c.muted("backend:")} ${terminalSafeLine(r.backend)}\n${c.muted("config:")} ${terminalSafeLine(r.configPath)}\n${c.muted("skill installed:")} ${r.skillPaths.length ? r.skillPaths.map(terminalSafeLine).join(", ") : "false"}\n${c.muted("session-start scan:")} ${r.sessionScanInstalled}`,
-        );
-        // Setup is only useful once a first scan has run — flow straight into
-        // the funnel instead of leaving the next command to be remembered.
-        if (!flags["no-scan"] && await confirm("\nScan your history for suggestions now?", true)) {
-          await runScanFlow(
-            { user: false, all: false, noReview: false },
-            projectDir, io.home, log, confirm,
-          );
-        }
-        return 0;
-      }
-      case "scan": {
-        if (flags.detach) {
-          const passthrough = argv.slice(1).filter(a => a !== "--detach");
-          spawnDetached(["scan", ...passthrough], projectDir);
-          return 0;
-        }
-        // Agents want the proposals, not the walkthrough. Scan quietly, then
-        // emit the same JSON the review path emits.
-        if (flags.json) {
-          await runScanFlow(
-            {
-              user: !!flags.user,
-              all: !!flags.all,
-              since: sinceDays(flags.since),
-              limit: flags.limit ? Number(flags.limit) : undefined,
-              maxPrompts: flags["max-prompts"] ? Number(flags["max-prompts"]) : undefined,
-              noReview: true,
-            },
-            projectDir, io.home, () => {}, confirm,
-          );
-          log(await reviewJson(projectDir, io.home));
-          return 0;
-        }
-        log(banner(VERSION));
-        await runScanFlow(
-          {
-            user: !!flags.user,
-            all: !!flags.all,
-            since: sinceDays(flags.since),
-            limit: flags.limit ? Number(flags.limit) : undefined,
-            maxPrompts: flags["max-prompts"] ? Number(flags["max-prompts"]) : undefined,
-            noReview: !!flags["no-review"],
-          },
-          projectDir, io.home, log, confirm,
-        );
-        return 0;
-      }
-      case "session-start": {
-        await sessionStart(projectDir, {
-          home: io.home,
-          write: log,
-          spawnDetachedFn: spawnDetached,
-        });
-        return 0;
-      }
-      case "review": {
-        if (flags.json) {
-          log(await reviewJson(projectDir, io.home));
-          return 0;
-        }
-        await runReview(projectDir, io.home, log, confirm);
-        return 0;
-      }
-      case "apply": {
-        const applied = await applyByIds(positionals, projectDir, {
-          home: io.home,
-          onSkip: log,
-          onNote: message => log(c.coral(terminalSafeLine(message))),
-        });
-        for (const a of applied) {
-          for (const write of a.writes) {
-            log(`${c.ok("wrote")} ${c.muted(terminalSafeLine(write.path))}${write.target === "codex" ? c.dim(" [codex]") : ""}`);
-          }
-          if (a.printed) log(`${c.dim("run:")} ${a.printed}`);
-          for (const failure of a.failures) log(c.coral(`${failure.target}: ${terminalSafeLine(failure.error)}`));
-          for (const target of a.skippedTargets) log(c.muted(`skipped ${target}: artifact type is not portable`));
-        }
-        return 0;
+      case "optimize": {
+        if (!flags.json) log(banner(VERSION));
+        return await runOptimize(projectDir, flags, io.home, log);
       }
       case "remove": {
         const ok = await remove(projectDir, positionals[0], { home: io.home });
-        log(ok ? `${c.ok("removed")} ${terminalSafeLine(positionals[0])}` : c.coral(`no such artifact: ${terminalSafeLine(positionals[0])}`));
+        log(ok
+          ? `${c.ok("removed")} ${terminalSafeLine(positionals[0])}`
+          : c.coral(`no such artifact: ${terminalSafeLine(positionals[0])}`));
         return ok ? 0 : 1;
-      }
-      // Retired. The subcommand outlives the feature only so an installed
-      // UserPromptSubmit hook can remove itself the first time it fires; stdout
-      // stays empty because this event's output is read as model context.
-      case "recall": {
-        await retireRecall(projectDir, io.home).catch(() => undefined);
-        return 0;
-      }
-      // Aliases for the bare report. Kept for one release so a settings entry,
-      // a script, or muscle memory still works; the report is the answer to all
-      // four of these questions and printing it beats explaining the change.
-      case "insights":
-      case "stats":
-      case "mirror":
-      case "list": {
-        log(banner(VERSION));
-        if (command !== "insights") {
-          log(c.dim(`gradient ${command} is now just gradient`));
-        }
-        // --user is a scope, not a different report: it answers the same
-        // questions across projects, so it keeps the narrower insights view.
-        if (flags.user || flags.html) {
-          const report = await insights({ projectDir, user: !!flags.user, home: io.home });
-          for (const line of renderInsightsOnly(report)) log(line);
-          if (flags.html) log(`${c.ok("wrote")} ${c.muted(await writeInsightsHtml(projectDir, report))}`);
-          return 0;
-        }
-        for (const line of renderReport(await buildReport(projectDir, { home: io.home }))) log(line);
-        return 0;
-      }
-      // Hook targets, namespaced. Nothing writes this form into settings yet —
-      // the bare subcommands below stay the installed form until a release has
-      // passed — but accepting it now means a settings file can say plainly
-      // that these are not commands to type.
-      case "hook": {
-        const target = positionals[0] ?? "";
-        if (target === "board-digest") return boardHook("digest", projectDir, io, log, readStdin);
-        if (target === "board-refresh") return boardHook("refresh", projectDir, io, log, readStdin);
-        // Silent on an unknown target: a hook that prints a usage error feeds it
-        // straight into the session it was meant to help.
-        if (!HOOK_TARGETS.has(target)) return 0;
-        return main([target, ...argv.slice(2)], io);
-      }
-      case "recap": {
-        const text = await recap(projectDir, { home: io.home });
-        if (text) log(text);
-        return 0;
       }
       case "on":
       case "off": {
@@ -516,76 +295,30 @@ export async function main(
         log(`  ${c.dim(terminalSafeLine(result.settingsPath))}`);
         return 0;
       }
-      // Aliases for the single consent verb.
-      case "continuity":
-      case "autopilot":
-      case "board": {
-        const action = positionals[0];
-        if (action === "on" || action === "off" || action === "nudge") {
-          log(c.dim(`gradient ${command} ${action} is now gradient ${action === "off" ? "off" : "on"} ${command}`));
-          return main([action === "off" ? "off" : "on", command], io);
-        }
-        if (command === "board" && (action === "digest" || action === "refresh")) {
-          return boardHook(action, projectDir, io, log, readStdin);
-        }
-        if (action !== undefined && action !== "status" && action !== "show") {
-          log(c.coral(`unknown ${command} action: ${terminalSafeLine(action)} (use on|off)`));
-          return 2;
-        }
-        // autopilot keeps a status view of its own: mode, budget, playbook
-        // clamps and recent decisions are too specific for the report's
-        // one-line feature row.
-        if (command === "autopilot") return autopilotStatusReport(projectDir, io, log);
-        log(c.dim(`gradient ${command} status is now part of gradient`));
-        for (const line of renderReport(await buildReport(projectDir, { home: io.home }))) log(line);
+      // Hook targets, namespaced. Accepting this form means a settings file can
+      // say plainly that these are not commands to type.
+      case "hook": {
+        const target = positionals[0] ?? "";
+        if (target === "board-digest") return boardHook("digest", projectDir, io, log, readStdin);
+        if (target === "board-refresh") return boardHook("refresh", projectDir, io, log, readStdin);
+        // Silent on an unknown target: a hook that prints a usage error feeds it
+        // straight into the session it was meant to help.
+        if (!HOOK_TARGETS.has(target)) return 0;
+        return main([target, ...argv.slice(2)], io);
+      }
+      case "session-end": {
+        // SessionEnd hook target: silent, fail-open, and never slow. It stamps
+        // a watermark and detaches; the session is already over.
+        await sessionEnd(projectDir, { home: io.home });
         return 0;
       }
-      case "bundle": {
-        const name = positionals[0];
-        if (!name) {
-          log(c.coral("bundle needs a name: gradient bundle <name>"));
-          return 2;
-        }
-        if (flags["with-hooks"]) {
-          log(c.coral("bundle hooks are disabled pending recipient-side consent; omit --with-hooks"));
-          return 2;
-        }
-        const result = await bundleCommand(projectDir, name, { withHooks: !!flags["with-hooks"], home: io.home });
-        const displayDir = terminalSafePath(result.dir);
-        log(
-          displayDir
-            ? `${c.ok("bundle written")} ${c.muted(displayDir)}`
-            : c.ok("bundle written (path contains control characters; executable command omitted)"),
-        );
-        for (const file of result.files) log(`  ${c.dim(relative(result.dir, file))}`);
-        for (const skipped of result.skipped) {
-          log(c.muted(`  skipped ${skipped} (not portable in a plugin — hooks/loops — or needs re-review, or is unreadable/sensitive)`));
-        }
-        if (displayDir) log(`\n${c.dim("try it:")} claude --plugin-dir ${posixShellQuote(displayDir)}`);
-
-        const pluginName = basename(result.dir);
-        log(c.dim("marketplace catalog (current Claude Code schema; place the plugin at the shown relative source):"));
-        log(JSON.stringify({
-          name: `${pluginName}-marketplace`,
-          owner: { name: "YOUR_TEAM" },
-          description: "Team workflows packaged by gradient",
-          plugins: [{
-            name: pluginName,
-            source: `./${pluginName}`,
-            description: "Workflows mined from real usage by gradient",
-          }],
-        }, null, 2));
-        log(c.dim("Codex marketplace entry (place this bundle at ./plugins/<name> relative to marketplace.json):"));
-        log(JSON.stringify({
-          name: `${pluginName}-marketplace`,
-          interface: { displayName: `${pluginName} workflows` },
-          plugins: [{
-            name: pluginName,
-            source: { source: "local", path: `./plugins/${pluginName}` },
-            policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
-            category: "Productivity",
-          }],
-        }, null, 2));
+      case "session-start": {
+        await sessionStart(projectDir, { home: io.home, write: log });
+        return 0;
+      }
+      case "recap": {
+        const text = await recap(projectDir, { home: io.home });
+        if (text) log(text);
         return 0;
       }
       case "checkpoint": {
@@ -622,12 +355,7 @@ export async function main(
         return 0;
       }
       default: {
-        const moved = RETIRED.get(command);
-        if (moved) {
-          log(c.dim(`gradient ${command} is now ${moved}`));
-          return 0;
-        }
-        log(`${c.coral(`unknown command: ${terminalSafeLine(command)}`)}\n\n${banner(VERSION)}\n\n${HELP}`);
+        log(`${c.coral(`unknown command: ${terminalSafeLine(command)}`)}\n\n${banner(VERSION)}\n\n${help()}`);
         return 2;
       }
     }

@@ -21,6 +21,7 @@ import {
 import { homedir, platform, release, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SKILLS, codexName, forCodex } from "./skill-render.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const cliDir = resolve(scriptDir, "..");
@@ -35,11 +36,10 @@ const LIVE_LIMITATIONS = [
 ];
 
 const COVERED_COMMANDS = new Set([
-  // The six advertised verbs, plus the hidden ones the gate still drives: hook
-  // targets, the retired aliases kept for one release, and `bundle`.
-  "<bare>", "help", "init", "scan", "apply", "remove", "on", "off",
-  "hook", "session-start", "notify", "recap", "checkpoint", "respond", "recall",
-  "review", "insights", "stats", "list", "mirror", "continuity", "autopilot", "board", "bundle",
+  // The four advertised verbs, plus the hidden hook targets the gate drives.
+  // Nothing else: this release deletes its aliases rather than keeping them.
+  "<bare>", "help", "optimize", "remove", "on", "off",
+  "hook", "session-start", "notify", "recap", "checkpoint", "respond",
 ]);
 
 
@@ -341,16 +341,14 @@ async function main() {
   const state = {
     sandbox,
     output: options.output,
-    packDir: join(sandbox, "pack"),
-    consumer: join(sandbox, "consumer"),
     home: join(sandbox, "gradient-home"),
     project: join(sandbox, "project"),
     fakeBin: join(sandbox, "fake-bin"),
-    npmCache: join(sandbox, "empty-npm-cache"),
-    dependencySeed: join(sandbox, "locked-production-graph"),
+    // Where Claude Code puts a plugin it has installed from a marketplace.
+    pluginRoot: join(sandbox, "gradient-home", ".claude", "plugins", "cache", "gradient", "gradient"),
     cliBin: "",
-    pluginBin: join(repoRoot, "plugin", "bin", "gradient.mjs"),
-    package: { name: "gradient.md", version: "unknown", tarballSha256: "unknown", tarball: "" },
+    pluginBin: "",
+    package: { name: "gradient", version: "unknown", tarballSha256: "unknown" },
     sourceCommit: "unknown",
     productEnv: undefined,
     claudeTranscript: "",
@@ -358,20 +356,10 @@ async function main() {
   };
   const status = new Map();
   let activeCase;
-  // `npm publish --dry-run` exports npm_config_dry_run=true to lifecycle
-  // children. The dogfood child must still materialize its disposable tarball
-  // and consumer install or the release gate would become a simulation.
-  const npmEnv = {
-    ...process.env,
-    npm_config_dry_run: "false",
-    NPM_CONFIG_DRY_RUN: "false",
-  };
-
   const replacements = () => [
     [state.home, "<gradient-home>"],
     [state.project, "<project>"],
-    [state.consumer, "<consumer>"],
-    [state.packDir, "<pack>"],
+    [state.pluginRoot, "<plugin-root>"],
     [state.sandbox, "<sandbox>"],
     [repoRoot, "<source>"],
     [homedir(), "<host-home>"],
@@ -464,59 +452,25 @@ async function main() {
   };
 
   try {
-    await scenario("package", "Pack and install the release artifact", "distribution", async ({ assertion, equal }) => {
-      const sourcePackageManifestPath = join(cliDir, "package.json");
-      const sourcePackageManifest = await readFile(sourcePackageManifestPath, "utf8");
-      await mkdir(state.packDir, { recursive: true });
-      await mkdir(state.consumer, { recursive: true });
-      await mkdir(state.npmCache, { recursive: true });
-      await writeJson(join(state.consumer, "package.json"), { private: true, name: "gradient-dogfood-consumer", version: "1.0.0" }, 0o644);
-
+    await scenario("artifacts", "Verify the committed release artifacts", "distribution", async ({ assertion, equal }) => {
       const git = await command("git rev-parse HEAD", "git", ["rev-parse", "HEAD"], { cwd: repoRoot, env: process.env });
       if (git.exitCode === 0) state.sourceCommit = git.stdout.trim();
+      state.package.version = JSON.parse(await readFile(join(cliDir, "package.json"), "utf8")).version;
 
-      const packed = await command(
-        "npm pack --ignore-scripts --json --pack-destination <pack>",
-        "npm",
-        ["pack", "--ignore-scripts", "--json", "--pack-destination", state.packDir],
-        { cwd: cliDir, env: npmEnv },
-      );
-      equal(packed.exitCode, 0, "npm pack succeeds without lifecycle scripts");
-      const info = parsePackJson(packed.stdout);
-      state.package.name = info.name;
-      state.package.version = info.version;
-      state.package.tarball = join(state.packDir, info.filename);
-      state.package.tarballSha256 = sha256(await readFile(state.package.tarball));
-      const packedPaths = new Set((info.files ?? []).map(file => file.path));
-      assertion(packedPaths.has("dist/bin.js"), "tarball contains the executable");
-      assertion(packedPaths.has("src/skill/SKILL.md"), "tarball contains the bundled Gradient skill");
-
-      const lockedDependencies = await lockedProductionDependencies();
-      const productionDependencies = await stageProductionDependencies(lockedDependencies, state.dependencySeed);
-      assertion(productionDependencies.length > 0, "locked production dependency graph is available locally");
-      assertion(productionDependencies.every(dependency => dependency.installPath.startsWith(`${state.dependencySeed}/`)), "production dependency inputs are staged inside the disposable sandbox");
-      equal(await readdir(state.npmCache), [], "consumer npm cache starts empty");
-      const installed = await command(
-        "npm install --cache <empty-cache> --offline --install-links --ignore-scripts --no-audit --no-fund --no-save <tarball> <staged-production-graph>",
-        "npm",
-        [
-          "install", "--cache", state.npmCache, "--offline", "--install-links",
-          "--ignore-scripts", "--no-audit", "--no-fund", "--no-save",
-          state.package.tarball,
-          ...productionDependencies.map(dependency => dependency.installPath),
-        ],
-        { cwd: state.consumer, env: npmEnv, timeoutMs: 180_000 },
-      );
-      equal(installed.exitCode, 0, "fresh consumer installs the local tarball offline with an empty cache");
-      state.cliBin = join(state.consumer, "node_modules", "gradient.md", "dist", "bin.js");
-      const metadata = await stat(state.cliBin);
-      assertion((metadata.mode & 0o111) !== 0, "installed CLI is executable");
-      assertion(await pathExists(join(state.consumer, "node_modules", "gradient.md", "src", "skill", "SKILL.md")), "installed package exposes its skill source");
-      for (const dependency of productionDependencies) {
-        const installedPath = join(state.consumer, dependency.lockPath);
-        assertion((await lstat(installedPath)).isDirectory(), `${dependency.lockPath} is copied into the disposable consumer`);
+      // gradient ships as files in the repository, not as a package: the plugin
+      // Claude Code clones, and the three skill directories a Codex user copies.
+      // Every one of them carries the same runner, so a mismatch here means one
+      // install shape is running a different gradient than the others.
+      const pluginBundle = await readFile(join(repoRoot, "plugin", "bin", "gradient.mjs"));
+      state.package.tarballSha256 = sha256(pluginBundle);
+      for (const name of SKILLS) {
+        const dir = join(repoRoot, "skills", codexName(name));
+        assertion(pluginBundle.equals(await readFile(join(dir, "bin", "gradient.mjs"))),
+          `skills/${codexName(name)} carries the same runner as the plugin`);
+        equal(await readFile(join(dir, "SKILL.md"), "utf8"),
+          forCodex(await readFile(join(repoRoot, "plugin", "skills", name, "SKILL.md"), "utf8"), name),
+          `skills/${codexName(name)}/SKILL.md is what re-deriving from the plugin source produces`);
       }
-      equal(await readFile(sourcePackageManifestPath, "utf8"), sourcePackageManifest, "offline install leaves the source package manifest untouched");
     });
 
     await scenario("fixtures", "Create an isolated project, home, histories, and local backends", "isolation", async ({ assertion, equal }) => {
@@ -591,6 +545,10 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         await writeFile(path, fakeBackend, { mode: 0o755 });
         await chmod(path, 0o755);
       }
+      // The real node, under a name the filter above cannot remove.
+      const nodeShim = join(state.fakeBin, "node");
+      if (!existsSync(nodeShim)) await symlink(process.execPath, nodeShim);
+
       const fakeGhPath = join(state.fakeBin, "gh");
       await writeFile(fakeGhPath, `#!${process.execPath}\nprocess.stdout.write("[]");\n`, { mode: 0o755 });
       await chmod(fakeGhPath, 0o755);
@@ -658,6 +616,12 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         // whichever binary form resolves, so a developer machine with a global
         // install exercises a different code path from CI and from an npx user
         // — and the difference only showed up as a CI-only failure.
+        //
+        // Dropping the whole directory also drops everything else in it, and a
+        // global `gradient` lives in the same bin directory as `node` on both
+        // Homebrew and every version manager. `node` is shimmed into fake-bin
+        // below so an installed skill's `node <runner>` still resolves — the
+        // point is to hide gradient, not to build a PATH no real machine has.
         PATH: `${state.fakeBin}${delimiter}${(process.env.PATH ?? "").split(delimiter)
           .filter(dir => dir && !existsSync(join(dir, "gradient")))
           .join(delimiter)}`,
@@ -668,7 +632,28 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       assertion(state.home.startsWith(state.sandbox), "Gradient home is inside the disposable sandbox");
       assertion(state.project.startsWith(state.sandbox), "project is inside the disposable sandbox");
       assertion(state.claudeTranscript.startsWith(join(state.home, ".claude", "projects")), "transcripts are synthetic and isolated");
-    }, ["package"]);
+    }, ["artifacts"]);
+
+    await scenario("install", "Install both shapes into an empty home, by copying", "distribution", async ({ assertion, equal }) => {
+      // Exactly what the README tells a user to do, and nothing else: no
+      // package manager, no PATH entry, no installer to fix anything up
+      // afterwards. What is committed is what runs.
+      for (const name of SKILLS) {
+        await cp(join(repoRoot, "skills", codexName(name)),
+          join(state.home, ".agents", "skills", codexName(name)), { recursive: true });
+      }
+      await cp(join(repoRoot, "plugin"), state.pluginRoot, { recursive: true });
+
+      state.cliBin = join(state.home, ".agents", "skills", "gradient-optimize", "bin", "gradient.mjs");
+      state.pluginBin = join(state.pluginRoot, "bin", "gradient.mjs");
+      for (const [label, path] of [["skill", state.cliBin], ["plugin", state.pluginBin]]) {
+        assertion(await pathExists(path), `the copied ${label} carries its runner`);
+        const version = await command(`node <${label}-runner> --version`, process.execPath, [path, "--version"],
+          { cwd: state.project, env: state.productEnv });
+        equal(version.exitCode, 0, `the copied ${label} runner starts`);
+        equal(version.stdout.trim(), state.package.version, `the copied ${label} runner is this version`);
+      }
+    }, ["artifacts", "fixtures"]);
 
     await scenario("surface", "Verify installed and plugin distribution surfaces", "distribution", async ({ assertion, equal }) => {
       const version = await runCli(["--version"]);
@@ -690,109 +675,192 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         "bare non-TTY invocation renders the report, not help",
       );
 
-      assertion(await pathExists(state.pluginBin), "committed plugin binary exists");
+      assertion(await pathExists(state.pluginBin), "installed plugin binary exists");
       const pluginVersion = await runPlugin(["--version"]);
       equal(pluginVersion.exitCode, 0, "plugin --version exits zero");
-      equal(pluginVersion.stdout.trim(), state.package.version, "plugin and npm artifact versions match");
+      equal(pluginVersion.stdout.trim(), state.package.version, "plugin and skill artifact versions match");
       const pluginHelp = await runPlugin(["help"]);
       equal(pluginHelp.exitCode, 0, "plugin help exits zero");
       assertion(pluginHelp.stdout.includes("gradient on|off <feature>"), "plugin bundle exposes the same CLI help");
-    }, ["fixtures"]);
-
-    await scenario("init", "Initialize both assistants in the isolated home", "setup", async ({ assertion, equal }) => {
-      const result = await runCli(["init", "--target", "both", "--no-scan"]);
-      equal(result.exitCode, 0, "dual-target init succeeds");
-      assertion(result.stdout.includes("backend: claude-cli"), "init discovers the deterministic Claude CLI backend");
-      for (const path of [
-        join(state.home, ".claude", "skills", "gradient", "SKILL.md"),
-        join(state.home, ".agents", "skills", "gradient", "SKILL.md"),
-      ]) {
-        assertion(await pathExists(path), `init installs ${relative(state.home, path)}`);
-        const metadata = await stat(path);
-        equal(metadata.mode & 0o077, 0, `init skill ${relative(state.home, path)} is private`);
+      // The two shapes are one build; a user who installs both must not get two gradients.
+      equal(sha256(await readFile(state.cliBin)), sha256(await readFile(state.pluginBin)),
+        "the installed skill runner and the installed plugin runner are the same build");
+      // Every verb this release deleted must read as unknown, not as a typo.
+      for (const gone of ["scan", "review", "apply", "init", "bundle", "insights", "stats", "explain"]) {
+        const removed = await runCli([gone]);
+        equal(removed.exitCode, 2, `the deleted verb ${gone} exits 2`);
+        assertion(removed.stdout.includes("unknown command"), `the deleted verb ${gone} reads as unknown`);
       }
+    }, ["install"]);
+
+    await scenario("setup", "Configure both assistants, and run what the skills say to run", "setup", async ({ assertion, equal }) => {
+      // There is no `init`. The first optimize collects the one consent that
+      // verb existed for: which assistants to optimize.
+      const result = await runCli(["optimize", "--target", "both"]);
+      equal(result.exitCode, 0, "first optimize with an explicit target succeeds");
       const config = await readJson(configPath);
-      equal(config.targets, ["claude-code", "codex"], "init persists both assistant targets");
-      equal(config.backend, "claude-cli", "init persists the selected private CLI backend");
+      equal(config.targets, ["claude-code", "codex"], "the target choice is persisted");
       equal((await stat(configPath)).mode & 0o077, 0, "Gradient config is private");
+
+      // gradient arrives by copy, so it installs no skill of its own. Writing
+      // into an assistant's skill directory would mean two gradients on one
+      // machine disagreeing about which runner is current.
+      assertion(!(await pathExists(join(state.home, ".claude", "skills"))),
+        "optimize writes nothing into Claude Code's skills directory");
+
+      /**
+       * The gate. A SKILL.md is markdown an agent obeys, so a command in it
+       * that does not resolve is not a degraded skill — it is a skill that can
+       * do nothing, and nothing finds out until an agent runs it.
+       *
+       * This ran green for a release whose every skill said a bare `gradient`,
+       * which existed only after a global npm install. It has to run the
+       * command, on a PATH with no `gradient` on it, in both shapes.
+       */
+      const shapes = [
+        ...SKILLS.map(name => ({
+          label: `codex ${codexName(name)}`,
+          body: join(state.home, ".agents", "skills", codexName(name), "SKILL.md"),
+          // The copied skill names its own location as "$HOME/.agents/skills/…",
+          // so HOME here is the home it was installed into. The harness isolates
+          // gradient's state with GRADIENT_HOME and leaves HOME real, which for
+          // this one proof would point at the developer's own machine.
+          env: { ...state.productEnv, HOME: state.home },
+        })),
+        ...SKILLS.map(name => ({
+          label: `plugin ${name}`,
+          body: join(state.pluginRoot, "skills", name, "SKILL.md"),
+          env: { ...state.productEnv, CLAUDE_PLUGIN_ROOT: state.pluginRoot },
+        })),
+      ];
+      for (const shape of shapes) {
+        const body = await readFile(shape.body, "utf8");
+        const runner = /(node "[^"]*gradient\.mjs")/.exec(body);
+        assertion(runner !== null, `${shape.label} names a concrete command to run`);
+        const proof = await command(
+          `${runner[1]} --version`,
+          "/bin/sh",
+          ["-c", `${runner[1]} --version`],
+          { cwd: state.project, env: shape.env },
+        );
+        equal(proof.exitCode, 0, `${shape.label}'s own command runs with no gradient on PATH`);
+        equal(proof.stdout.trim(), state.package.version, `${shape.label}'s command is this version`);
+        assertion(!/npx|npm /.test(body), `${shape.label} tells no one to reach for a package manager`);
+      }
+
+      // Non-interactive with no configuration must never guess.
+      await updateConfig({ targets: undefined });
+      const guessless = await runCli(["optimize"]);
+      equal(guessless.exitCode, 1, "an unconfigured non-interactive run fails rather than guessing");
+      assertion(guessless.stdout.includes("--target"), "the failure names the flag to pass");
+      await updateConfig({ targets: ["claude-code", "codex"], backend: "claude-cli" });
     }, ["surface"]);
 
-    await scenario("scan", "Mine synthetic Claude Code and Codex histories through both backends", "mining", async ({ assertion, equal }) => {
-      const both = await runCli(["scan", "--no-review"]);
-      equal(both.exitCode, 0, "project scan succeeds");
-      assertion(both.stdout.includes("Claude Code") && both.stdout.includes("Codex"), "project scan reports both transcript sources");
-      assertion(both.stdout.includes("dogfood-scan"), "Claude-backed classification emits a deterministic suggestion");
+    await scenario("mine", "Mine synthetic Claude Code and Codex histories with no model", "mining", async ({ assertion, equal }) => {
+      const both = await runCli(["optimize"]);
+      equal(both.exitCode, 0, "project optimize succeeds");
+      assertion(both.stdout.includes("Claude Code") && both.stdout.includes("Codex"), "optimize reports both transcript sources");
       assertion(both.stdout.includes("restatement filter"),
         "an artifact that would only repeat its own prompt is refused, and says so");
-      let cached = await readJson(await suggestionsPath());
-      assertion(cached.some(suggestion => suggestion.name.startsWith("dogfood-scan")), "scan persists its suggestion in the isolated cache");
+      const cached = await readJson(await suggestionsPath());
+      assertion(cached.length > 0, "optimize persists its suggestions in the isolated cache");
 
-      const user = await runCli(["scan", "--user", "--since", "30d", "--no-review"]);
-      equal(user.exitCode, 0, "bounded cross-project scan succeeds");
+      const user = await runCli(["optimize", "--user", "--since", "30d"]);
+      equal(user.exitCode, 0, "bounded cross-project optimize succeeds");
       assertion(user.stdout.includes("user scope"), "cross-project scope is visible in output");
 
-      await updateConfig({ targets: ["codex"], backend: "codex-cli" });
-      const codex = await runCli(["scan", "--no-review"]);
-      equal(codex.exitCode, 0, "Codex-only scan succeeds");
-      assertion(codex.stdout.includes("sources: Claude Code 0 prompt(s) · Codex"), "Codex collector supplies the mined prompts");
-      cached = await readJson(await suggestionsPath());
-      assertion(cached.length > 0, "Codex CLI protocol produces validated suggestions");
-      assertion(codex.stdout.includes("restatement filter"),
-        "the Codex path refuses an artifact that would only repeat its own prompt");
-      await updateConfig({ targets: ["claude-code", "codex"], backend: "claude-cli" });
-    }, ["init"]);
+      await updateConfig({ targets: ["codex"] });
+      const codex = await runCli(["optimize"]);
+      equal(codex.exitCode, 0, "Codex-only optimize succeeds");
+      assertion(codex.stdout.includes("sources: Claude Code 0 prompt(s) · Codex"), "the Codex collector supplies the mined prompts");
+      await updateConfig({ targets: ["claude-code", "codex"] });
+    }, ["setup"]);
 
-    await scenario("review-read", "Inspect, explain, and surface a mined suggestion", "review", async ({ assertion, equal }) => {
-      const review = await runCli(["review", "--json"]);
-      equal(review.exitCode, 0, "the retired review --json alias still succeeds");
-      const parsed = JSON.parse(review.stdout);
-      assertion(Array.isArray(parsed.suggestions) && parsed.suggestions.length > 0, "review JSON exposes pending suggestions");
-      const suggestion = parsed.suggestions[0];
-      // `explain` is gone; the evidence it printed now reaches agents through
-      // the JSON and humans through the scan walkthrough.
-      assertion(
-        typeof suggestion.evidence?.count === "number" && typeof suggestion.rationale === "string",
-        "the JSON carries the evidence the retired explain verb printed",
-      );
+    await scenario("propose", "Expose findings as JSON for an assistant to drive", "review", async ({ assertion, equal }) => {
+      const json = await runCli(["optimize", "--json"]);
+      equal(json.exitCode, 0, "optimize --json succeeds");
+      assertion(!json.stdout.startsWith("gradient ·"), "--json prints no banner, so stdout parses");
+      const parsed = JSON.parse(json.stdout);
+      assertion(Array.isArray(parsed.findings), "the JSON carries a findings array");
+      assertion(Array.isArray(parsed.targets) && parsed.targets.length > 0, "the JSON names the configured targets");
+      for (const finding of parsed.findings) {
+        assertion(typeof finding.id === "string" && finding.id.length > 0, "every finding has an id to apply by");
+        assertion(typeof finding.evidence === "string", "every finding carries a quotable evidence line");
+        assertion(typeof finding.autoEligible === "boolean", "every finding says whether --auto may take it");
+      }
       const report = await runCli([]);
-      equal(report.exitCode, 0, "the report succeeds with pending suggestions");
-      assertion(report.stdout.includes("pending suggestions") && report.stdout.includes(suggestion.name),
-        "the report surfaces the pending suggestion by name");
+      equal(report.exitCode, 0, "the report succeeds alongside pending findings");
       const sessionStart = await runCli(["session-start"]);
       equal(sessionStart.exitCode, 0, "session-start hook target exits zero");
-      assertion(sessionStart.stdout.includes("gradient scan"), "session-start surfaces a high-leverage pending suggestion");
-      const detachedComplete = await waitFor(async () => {
-        const path = join(state.project, ".gradient", "last-scan.log");
-        if (!(await pathExists(path))) return false;
-        const text = await readFile(path, "utf8");
-        return text.includes("Next:") || text.includes("no suggestions found");
-      });
-      assertion(detachedComplete, "session-start's detached rescan completes with a diagnostic log");
-    }, ["scan"]);
 
-    await scenario("migration", "Apply and remove a command-target artifact", "artifacts", async ({ assertion, equal }) => {
-      await updateConfig({ targets: ["claude-code"], emitTarget: "command", backend: "claude-cli" });
-      const legacy = baseSuggestion("dogfoodlegacy", "dogfood-legacy", {
-        type: "command", commandName: "dogfood-legacy",
-        body: "Review the synthetic evidence, then run the requested verification steps.",
-        triggers: ["migrate the synthetic command"],
-      });
-      await seedSuggestions([legacy]);
-      const applied = await runCli(["apply", legacy.name]);
-      equal(applied.exitCode, 0, "legacy command apply succeeds");
-      const commandPath = join(state.project, ".claude", "commands", `${legacy.name}.md`);
-      assertion(await pathExists(commandPath), "legacy command is written through the installed CLI");
-      // `migrate` (command → skill) is deleted: a one-time converter for a
-      // format two releases old. The command emit target itself still works,
-      // and `remove` still owns what it wrote.
-      const removed = await runCli(["remove", legacy.name]);
-      equal(removed.exitCode, 0, "command-target artifact removal succeeds");
-      assertion(!(await pathExists(commandPath)), "remove deletes the owned command file");
-      await updateConfig({ targets: ["claude-code"], emitTarget: "skill", backend: "claude-cli" });
-    }, ["review-read"]);
+      // The checkup page is a file:// page precisely so it can be proven to
+      // reference nothing outside itself.
+      const paged = await runCli(["optimize", "--page"]);
+      equal(paged.exitCode, 0, "optimize --page succeeds");
+      const pagePath = /file:\/\/(\S+)/.exec(paged.stdout)?.[1];
+      assertion(Boolean(pagePath), "the run names the page it wrote");
+      const pageHtml = await readFile(pagePath, "utf8");
+      assertion(pageHtml.startsWith("<!doctype html>"), "the page is a complete document");
+      assertion(!/https?:\/\//.test(pageHtml), "the page references no external host");
+      assertion(!/\bsrc\s*=|\bhref\s*=|<link\b/i.test(pageHtml), "the page loads no external asset");
+      // The page's entire output is a command to copy, so it has to be one that
+      // runs. A bare `gradient` resolves nowhere now.
+      assertion(/gradient\.mjs optimize/.test(pageHtml), "the page carries a runnable apply command");
+      assertion(!/"gradient optimize"/.test(pageHtml), "the page never offers a bare `gradient` to copy");
+
+      // The scheduled/headless surface: printed, never installed.
+      const schedule = await runCli(["optimize", "--print-schedule"]);
+      equal(schedule.exitCode, 0, "--print-schedule succeeds");
+      // A cron entry runs with a minimal environment and no shell profile, so a
+      // snippet naming anything that needs PATH is the first thing to stop
+      // working — silently, at 9am on a Monday.
+      // Absolute node too, not just the absolute runner: the first version of
+      // this assertion checked only the runner path and passed on a snippet
+      // that said `node ~/...`, which launchd's PATH cannot resolve.
+      assertion(schedule.stdout.includes(`${process.execPath} ${state.cliBin} optimize --auto`),
+        "the snippet names an absolute node and this install's own runner");
+      assertion(!/[^/]\bnode ~/.test(schedule.stdout),
+        "the snippet leaves nothing for a scheduler's minimal PATH to resolve");
+    }, ["mine"]);
+
+    await scenario("bridge", "Bridge AGENTS.md into CLAUDE.md, then undo it", "artifacts", async ({ assertion, equal }) => {
+      // Claude Code reads CLAUDE.md and never AGENTS.md. This is the change
+      // that makes one setup serve both assistants, so it is the one the
+      // packaged binary has to get right end to end.
+      const claudeMd = join(state.project, "CLAUDE.md");
+      const agentsMd = join(state.project, "AGENTS.md");
+      const original = "# Project\n\n- Keep this hand-written line exactly as it is.\n";
+      await writeFile(agentsMd, "- Shared guidance for every agent in this repository.\n", { mode: 0o644 });
+      await writeFile(claudeMd, original, { mode: 0o644 });
+
+      const proposed = JSON.parse((await runCli(["optimize", "--json"])).stdout);
+      const drift = proposed.findings.find(finding => finding.family === "drift");
+      assertion(Boolean(drift), "the missing bridge is reported");
+      equal(drift.severity, "high", "the bridge is the highest-severity finding");
+      equal(drift.changes[0].op, "prepend-import", "the proposed change is the documented one-line import");
+
+      const applied = await runCli(["optimize", "--apply", drift.id]);
+      equal(applied.exitCode, 0, "applying the bridge succeeds");
+      const bridged = await readFile(claudeMd, "utf8");
+      assertion(bridged.startsWith("@AGENTS.md"), "the import is the first line");
+      assertion(bridged.includes("Keep this hand-written line exactly as it is."), "hand-written prose survives");
+
+      const runId = /--undo (\S+)/.exec(applied.stdout)?.[1];
+      assertion(Boolean(runId), "the run names itself for undo");
+      const undone = await runCli(["optimize", "--undo", runId]);
+      equal(undone.exitCode, 0, "undo succeeds");
+      equal(await readFile(claudeMd, "utf8"), original, "undo restores the file byte for byte");
+
+      // Re-apply and leave it bridged: later scenarios read a bridged repo.
+      const again = JSON.parse((await runCli(["optimize", "--json"])).stdout);
+      const rebridge = again.findings.find(finding => finding.family === "drift");
+      await runCli(["optimize", "--apply", rebridge.id]);
+      const after = JSON.parse((await runCli(["optimize", "--json"])).stdout);
+      assertion(!after.findings.some(finding => finding.family === "drift"), "a bridged repo stops proposing the bridge");
+    }, ["propose"]);
 
     await scenario("artifact-matrix", "Apply every generated artifact family and inspect ownership", "artifacts", async ({ assertion, equal }) => {
-      await updateConfig({ targets: ["claude-code", "codex"], emitTarget: "skill", backend: "claude-cli" });
+      await updateConfig({ targets: ["claude-code", "codex"], backend: "claude-cli" });
       const suggestions = [
         baseSuggestion("dogfoodskill", "dogfood-skill", {
           type: "command", commandName: "dogfood-skill", mechanical: true,
@@ -802,10 +870,6 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         baseSuggestion("dogfoodrule", "dogfood-rule", {
           type: "rule", target: "project", ruleName: "dogfood-rule",
           text: "Use deterministic synthetic fixtures for low-impact dogfood checks; ask before consequential actions.",
-        }),
-        baseSuggestion("dogfooduserrule", "dogfood-user-rule", {
-          type: "rule", target: "user", ruleName: "dogfood-user-rule",
-          text: "Prefer concise dogfood evidence summaries for low-impact reporting.",
         }),
         baseSuggestion("dogfoodloop", "dogfood-loop", {
           type: "loop", instruction: "Review the synthetic dogfood report.", cadence: "0 9 * * 1-5",
@@ -837,9 +901,11 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         }),
       ];
       await seedSuggestions(suggestions);
-      const applied = await runCli(["apply", ...suggestions.map(suggestion => suggestion.name)]);
+      // Applying by name: the report lists pending suggestions by name, and
+      // --apply does not re-mine, so the seeded cache is what it reads.
+      const applied = await runCli(["optimize", "--apply", suggestions.map(suggestion => suggestion.name).join(",")]);
       equal(applied.exitCode, 0, "full artifact matrix applies through the installed CLI");
-      assertion(applied.stdout.includes("skipped codex"), "non-portable artifact types are explicitly skipped for Codex");
+      assertion(applied.stdout.includes("applied"), "the run reports what it applied");
 
       for (const path of [
         join(state.project, ".claude", "skills", "dogfood-skill", "SKILL.md"),
@@ -856,11 +922,15 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       for (const event of ["PreCompact", "SessionStart", "Notification", "PostToolUse"]) {
         assertion(Array.isArray(settings.hooks[event]), `${event} hook is installed by approval`);
       }
-      const list = await runCli(["list"]);
-      equal(list.exitCode, 0, "the retired list alias still succeeds");
-      assertion(list.stdout.includes("gradient list is now just gradient"), "the retired alias says where it went");
+      // A rule reaches Codex as one tagged line under gradient's own heading in
+      // AGENTS.md, because Codex has no rules directory.
+      const agents = await readFile(join(state.project, "AGENTS.md"), "utf8");
+      assertion(agents.includes("## gradient"), "the Codex rule lands under gradient's own heading");
+      assertion(agents.includes("<!-- gradient:dogfoodrule -->"), "the Codex rule is a tagged line");
+      const report = await runCli([]);
+      equal(report.exitCode, 0, "the bare report succeeds with artifacts installed");
       for (const name of ["dogfood-skill", "dogfood-rule", "dogfood-playbook"]) {
-        assertion(list.stdout.includes(name), `the report's installed section includes ${name}`);
+        assertion(report.stdout.includes(name), `the report's installed section includes ${name}`);
       }
 
       const tamperPath = join(state.project, ".claude", "skills", "dogfood-tamper", "SKILL.md");
@@ -868,87 +938,55 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const refused = await runCli(["remove", "dogfood-tamper"]);
       equal(refused.exitCode, 1, "tampered artifact removal is refused");
       assertion(await pathExists(tamperPath), "tampered artifact remains untouched after refusal");
-    }, ["migration"]);
+    }, ["bridge"]);
 
-    await scenario("bundle", "Build a portable team plugin and reject hook export", "portability", async ({ assertion, equal }) => {
-      const result = await runCli(["bundle", "dogfood-team"]);
-      equal(result.exitCode, 0, "team bundle succeeds");
-      const root = join(state.project, ".gradient", "bundle", "dogfood-team");
-      const claudePlugin = await readJson(join(root, ".claude-plugin", "plugin.json"));
-      const codexPlugin = await readJson(join(root, ".codex-plugin", "plugin.json"));
-      equal(claudePlugin.version, state.package.version, "Claude plugin metadata uses the package version");
-      equal(codexPlugin.version, state.package.version, "Codex plugin metadata uses the package version");
-      assertion(await pathExists(join(root, "skills", "dogfood-skill", "SKILL.md")), "portable skill is included once");
-      assertion(!(await pathExists(join(root, ".claude", "settings.local.json"))), "hook settings are not exported");
-      assertion(result.stdout.includes("skipped dogfood-loop") || result.stdout.includes("dogfood-loop"), "non-portable loop is reported as skipped");
-      const disabled = await runCli(["bundle", "unsafe", "--with-hooks"]);
-      equal(disabled.exitCode, 2, "hook bundle request is rejected as a usage error");
-      assertion(disabled.stdout.includes("hooks are disabled"), "hook-export refusal explains the consent boundary");
-    }, ["artifact-matrix"]);
-
-    await scenario("recall", "Retire a leftover recall hook silently", "runtime", async ({ assertion, equal }) => {
-      // `recall` is deleted. The subcommand outlives it so a UserPromptSubmit
-      // entry left in someone's settings removes itself instead of falling
-      // through to the unknown-command handler — that event's stdout is read
-      // by the model as context.
-      const settingsPath = join(state.project, ".claude", "settings.local.json");
-      const before = await readJson(settingsPath);
-      before.hooks = before.hooks ?? {};
-      before.hooks.UserPromptSubmit = [
-        ...(before.hooks.UserPromptSubmit ?? []),
-        { hooks: [{ type: "command", command: "npx -y gradient.md@0.6.1 recall", timeout: 5 }] },
-      ];
-      await writeJson(settingsPath, before);
-
+    await scenario("recall", "Exit silently on a leftover recall hook", "runtime", async ({ assertion, equal }) => {
+      // `recall` is deleted. Its subcommand still exits silently because it ran
+      // on UserPromptSubmit, whose stdout the model reads as context: falling
+      // through to the unknown-command handler would inject usage text into a
+      // live session.
       const hook = await runCli(["recall"], {
         input: JSON.stringify({ prompt: "anything at all", cwd: state.project, session_id: "dogfood-recall" }),
       });
-      equal(hook.exitCode, 0, "the retired hook target exits zero");
-      equal(hook.stdout, "", "the retired hook target prints nothing into the session");
+      equal(hook.exitCode, 0, "the removed hook target exits zero");
+      equal(hook.stdout, "", "the removed hook target prints nothing into the session");
+      assertion(hook.stderr === "" || !hook.stderr.includes("unknown"), "nothing reaches stderr either");
+    }, ["artifact-matrix"]);
 
-      const after = await readJson(settingsPath);
-      assertion(!JSON.stringify(after).includes("recall"), "the leftover hook removes itself");
-      assertion(JSON.stringify(after).includes("PreCompact"), "adjacent hooks survive the retirement");
+    await scenario("apply-flow", "Apply, deny, and refuse to auto-apply prose edits", "review", async ({ assertion, equal }) => {
+      // A stale reference is the family that edits prose a person wrote, so it
+      // is the one --auto must never take.
+      const claudeMd = join(state.project, "CLAUDE.md");
+      const before = await readFile(claudeMd, "utf8");
+      await writeFile(claudeMd, `${before}- Build it with \`scripts/gone.sh\` before committing.\n`, { mode: 0o644 });
 
-      const manager = await runCli(["recall", "on"]);
-      equal(manager.exitCode, 0, "the retired on/off arguments also exit zero");
-      equal(manager.stdout, "", "the retired manager prints nothing");
-    }, ["bundle"]);
+      const proposed = JSON.parse((await runCli(["optimize", "--json"])).stdout);
+      const stale = proposed.findings.find(finding => finding.family === "stale");
+      assertion(Boolean(stale), "the stale reference is reported");
+      equal(stale.autoEligible, false, "a prose edit is never eligible for --auto");
 
-    await scenario("interactive-review", "Approve a suggestion and re-pin a changed project playbook", "review", async ({ assertion, equal }) => {
-      const suggestion = baseSuggestion("dogfoodreviewed", "dogfood-reviewed", {
-        type: "command", commandName: "dogfood-reviewed",
-        body: "Approved through the installed interactive review surface.",
-        triggers: ["approve the interactive dogfood fixture"],
-      });
-      await seedSuggestions([suggestion]);
-      const review = await runCli(["review"], { input: "a\n" });
-      equal(review.exitCode, 0, "interactive review approval succeeds");
-      assertion(review.stdout.includes("applied 1 suggestion"), "interactive review reports one applied suggestion");
-      assertion(await pathExists(join(state.project, ".claude", "skills", suggestion.name, "SKILL.md")), "interactive approval writes the artifact");
+      const auto = await runCli(["optimize", "--auto"]);
+      equal(auto.exitCode, 0, "--auto succeeds");
+      assertion((await readFile(claudeMd, "utf8")).includes("scripts/gone.sh"), "--auto leaves hand-written prose alone");
 
-      const playbookPath = join(state.project, "gradient.md");
-      await writeFile(playbookPath, `${await readFile(playbookPath, "utf8")}\n- Manually reviewed dogfood note.\n`, { mode: 0o644 });
-      await seedSuggestions([]);
-      const pin = await runCli(["review"], { input: "a\n" });
-      equal(pin.exitCode, 0, "project playbook approval succeeds");
-      const pinState = await readJson(join(await projectCacheDir(), "playbook-pin.json"));
-      assertion(pinState.prose.includes("Manually reviewed dogfood note"), "review pins the exact changed project prose");
+      const applied = await runCli(["optimize", "--apply", stale.id]);
+      equal(applied.exitCode, 0, "applying the stale line explicitly succeeds");
+      assertion(!(await readFile(claudeMd, "utf8")).includes("scripts/gone.sh"), "the stale line is removed on explicit approval");
+
+      const runId = /--undo (\S+)/.exec(applied.stdout)?.[1];
+      await runCli(["optimize", "--undo", runId]);
+      assertion((await readFile(claudeMd, "utf8")).includes("scripts/gone.sh"), "undo restores the removed line");
+      await writeFile(claudeMd, before, { mode: 0o644 });
     }, ["recall"]);
 
-    await scenario("insights", "Render stats and terminal/HTML insights from composed state", "reporting", async ({ assertion, equal }) => {
-      const statsResult = await runCli(["stats"]);
-      equal(statsResult.exitCode, 0, "the retired stats alias still succeeds");
-      assertion(statsResult.stdout.includes("installed") && statsResult.stdout.includes("use(s)"),
-        "the report composes adoption evidence stats used to print separately");
-      assertion(statsResult.stdout.includes("features:"), "the report states which background features are on");
-      const insights = await runCli(["insights", "--html"]);
-      equal(insights.exitCode, 0, "insights HTML succeeds");
-      assertion(insights.stdout.includes("prompts") && insights.stdout.includes("wrote"), "terminal insights summarize behavior and report the HTML path");
-      const htmlPath = join(state.project, ".gradient", "insights.html");
-      assertion(await pathExists(htmlPath), "self-contained insights HTML is written");
-      assertion((await readFile(htmlPath, "utf8")).includes("<!doctype html>"), "insights artifact is HTML");
-    }, ["interactive-review"]);
+    await scenario("insights", "Render the composed report from real state", "reporting", async ({ assertion, equal }) => {
+      const report = await runCli([]);
+      equal(report.exitCode, 0, "the bare report succeeds");
+      assertion(report.stdout.includes("installed") && report.stdout.includes("use(s)"),
+        "the report composes the adoption evidence that `stats` used to print separately");
+      assertion(report.stdout.includes("features:"), "the report states which background features are on");
+      assertion(report.stdout.includes("prompts"), "the report summarizes measured behavior");
+    }, ["apply-flow"]);
 
     await scenario("continuity", "Round-trip continuity hooks, checkpoint, and recap", "runtime", async ({ assertion, equal }) => {
       const on = await runCli(["on", "continuity"]);
@@ -967,23 +1005,50 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       equal(off.exitCode, 0, "continuity disable succeeds");
       const statusOff = await runCli([]);
       assertion(/continuity\s+off/.test(statusOff.stdout), "the report shows continuity off");
+
+      // The scheduled loop: SessionEnd keeps findings current, SessionStart is
+      // where they surface. One consent installs and removes both.
+      const settingsPath = join(state.project, ".claude", "settings.local.json");
+      const optimizeOn = await runCli(["on", "optimize"]);
+      equal(optimizeOn.exitCode, 0, "optimize feature enable succeeds");
+      const withLoop = await readJson(settingsPath);
+      assertion(
+        runsSubcommand(withLoop, "SessionEnd", "session-end") &&
+        runsSubcommand(withLoop, "SessionStart", "session-start"),
+        "both halves of the loop are installed together",
+      );
+      const ended = await runCli(["session-end"]);
+      equal(ended.exitCode, 0, "the SessionEnd hook target exits zero");
+      equal(ended.stdout, "", "the SessionEnd hook target is silent");
+      const endedAgain = await runCli(["session-end"]);
+      equal(endedAgain.exitCode, 0, "a second SessionEnd within the debounce window still exits zero");
+
+      const optimizeOff = await runCli(["off", "optimize"]);
+      equal(optimizeOff.exitCode, 0, "optimize feature disable succeeds");
+      const withoutLoop = await readJson(settingsPath);
+      assertion(
+        !runsSubcommand(withoutLoop, "SessionEnd", "session-end") &&
+        !runsSubcommand(withoutLoop, "SessionStart", "session-start"),
+        "both halves are removed together",
+      );
     }, ["insights"]);
 
     await scenario("board", "Observe live sessions, change-only refresh, and consent cleanup", "runtime", async ({ assertion, equal }) => {
-      const manual = await runCli(["board"]);
-      equal(manual.exitCode, 0, "manual board succeeds without prior consent");
-      assertion(manual.stdout.includes("gradient board — 4 other sessions in this repo"), "manual board discovers both synthetic Claude and Codex sessions");
-      assertion(manual.stdout.includes("• claude") && manual.stdout.includes("• codex"), "manual board identifies both agent families");
-      assertion(manual.stdout.includes("editing: README.md"), "manual board derives bounded edited-file context");
-      assertion(!manual.stdout.includes(SECRET_SENTINEL), "manual board redacts the secret sentinel");
+      // The manual board view folded into the bare report; there is no verb.
+      const manual = await runCli([]);
+      equal(manual.exitCode, 0, "the report renders the board without prior consent");
+      assertion(manual.stdout.includes("other sessions"), "the report discovers the synthetic concurrent sessions");
+      assertion(manual.stdout.includes("claude") && manual.stdout.includes("codex"), "the report identifies both agent families");
+      assertion(manual.stdout.includes("editing: README.md"), "the report derives bounded edited-file context");
+      assertion(!manual.stdout.includes(SECRET_SENTINEL), "the report redacts the secret sentinel");
 
-      const withoutConsent = await runCli(["board", "digest"], {
+      const withoutConsent = await runCli(["hook", "board-digest"], {
         input: JSON.stringify({ session_id: "claude-dogfood-1" }),
       });
       equal(withoutConsent.exitCode, 0, "board digest fails open before consent");
       equal(withoutConsent.stdout, "", "board digest stays silent before consent");
 
-      const on = await runCli(["board", "on"]);
+      const on = await runCli(["on", "board"]);
       equal(on.exitCode, 0, "board enable succeeds");
       const enabledConfig = await readJson(configPath);
       equal(enabledConfig.boardProjects, [await realpath(state.project)], "board consent is isolated to the synthetic repository root");
@@ -995,7 +1060,7 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         "board installs both project hooks",
       );
 
-      const digest = await runCli(["board", "digest"], {
+      const digest = await runCli(["hook", "board-digest"], {
         input: JSON.stringify({ session_id: "claude-dogfood-1" }),
       });
       equal(digest.exitCode, 0, "consented board digest succeeds");
@@ -1007,7 +1072,7 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const seenPath = join(boardDir, "seen", "claude-dogfood-1");
       assertion(await pathExists(seenPath), "board digest records an isolated refresh baseline");
       equal((await stat(seenPath)).mode & 0o077, 0, "board refresh baseline is private");
-      const unchanged = await runCli(["board", "refresh"], {
+      const unchanged = await runCli(["hook", "board-refresh"], {
         input: JSON.stringify({ session_id: "claude-dogfood-1" }),
       });
       equal(unchanged.exitCode, 0, "unchanged board refresh succeeds");
@@ -1029,13 +1094,13 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       equal(boardCommit.exitCode, 0, "main advances after the digest baseline");
       const baseline = await readJson(seenPath);
       await writeJson(seenPath, { ...baseline, checkedAt: Date.now() - 60_000 });
-      const changed = await runCli(["board", "refresh"], {
+      const changed = await runCli(["hook", "board-refresh"], {
         input: JSON.stringify({ session_id: "claude-dogfood-1" }),
       });
       equal(changed.exitCode, 0, "changed board refresh succeeds");
       assertion(changed.stdout.startsWith("board:") && changed.stdout.includes("landed on main"), "changed board refresh emits one actionable delta line");
 
-      const off = await runCli(["board", "off"]);
+      const off = await runCli(["off", "board"]);
       equal(off.exitCode, 0, "board disable succeeds");
       const disabledConfig = await readJson(configPath);
       equal(disabledConfig.boardProjects, [], "board disable revokes repository consent");
@@ -1046,21 +1111,25 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         "board disable removes only its hooks",
       );
       assertion(!(await pathExists(boardDir)), "board disable removes private board state");
-      const staleHook = await runCli(["board", "digest"], {
+      const staleHook = await runCli(["hook", "board-digest"], {
         input: JSON.stringify({ session_id: "claude-dogfood-1" }),
       });
       equal(staleHook.exitCode, 0, "stale board hook remains fail-open after consent removal");
       equal(staleHook.stdout, "", "stale board hook is inert after consent removal");
-      const unknown = await runCli(["board", "sideways"]);
-      equal(unknown.exitCode, 2, "unknown board action is a usage error");
+      const unknown = await runCli(["on", "sideways"]);
+      equal(unknown.exitCode, 2, "an unknown feature is a usage error");
+      assertion(unknown.stdout.includes("unknown feature"), "the usage error names the problem");
     }, ["continuity"]);
 
     await scenario("autopilot", "Exercise autopilot continue, progress, stand-down, and consent removal", "runtime", async ({ assertion, equal }) => {
       await updateConfig({ backend: "claude-cli", targets: ["claude-code", "codex"] });
-      const on = await runCli(["autopilot", "nudge"]);
-      equal(on.exitCode, 0, "autopilot nudge enable succeeds");
-      const statusOn = await runCli(["autopilot", "status"]);
-      assertion(statusOn.stdout.includes("mode: nudge") && statusOn.stdout.includes("project gradient.md pin: pinned"), "autopilot status reports mode and reviewed project context");
+      const on = await runCli(["on", "autopilot"]);
+      equal(on.exitCode, 0, "autopilot enable succeeds");
+      // `autopilot status` was its own verb; its detail block folded into the
+      // report, which is what let the verb go.
+      const statusOn = await runCli([]);
+      assertion(statusOn.stdout.includes("autopilot") && statusOn.stdout.includes("nudge"),
+        "the report shows autopilot's mode when it is on");
 
       const transcript = state.claudeTranscript;
       await writeFile(transcript, `${await readFile(transcript, "utf8")}\n${JSON.stringify({
@@ -1086,19 +1155,21 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const stoodDown = await runCli(["respond"], { input: JSON.stringify(input) });
       equal(stoodDown.exitCode, 0, "respond hook exits zero on stand-down");
       equal(stoodDown.stdout, "", "stand-down keeps hook stdout empty");
-      const statusAfter = await runCli(["autopilot", "status"]);
-      assertion(statusAfter.stdout.includes("deterministic dogfood stand-down"), "autopilot status records the deterministic judge decision");
-      const off = await runCli(["autopilot", "off"]);
+      const statusAfter = await runCli([]);
+      assertion(statusAfter.stdout.includes("deterministic dogfood stand-down"), "the report records the deterministic judge decision");
+      const off = await runCli(["off", "autopilot"]);
       equal(off.exitCode, 0, "autopilot disable succeeds");
-      const statusOff = await runCli(["autopilot", "status"]);
-      assertion(statusOff.stdout.includes("mode: off") && statusOff.stdout.includes("stop hook here: not installed"), "autopilot consent and hook are removed together");
+      const statusOff = await runCli([]);
+      assertion(!statusOff.stdout.includes("stood down"), "the autopilot block disappears once it is off");
+      const settingsOff = await readJson(join(state.project, ".claude", "settings.local.json"));
+      assertion(!runsSubcommand(settingsOff, "Stop", "respond"), "autopilot consent and hook are removed together");
     }, ["board"]);
 
     await scenario("hook-contracts", "Verify notification and malformed hook inputs fail open", "runtime", async ({ assertion, equal }) => {
       const notify = await runCli(["notify"], { input: JSON.stringify({ hook_event_name: "Notification" }) });
       equal(notify.exitCode, 0, "notification hook exits zero without desktop support");
       equal(notify.stdout, "", "notification hook is silent");
-      for (const name of ["recall", "checkpoint", "respond", "board digest", "board refresh"]) {
+      for (const name of ["recall", "checkpoint", "respond", "hook board-digest", "hook board-refresh"]) {
         const result = await runCli(name.split(" "), { input: "{malformed" });
         equal(result.exitCode, 0, `${name} malformed hook input fails open`);
         equal(result.stdout, "", `${name} malformed hook input stays silent`);
@@ -1112,21 +1183,23 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
 
       const savedConfig = await readFile(configPath, "utf8");
       await writeFile(configPath, "{broken", { mode: 0o600 });
-      const corruptConfig = await runCli(["stats"]);
+      const corruptConfig = await runCli(["optimize"]);
       equal(corruptConfig.exitCode, 1, "corrupt config fails closed");
       assertion(corruptConfig.stdout.includes("refusing unreadable gradient config"), "corrupt config refusal is explicit");
       await writeFile(configPath, savedConfig, { mode: 0o600 });
 
       const cachePath = await suggestionsPath();
       await writeFile(cachePath, "{broken", { mode: 0o600 });
-      const corruptCache = await runCli(["review", "--json"]);
+      const corruptCache = await runCli(["optimize", "--json", "--apply", "anything"]);
       equal(corruptCache.exitCode, 0, "corrupt suggestion cache degrades safely");
-      equal(JSON.parse(corruptCache.stdout).suggestions, [], "corrupt cache exposes no suggestions");
+      equal(JSON.parse(corruptCache.stdout).findings.filter(f => f.family === "workflow"), [],
+        "corrupt cache exposes no mined workflow");
 
       await writeFile(cachePath, `[${" ".repeat(5_000_100)}]`, { mode: 0o600 });
-      const oversized = await runCli(["review", "--json"]);
+      const oversized = await runCli(["optimize", "--json", "--apply", "anything"]);
       equal(oversized.exitCode, 0, "oversized suggestion cache degrades safely");
-      equal(JSON.parse(oversized.stdout).suggestions, [], "oversized cache exposes no suggestions");
+      equal(JSON.parse(oversized.stdout).findings.filter(f => f.family === "workflow"), [],
+        "oversized cache exposes no mined workflow");
 
       const outside = join(state.sandbox, "outside-suggestions.json");
       await writeJson(outside, [baseSuggestion("symlinkescape", "symlink-escape", {
@@ -1134,12 +1207,13 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       })]);
       await rm(cachePath, { force: true });
       await symlink(outside, cachePath);
-      const linked = await runCli(["review", "--json"]);
+      const linked = await runCli(["optimize", "--json", "--apply", "symlink-escape"]);
       equal(linked.exitCode, 0, "symlinked suggestion cache is refused without crashing");
-      equal(JSON.parse(linked.stdout).suggestions, [], "symlink target content is not loaded");
+      assertion(!linked.stdout.includes("symlink-escape") || !linked.stdout.includes("must never load"),
+        "symlink target content is not loaded");
       await rm(cachePath, { force: true });
       await seedSuggestions([]);
-    }, ["init", "hook-contracts"]);
+    }, ["setup", "hook-contracts"]);
 
     await scenario("cleanup", "Remove owned artifacts and feature consent without collateral changes", "lifecycle", async ({ assertion, equal }) => {
       const before = await readJson(join(state.project, ".claude", "settings.local.json"));
@@ -1148,6 +1222,12 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const after = await readJson(join(state.project, ".claude", "settings.local.json"));
       assertion(!runsSubcommand(after, "Notification", "notify"), "owned notification hook is removed");
       assertion(JSON.stringify(after).includes("npm run lint") === JSON.stringify(before).includes("npm run lint"), "adjacent reviewed command hook is preserved");
+
+      // Hand-written prose beside gradient's own tagged line. The old
+      // interactive-review scenario happened to leave this behind; writing it
+      // here makes the property the assertion actually tests explicit.
+      const playbookPath = join(state.project, "gradient.md");
+      await writeFile(playbookPath, `${await readFile(playbookPath, "utf8")}\n- Manually reviewed dogfood note.\n`, { mode: 0o644 });
 
       const removedPlaybook = await runCli(["remove", "dogfood-playbook"]);
       equal(removedPlaybook.exitCode, 0, "tagged project-playbook removal succeeds");
@@ -1159,7 +1239,7 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       equal(featureOff.exitCode, 0, "feature consent removal succeeds");
       const finalReport = await runCli([]);
       assertion(/board\s+off/.test(finalReport.stdout), "the report shows the feature consent removed");
-    }, ["artifact-matrix", "interactive-review", "security"]);
+    }, ["artifact-matrix", "apply-flow", "security"]);
 
     await scenario("evidence", "Validate evidence hygiene and private state modes", "evidence", async ({ assertion, equal }) => {
       const approvalPath = join(await projectCacheDir(), "artifact-approvals.json");

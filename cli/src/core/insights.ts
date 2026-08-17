@@ -175,7 +175,7 @@ export function buildCostRows(turns: Turn[], ignore: RegExp[] = []): CostRow[] {
     metric: "pastes",
     ...totals.pastes,
     recoverable: true,
-    line: costLine(totals.pastes.tokens, totals.pastes.prompts, "repeated error paste(s)", "gradient scan"),
+    line: costLine(totals.pastes.tokens, totals.pastes.prompts, "repeated error paste(s)", "gradient optimize"),
   });
   if (totals.nudges.prompts > 0) rows.push({
     metric: "nudges",
@@ -222,7 +222,7 @@ export function buildRecommendations(
   if (metrics.errorPastes > 10) {
     recommendations.push({
       metric: "pastes",
-      line: `${metrics.errorPastes} pasted error dumps — run gradient scan; paste patterns become advisory troubleshooting guides`,
+      line: `${metrics.errorPastes} pasted error dumps — run gradient optimize; paste patterns become advisory troubleshooting guides`,
     });
   }
   if (metrics.modelSwitches > 10 || metrics.effortSwitches > 10) {
@@ -247,46 +247,4 @@ export function escapeHtml(text: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-}
-
-export function renderInsightsHtml(report: {
-  label: string;
-  avoided: number;
-  metrics: InsightsMetrics;
-  recommendations: Recommendation[];
-  costs?: CostRow[];
-  toolActivity?: ToolActivityMetrics;
-}): string {
-  const metrics = report.metrics;
-  const rows: Array<[string, number]> = [
-    ["prompts", metrics.prompts],
-    ["nudges", metrics.nudges],
-    ["interrupts", metrics.interrupts],
-    ["context deaths", metrics.continuations],
-    ["compacts", metrics.compacts],
-    ["error pastes", metrics.errorPastes],
-    ["model switches", metrics.modelSwitches],
-    ["effort switches", metrics.effortSwitches],
-    ...(report.toolActivity ? [
-      ["in-session failure loops", report.toolActivity.failureLoops] as [string, number],
-      ["post-edit rituals", report.toolActivity.postEditRituals] as [string, number],
-    ] : []),
-  ];
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>gradient insights</title>
-<style>
-  body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#1a1a1a}
-  @media (prefers-color-scheme:dark){body{background:#111;color:#eee}}
-  h1{font-size:18px}.label{opacity:.65}
-  dl{display:grid;grid-template-columns:auto 1fr;gap:4px 16px}
-  dt{opacity:.65}dd{margin:0;font-variant-numeric:tabular-nums}
-  ul{padding-left:18px}li{margin:6px 0}
-</style></head><body>
-<h1>gradient insights</h1>
-<p class="label">${escapeHtml(report.label)} · autopilot avoided ${report.avoided} nudge(s)</p>
-<dl>${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${value}</dd>`).join("")}</dl>
-${report.costs?.length ? `<h1>cost of unautomated habits</h1>
-<ul>${report.costs.map(cost => `<li>${escapeHtml(cost.line)}</li>`).join("")}</ul>` : ""}
-<h1>next</h1>
-<ul>${report.recommendations.map(recommendation => `<li>${escapeHtml(recommendation.line)}</li>`).join("")}</ul>
-</body></html>\n`;
 }

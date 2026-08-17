@@ -12,8 +12,8 @@ artifacts/
 
 # Claude Code state. The legacy command target and locally installed hooks are
 # per-developer artifacts. Skills and rules are intentionally not ignored so a
-# user can choose to review and share them; `gradient bundle` is the explicit
-# team-distribution path.
+# user can choose to review and share them: committing them is how a team
+# distributes what gradient proposed.
 .claude/worktrees/
 .claude/settings.json
 .claude/settings.local.json

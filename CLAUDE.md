@@ -2,7 +2,11 @@
 
 ## Project infrastructure
 
-- **This repo (`elliot-ylambda/gradient`)** — the gradient CLI. `cli/` publishes to npm as **`gradient.md`** (the bin stays `gradient`, so `npx gradient.md scan` runs the `gradient` command). Specs and implementation plans live in `docs/superpowers/`.
+- **This repo (`elliot-ylambda/gradient`)** — gradient itself. It is **published to no package registry**: it ships as files in this repository, in two shapes that both carry the same runner.
+  - `plugin/` — the Claude Code plugin, installed with `/plugin marketplace add elliot-ylambda/gradient`. Its three `SKILL.md` files are the **authored source**.
+  - `skills/gradient-*` — the copy-install skills for Codex, **generated** from `plugin/skills/` by `cli/scripts/skill-render.mjs`. Never hand-edit them; run `make artifacts`.
+  - `cli/` — TypeScript source only, built into `plugin/bin/gradient.mjs` and copied into each skill directory. `cli/package.json` is `private`.
+  - Specs and implementation plans live in `docs/superpowers/`.
 - **`elliot-ylambda/gradient-web` (private repo)** — the marketing site at https://gradient.md. Next.js on Vercel; pushing its `main` deploys. When CLI features or copy change, keep the site's hero and feature grid in sync with the shipped `gradient` help output.
 - **CI**: `.github/workflows/ci.yml`. Dependabot is enabled; keep the `@types/node` major pinned to the `engines` floor in `cli/package.json` (types must not exceed the oldest supported Node).
 
@@ -10,24 +14,27 @@
 
 A release is not complete until both steps are done and verified:
 
-1. `make publish` — from a clean checkout of origin/main's tip: publishes `cli/`
-   to npm, pushes the `v<version>` tag, and creates the GitHub release with the
-   exact registry tarball attached. Guarded (npm/gh auth, clean tree, HEAD must
-   equal origin/main, version not already fully released) and convergent —
-   rerun it to finish a partially completed release.
+1. `make publish` — from a clean checkout of origin/main's tip: rebuilds the
+   artifacts, pushes the `v<version>` tag, and creates the GitHub release with
+   `gradient-skills.tar.gz` attached (the asset name is version-free so
+   `/releases/latest/download/` resolves). Guarded (gh auth, clean tree — which
+   also catches a stale committed bundle — HEAD must equal origin/main, version
+   not already released) and convergent: rerun it to finish a partial release.
+   Plugin users track the repository, so their install needs no release at all.
 2. Update the version and any changed feature copy in the private `gradient-web`
    repository and push its `main` (deploys the site).
 
-Then run `make release-check` — it verifies npm, the GitHub release, and
-https://gradient.md all report `cli/package.json`'s version.
+Then run `make release-check` — it verifies the GitHub release and
+https://gradient.md both report `cli/package.json`'s version.
 
 ## Make targets
 
 - `make test` — run the CLI suite (vitest, from `cli/`)
 - `make build` — compile `cli/` to `dist/`
-- `make publish-dry` — preview exactly what `make publish` would ship
-- `make publish` — guarded npm publish + version tag + GitHub release (see Releasing)
-- `make release-check` — verify npm, GitHub, and the website agree on the version
+- `make artifacts` — rebuild `plugin/bin/gradient.mjs` and the three `skills/gradient-*` directories
+- `make publish-dry` — rebuild, then fail if any committed artifact is out of date
+- `make publish` — guarded version tag + GitHub release (see Releasing)
+- `make release-check` — verify GitHub and the website agree on the version
 
 ## Housekeeping
 

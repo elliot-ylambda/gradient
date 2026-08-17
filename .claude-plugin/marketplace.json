@@ -1,12 +1,14 @@
 {
   "name": "gradient",
-  "description": "Turn repeated Claude Code workflows into reviewed, reusable automations.",
-  "owner": { "name": "ylambda" },
+  "description": "Keep your Claude Code and Codex setup current, from your own history.",
+  "owner": {
+    "name": "ylambda"
+  },
   "plugins": [
     {
       "name": "gradient",
       "source": "./plugin",
-      "description": "Turn the prompts you keep retyping into Claude Code automations, mined from your own history."
+      "description": "One command that reads how you actually work and proposes the changes: skills to create or retire, instructions the repo has outgrown, and the bridge that makes one setup serve both assistants."
     }
   ]
 }

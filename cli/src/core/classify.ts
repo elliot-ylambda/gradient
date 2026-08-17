@@ -1,5 +1,5 @@
 import type { Candidate, CommandEvent, Suggestion } from "./types.js";
-import { idFor } from "./detect.js";
+import { idFor } from "./propose.js";
 import { commandKey } from "./command.js";
 import { estMinutesSavedPerMonth } from "./leverage.js";
 import { spanDays } from "./temporal.js";

@@ -7,6 +7,7 @@ import { insights, type InsightsReport } from "./insights.js";
 import { loadSuggestions } from "./apply.js";
 import { boardShow } from "./board.js";
 import { continuityStatus } from "./continuity.js";
+import { autopilotStatus, type AutopilotStatus } from "./autopilot.js";
 import { isMeasured } from "../core/classify.js";
 
 /** How many pending suggestions the bare report shows before deferring to scan. */
@@ -25,6 +26,10 @@ export interface Report {
   features: FeatureStatus[];
   /** Rendered board digest, or null when this is not a git repository. */
   board: string | null;
+  /** Mode, budget, clamps, and recent decisions — but only when autopilot is on
+   *  here. It is the one feature whose state is too specific for a one-line
+   *  row, and the reason it no longer needs a verb of its own. */
+  autopilot: AutopilotStatus | null;
 }
 
 export interface ReportDeps {
@@ -78,7 +83,19 @@ export async function buildReport(projectDir: string, deps: ReportDeps = {}): Pr
       home: deps.home,
       ...(deps.selfSessionId ? { selfSessionId: deps.selfSessionId } : {}),
     }).catch(() => null),
+    autopilot: await autopilotDetail(projectDir, deps.home),
   };
+}
+
+/** Autopilot's own status, but only when it is on for this project. Off, it is
+ *  one word in the feature row and a block would be noise. */
+async function autopilotDetail(projectDir: string, home?: string): Promise<AutopilotStatus | null> {
+  try {
+    const status = await autopilotStatus(projectDir, { home });
+    return status.mode === "off" && status.effectiveMode === "off" ? null : status;
+  } catch {
+    return null;
+  }
 }
 
 async function featureStatus(

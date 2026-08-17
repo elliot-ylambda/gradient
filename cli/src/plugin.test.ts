@@ -74,9 +74,9 @@ function frontmatter(skill: string): Record<string, string> {
 }
 
 describe("plugin skills", () => {
-  const SKILLS = ["features", "report", "scan"];
+  const SKILLS = ["features", "optimize", "report"];
 
-  it("mirrors the CLI's surface: the report, scan, and the consent verb", () => {
+  it("mirrors the CLI's surface: the report, optimize, and the consent verb", () => {
     expect(readdirSync(join(pluginDir, "skills")).sort()).toEqual(SKILLS);
   });
 
@@ -86,7 +86,7 @@ describe("plugin skills", () => {
       const body = readFileSync(join(pluginDir, "skills", s, "SKILL.md"), "utf8");
       expect(body).toContain('node "${CLAUDE_PLUGIN_ROOT}/bin/gradient.mjs"');
       // No PATH fallback: the plugin's own bundle is the only gradient it runs.
-      expect(body).not.toMatch(/(^|[^/])\bgradient (scan|apply|remove|init|on|off)\b/);
+      expect(body).not.toMatch(/(^|[^/])\bgradient (optimize|remove|on|off)\b/);
     }
   });
 
@@ -94,7 +94,7 @@ describe("plugin skills", () => {
   // afterwards, so it stays the user's decision to make.
   it("only the consent verb is user-invocation-only", () => {
     expect(frontmatter("features")["disable-model-invocation"]).toBe("true");
-    for (const s of ["report", "scan"]) {
+    for (const s of ["report", "optimize"]) {
       expect(frontmatter(s)["disable-model-invocation"]).toBeUndefined();
     }
   });
@@ -109,14 +109,28 @@ describe("plugin skills", () => {
 
   it("names every feature the consent verb can toggle", () => {
     const body = readFileSync(join(pluginDir, "skills", "features", "SKILL.md"), "utf8");
-    for (const feature of ["continuity", "autopilot", "board", "session-scan"]) {
+    for (const feature of ["continuity", "autopilot", "board", "optimize"]) {
       expect(body).toContain(feature);
     }
   });
 
-  it("describes reviewed hooks as installed settings, not printed patches", () => {
-    const body = readFileSync(join(pluginDir, "skills", "scan", "SKILL.md"), "utf8");
-    expect(body).toContain("local settings path");
-    expect(body).not.toContain("hook patches");
+  // The plugin's skills must not advertise a verb the bundled CLI does not have.
+  it("names no verb this release deleted", () => {
+    for (const s of SKILLS) {
+      const body = readFileSync(join(pluginDir, "skills", s, "SKILL.md"), "utf8");
+      for (const gone of ["gradient.mjs\" scan", "gradient.mjs\" apply", "gradient.mjs\" init",
+                          "gradient.mjs\" review", "gradient.mjs\" bundle", "gradient.mjs\" stats",
+                          "gradient.mjs\" autopilot"]) {
+        expect(body, `${s} names ${gone}`).not.toContain(gone);
+      }
+    }
+  });
+
+  it("tells the optimize skill to check current guidance before repeating it", () => {
+    const body = readFileSync(join(pluginDir, "skills", "optimize", "SKILL.md"), "utf8");
+    expect(body).toContain("optimize --json");
+    expect(body).toContain("--undo");
+    expect(body).toMatch(/documentation/i);
+    expect(body).toContain("Never apply without an explicit choice");
   });
 });

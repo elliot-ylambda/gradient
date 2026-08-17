@@ -16,7 +16,7 @@ import {
   loadArtifactApprovals,
   revokeArtifactApproval,
 } from "../core/approvals.js";
-import { entryTag, removeTaggedLine } from "../core/playbook-splice.js";
+import { SHARED_FILE_HEADING, dropEmptyHeading, entryTag, removeTaggedLine } from "../core/playbook-splice.js";
 import { parseProjectPlaybook, savePlaybookPin } from "../core/playbook.js";
 
 interface HookTuple {
@@ -32,6 +32,8 @@ interface HookTuple {
 const LEGACY_GRADIENT_HOOKS: readonly HookTuple[] = [
   { event: "Stop", command: "gradient respond" },
   { event: "PreCompact", command: "gradient checkpoint" },
+  // Historical spellings: these are what older releases actually wrote into
+  // settings, so they stay here to be cleaned up even though the verb is gone.
   { event: "SessionStart", command: "gradient scan" },
   { event: "SessionStart", command: "gradient scan --detach" },
   { event: "SessionStart", command: "gradient session-start" },
@@ -58,8 +60,13 @@ export async function remove(
 ): Promise<boolean> {
   const entries = (await loadManifest(projectDir)).filter(entry => entry.name === name);
   if (entries.length === 0) return false;
-  const playbookEntries = entries.filter(entry => entry.type === "playbook-entry");
-  const fileEntries = entries.filter(entry => entry.type !== "playbook-entry");
+  // Both of these live as one tagged line inside a file gradient does not own,
+  // so removal splices that line out. Letting either fall through to the
+  // unlink path below would delete the user's whole gradient.md or AGENTS.md.
+  const splicedEntries = entries.filter(
+    entry => entry.type === "playbook-entry" || entry.type === "block-rule");
+  const fileEntries = entries.filter(
+    entry => entry.type !== "playbook-entry" && entry.type !== "block-rule");
 
   const existing: Array<{ path: string; skill: boolean }> = [];
   let approvals: Awaited<ReturnType<typeof loadArtifactApprovals>> | undefined;
@@ -88,13 +95,14 @@ export async function remove(
     }
   }
 
-  for (const entry of playbookEntries) {
+  for (const entry of splicedEntries) {
     const path = expectedArtifactPath(projectDir, entry);
+    if (!path) continue;
     await assertNoSymlinkPath(projectDir, path, { includeTarget: false });
     try {
       const content = await safeReadFile(projectDir, path, { maxBytes: 256_000 });
       if (!content.includes(entryTag(entry.suggestionId))) {
-        throw new Error(`refusing to remove playbook entry without its provenance tag: ${path}`);
+        throw new Error(`refusing to edit ${path}: it does not carry this entry's provenance tag`);
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -108,15 +116,22 @@ export async function remove(
       try { await rmdir(dirname(artifact.path)); } catch { /* non-empty or already gone */ }
     }
   }
-  // Playbook entries live inside the committed gradient.md: delete exactly
-  // the tagged line, never the file, and re-pin (removal is a local consent act).
-  for (const entry of playbookEntries) {
+  // Delete exactly the tagged line, never the file. A playbook entry re-pins
+  // afterwards (removal is a local consent act); a block-rule also drops the
+  // `## gradient` heading once its last entry is gone, so an emptied section
+  // does not sit in the user's AGENTS.md forever.
+  for (const entry of splicedEntries) {
     const path = expectedArtifactPath(projectDir, entry);
+    if (!path) continue;
     try {
       const content = await safeReadFile(projectDir, path, { maxBytes: 256_000 });
-      const next = removeTaggedLine(content, entry.suggestionId);
-      if (next !== null) {
-        await safeWriteFile(projectDir, path, next, { mode: 0o644 });
+      const spliced = removeTaggedLine(content, entry.suggestionId);
+      if (spliced === null) continue;
+      const next = entry.type === "block-rule"
+        ? dropEmptyHeading(spliced, SHARED_FILE_HEADING)
+        : spliced;
+      await safeWriteFile(projectDir, path, next, { mode: 0o644 });
+      if (entry.type === "playbook-entry") {
         await savePlaybookPin(projectDir, parseProjectPlaybook(next).prose, opts.home);
       }
     } catch (error) {
