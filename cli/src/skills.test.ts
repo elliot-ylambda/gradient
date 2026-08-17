@@ -47,7 +47,12 @@ describe("the copy-installed Codex skills", () => {
   it("invokes the runner in its own directory, and never a plugin variable Codex cannot expand", () => {
     for (const name of SKILLS) {
       const body = read(join(codexDir(name), "SKILL.md"));
-      expect(body).toContain(`node "$HOME/.agents/skills/${codexName(name)}/bin/gradient.mjs"`);
+      // Asks where it is rather than assuming: `$skill-installer` writes to
+      // $CODEX_HOME/skills, a hand copy goes to ~/.agents/skills, and Codex
+      // reads both. Hardcoding either is broken for half its users.
+      expect(body).toContain(`~/.codex/skills/${codexName(name)}/bin/gradient.mjs`);
+      expect(body).toContain(`~/.agents/skills/${codexName(name)}/bin/gradient.mjs`);
+      expect(body).not.toContain("$HOME/.agents/skills");
       expect(body).not.toContain("CLAUDE_PLUGIN_ROOT");
       // No PATH fallback: nothing installs a `gradient` command any more.
       expect(body).not.toMatch(/(^|[^/])\bgradient (optimize|remove|on|off)\b/);

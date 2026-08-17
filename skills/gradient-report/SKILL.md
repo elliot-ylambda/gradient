@@ -6,7 +6,7 @@ description: Show how the user actually works — what their habits cost, which 
 Run the bundled gradient CLI with no arguments. It is read-only, needs no prior
 scan, and answers all of those questions at once:
 
-    node "$HOME/.agents/skills/gradient-report/bin/gradient.mjs"
+    node "$(ls ~/.codex/skills/gradient-report/bin/gradient.mjs ~/.agents/skills/gradient-report/bin/gradient.mjs 2>/dev/null | head -1)"
 
 Lead with what it says. In particular:
 

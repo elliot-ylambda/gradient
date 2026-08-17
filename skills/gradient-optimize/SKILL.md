@@ -8,7 +8,7 @@ no API key. It computes what is checkable. You bring judgment and a connection.
 
 1. Get the findings:
 
-       node "$HOME/.agents/skills/gradient-optimize/bin/gradient.mjs" optimize --json
+       node "$(ls ~/.codex/skills/gradient-optimize/bin/gradient.mjs ~/.agents/skills/gradient-optimize/bin/gradient.mjs 2>/dev/null | head -1)" optimize --json
 
    If it errors asking which assistants to optimize for, ask the user — Claude
    Code, Codex, or both — and rerun with `--target <answer>`. Asked once, then
@@ -32,11 +32,11 @@ no API key. It computes what is checkable. You bring judgment and a connection.
 
 5. Apply exactly what they approved, and record what they rejected:
 
-       node "$HOME/.agents/skills/gradient-optimize/bin/gradient.mjs" optimize --apply <id>,<id> --deny <id>
+       node "$(ls ~/.codex/skills/gradient-optimize/bin/gradient.mjs ~/.agents/skills/gradient-optimize/bin/gradient.mjs 2>/dev/null | head -1)" optimize --apply <id>,<id> --deny <id>
 
 6. Report what changed, and that the run can be reversed:
 
-       node "$HOME/.agents/skills/gradient-optimize/bin/gradient.mjs" optimize --undo <runId>
+       node "$(ls ~/.codex/skills/gradient-optimize/bin/gradient.mjs ~/.agents/skills/gradient-optimize/bin/gradient.mjs 2>/dev/null | head -1)" optimize --undo <runId>
 
 gradient never edits Claude Code's auto memory and never deletes a file it did
 not generate. If a finding seems to say otherwise, stop and say so.

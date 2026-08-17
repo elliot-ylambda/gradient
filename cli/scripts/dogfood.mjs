@@ -638,13 +638,15 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       // Exactly what the README tells a user to do, and nothing else: no
       // package manager, no PATH entry, no installer to fix anything up
       // afterwards. What is committed is what runs.
+      // Where `$skill-installer` puts them — the installer the official
+      // openai/skills catalog documents.
       for (const name of SKILLS) {
         await cp(join(repoRoot, "skills", codexName(name)),
-          join(state.home, ".agents", "skills", codexName(name)), { recursive: true });
+          join(state.home, ".codex", "skills", codexName(name)), { recursive: true });
       }
       await cp(join(repoRoot, "plugin"), state.pluginRoot, { recursive: true });
 
-      state.cliBin = join(state.home, ".agents", "skills", "gradient-optimize", "bin", "gradient.mjs");
+      state.cliBin = join(state.home, ".codex", "skills", "gradient-optimize", "bin", "gradient.mjs");
       state.pluginBin = join(state.pluginRoot, "bin", "gradient.mjs");
       for (const [label, path] of [["skill", state.cliBin], ["plugin", state.pluginBin]]) {
         assertion(await pathExists(path), `the copied ${label} carries its runner`);
@@ -720,9 +722,9 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const shapes = [
         ...SKILLS.map(name => ({
           label: `codex ${codexName(name)}`,
-          body: join(state.home, ".agents", "skills", codexName(name), "SKILL.md"),
-          // The copied skill names its own location as "$HOME/.agents/skills/…",
-          // so HOME here is the home it was installed into. The harness isolates
+          body: join(state.home, ".codex", "skills", codexName(name), "SKILL.md"),
+          // The copied skill resolves its runner under the home it was
+          // installed into, so HOME here is that home. The harness isolates
           // gradient's state with GRADIENT_HOME and leaves HOME real, which for
           // this one proof would point at the developer's own machine.
           env: { ...state.productEnv, HOME: state.home },
@@ -735,7 +737,7 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       ];
       for (const shape of shapes) {
         const body = await readFile(shape.body, "utf8");
-        const runner = /(node "[^"]*gradient\.mjs")/.exec(body);
+        const runner = /(node "[^"]*gradient\.mjs[^"]*")/.exec(body);
         assertion(runner !== null, `${shape.label} names a concrete command to run`);
         const proof = await command(
           `${runner[1]} --version`,
@@ -747,6 +749,21 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         equal(proof.stdout.trim(), state.package.version, `${shape.label}'s command is this version`);
         assertion(!/npx|npm /.test(body), `${shape.label} tells no one to reach for a package manager`);
       }
+
+      // The same command has to find a hand copy too. Codex reads both roots,
+      // and a skill that resolves in only the one it happened to be installed
+      // into is the same silent break, one directory over.
+      const handCopy = join(state.sandbox, "hand-copy-home");
+      await cp(join(repoRoot, "skills", codexName("report")),
+        join(handCopy, ".agents", "skills", codexName("report")), { recursive: true });
+      const body = await readFile(join(handCopy, ".agents", "skills", codexName("report"), "SKILL.md"), "utf8");
+      const runner = /(node "[^"]*gradient\.mjs[^"]*")/.exec(body)[1];
+      const elsewhere = await command(
+        `${runner} --version`, "/bin/sh", ["-c", `${runner} --version`],
+        { cwd: state.project, env: { ...state.productEnv, HOME: handCopy } },
+      );
+      equal(elsewhere.stdout.trim(), state.package.version,
+        "the same command resolves a hand copy under ~/.agents/skills");
 
       // Non-interactive with no configuration must never guess.
       await updateConfig({ targets: undefined });

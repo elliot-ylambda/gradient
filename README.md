@@ -35,45 +35,52 @@ you, and the only thing gradient claims.
 
 ## Install
 
-No package manager, no PATH entry, nothing global. gradient ships as files you
-add the way you add any other plugin or skill, and each carries its own runner —
-so the only requirement is Node.
+Each product's own installer, and nothing else — no package manager, no PATH
+entry, nothing global. The only requirement is Node.
 
-**Claude Code** — the plugin:
+**Claude Code** — the plugin, from this repository as a marketplace:
 
 ```
 /plugin marketplace add elliot-ylambda/gradient
-/plugin install gradient
+/plugin install gradient@gradient
 ```
 
-**Codex** — copy the skill directories into `~/.agents/skills`:
+Same thing from a terminal, if you prefer: `claude plugin marketplace add
+elliot-ylambda/gradient` then `claude plugin install gradient@gradient`.
+
+**Codex** — the skills, through the built-in installer:
+
+```
+$skill-installer install gradient-optimize, gradient-report and gradient-features from elliot-ylambda/gradient
+```
+
+Either way you get the same three skills, and the same runner byte for byte:
+
+| | Claude Code | Codex |
+|---|---|---|
+| `optimize` | `/gradient:optimize` | `$gradient-optimize` |
+| the report | `/gradient:report` | `$gradient-report` |
+| `on`/`off` | `/gradient:features` | `$gradient-features` |
+
+Claude Code namespaces a plugin's skills for you; the Codex copies carry the
+`gradient-` prefix themselves, because skills there share one flat namespace and
+a skill called `optimize` would be a landgrab.
+
+<details>
+<summary>Installing by hand, without either installer</summary>
+
+Each skill directory is self-contained — a `SKILL.md` plus the single-file
+runner it invokes — so a copy is a complete install. Codex reads both
+`~/.codex/skills` and `~/.agents/skills`, and the skills resolve their runner in
+either:
 
 ```bash
-mkdir -p ~/.agents/skills && curl -fsSL \
+mkdir -p ~/.codex/skills && curl -fsSL \
   https://github.com/elliot-ylambda/gradient/releases/latest/download/gradient-skills.tar.gz \
-  | tar -xz -C ~/.agents/skills
+  | tar -xz -C ~/.codex/skills
 ```
 
-or, from a clone you can read first:
-
-```bash
-git clone --depth 1 https://github.com/elliot-ylambda/gradient
-cp -R gradient/skills/gradient-* ~/.agents/skills/
-```
-
-Either way you end up with three self-contained skills:
-
-```
-~/.agents/skills/
-├── gradient-optimize/   SKILL.md + bin/gradient.mjs
-├── gradient-report/     SKILL.md + bin/gradient.mjs
-└── gradient-features/   SKILL.md + bin/gradient.mjs
-```
-
-Both assistants get the same three skills and the same runner, byte for byte.
-Claude Code namespaces the plugin's copies for you (`gradient:optimize`); the
-copied ones carry the prefix themselves, because `~/.agents/skills` is a flat,
-shared namespace and a skill called `optimize` there would be a landgrab.
+</details>
 
 Installing runs nothing on its own. Every automation stays opt-in.
 
@@ -88,8 +95,8 @@ Installing runs nothing on its own. Every automation stays opt-in.
 
 Ask your assistant to optimize your setup and the skill drives all of this. To
 drive it yourself, run the same runner the skill does — `G` below is
-`~/.agents/skills/gradient-optimize/bin/gradient.mjs`, or `bin/gradient.mjs`
-inside the installed plugin:
+the runner the installed skill names — `bin/gradient.mjs` inside the plugin,
+or under `~/.codex/skills/gradient-optimize/` where Codex put it:
 
 ```bash
 node $G optimize                      # propose

@@ -3,7 +3,7 @@
 The local-first engine behind the gradient skills. This directory is source, not
 a package: it is **published nowhere**, and is built into the single-file runner
 that both shipping shapes carry — the Claude Code plugin, and the three skill
-directories a Codex user copies into `~/.agents/skills`. See the
+directories Codex's `$skill-installer` puts in `~/.codex/skills`. See the
 [root README](../README.md) for how to install either.
 
 That is the whole distribution story. There is no npm package, no `npx`, and
@@ -13,7 +13,7 @@ keep current.
 
 ```bash
 # `G` is the runner the installed skill names — bin/gradient.mjs inside the
-# plugin, or ~/.agents/skills/gradient-optimize/bin/gradient.mjs.
+# plugin, or ~/.codex/skills/gradient-optimize/bin/gradient.mjs.
 node $G optimize      # find what recurs and what has gone stale, then propose
 node $G               # the report: what it cost, what is installed, what else is running
 node $G remove <name> # uninstall a generated artifact
