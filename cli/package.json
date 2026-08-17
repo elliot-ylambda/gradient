@@ -1,6 +1,6 @@
 {
   "name": "gradient.md",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "description": "Keep your Claude Code and Codex setup honest: mine your own history, check the configuration they load, and apply the changes you approve.",
   "homepage": "https://gradient.md",
