@@ -129,3 +129,41 @@ describe("findStaleRefs", () => {
     ].join("\n")), dir)).toEqual([]);
   });
 });
+
+describe("a path inside a backticked command", () => {
+  /**
+   * `isPathShaped` rejects anything with a space, and a backticked span is
+   * pushed whole so `npm run build` can be matched as a script. Between those
+   * two, "Run `node scripts/build.mjs` first" — one of the commonest shapes a
+   * CLAUDE.md takes — was invisible to the one family whose job is keeping
+   * those lines true. Found by pointing gradient at a repository that had
+   * deleted exactly such a script.
+   */
+  it("is extracted, so a deleted script in a command is still caught", () => {
+    expect(extractRefs("Run `node scripts/build-everything.mjs` before every commit."))
+      .toContain("scripts/build-everything.mjs");
+  });
+
+  it("still extracts the whole span, so script references keep working", () => {
+    expect(extractRefs("Run `npm run build` first")).toContain("npm run build");
+  });
+
+  // Precision is the point of this family: a false positive proposes deleting a
+  // correct instruction. These look like paths and are not.
+  it("does not turn command arguments into references to files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-stale-"));
+    for (const text of [
+      "Check `git log --oneline origin/main` before merging.",
+      "Normalise with `sed s/foo/bar/ input.txt`.",
+      "Compare against `origin/release-2.0` only.",
+    ]) {
+      const refs = extractRefs(text);
+      const concrete = await findStaleRefs(
+        [{ text, source: { scope: "project", path: join(dir, "CLAUDE.md"), assistant: "claude-code" } }] as never,
+        dir,
+      );
+      expect({ text, flagged: concrete.map(r => r.ref) }).toEqual({ text, flagged: [] });
+      expect(refs.length).toBeGreaterThan(0);
+    }
+  });
+});

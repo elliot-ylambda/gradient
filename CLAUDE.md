@@ -15,9 +15,9 @@
 A release is not complete until both steps are done and verified:
 
 1. `make publish` — from a clean checkout of origin/main's tip: rebuilds the
-   artifacts, pushes the `v<version>` tag, and creates the GitHub release with
-   `gradient-skills.tar.gz` attached (the asset name is version-free so
-   `/releases/latest/download/` resolves). Guarded (gh auth, clean tree — which
+   artifacts, pushes the `v<version>` tag, and creates the GitHub release. No
+   asset is attached: both installers read the repository directly, so the tag
+   is the release. Guarded (gh auth, clean tree — which
    also catches a stale committed bundle — HEAD must equal origin/main, version
    not already released) and convergent: rerun it to finish a partial release.
    Plugin users track the repository, so their install needs no release at all.

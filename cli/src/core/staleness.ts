@@ -79,7 +79,24 @@ export function extractRefs(text: string): string[] {
 
   let rest = text;
   for (const match of text.matchAll(/`([^`]+)`/g)) {
-    push(match[1]);
+    const span = match[1];
+    push(span);
+    // A backticked span is pushed whole so `npm run build` can be recognised as
+    // a script reference. When it is a command rather than a bare path, the
+    // path inside it would otherwise never be checked: `isPathShaped` rejects
+    // anything containing a space, so "Run `node scripts/build.mjs` first" —
+    // one of the most common shapes a CLAUDE.md takes — was invisible to the
+    // one family whose job is keeping those lines true.
+    //
+    // Still precise: each token has to look like a path on its own, and
+    // `isConcretePath` then discards the ones that only resemble one
+    // (`origin/main`, a `sed` expression) because their first segment does not
+    // exist in the repository either.
+    if (/\s/.test(span)) {
+      for (const token of span.split(/\s+/)) {
+        if (isPathShaped(token)) push(token);
+      }
+    }
     rest = rest.replace(match[0], " ");
   }
   for (const token of rest.split(/\s+/)) {
@@ -131,7 +148,12 @@ async function exists(path: string): Promise<boolean> {
  * stale reference, and reporting it would cost precision for nothing.
  */
 async function isConcretePath(ref: string, projectDir: string): Promise<boolean> {
-  if (/\.[A-Za-z0-9]{1,8}$/.test(ref)) return true;
+  // An all-digit suffix is a version, not a file extension. `origin/release-2.0`
+  // is path-shaped and ends in ".0", so it read as a missing file — and this
+  // family proposing the deletion of a correct instruction is the one outcome
+  // its precision rules exist to prevent.
+  const extension = /\.([A-Za-z0-9]{1,8})$/.exec(ref)?.[1];
+  if (extension !== undefined && /[A-Za-z]/.test(extension)) return true;
   const root = ref.split("/")[0];
   return root.length > 0 && await exists(join(projectDir, root));
 }

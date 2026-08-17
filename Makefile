@@ -24,10 +24,10 @@ publish-dry: artifacts
 	@v=$$(node -p "require('./$(CLI)/package.json').version"); \
 	echo "would release v$$v: plugin/ + skills/gradient-* (tag v$$v, GitHub release)"
 
-# Release: tag, and publish a GitHub release carrying the skill directories as
-# one tarball so a Codex user can install without cloning. There is no package
-# registry in this path — the Claude Code plugin is served from this repository
-# by the marketplace, and the skills are copied from it.
+# Release: tag, and publish a GitHub release. There is no package registry and
+# no release asset — both installers read this repository directly, so the tag
+# is the release. Claude Code's marketplace serves the plugin from it, and
+# Codex's `$skill-installer` pulls the skill directories from it.
 # Guarded: refuses when gh is unauthenticated, the tree is dirty, HEAD is not
 # origin/main's tip, or the artifacts on disk do not match a fresh build.
 # Convergent: rerunning completes whichever steps a failed run left missing.
@@ -44,12 +44,9 @@ publish: artifacts
 	git rev-parse -q --verify "refs/tags/v$$v" >/dev/null || git tag "v$$v"; \
 	git push origin "v$$v"; \
 	if ! gh release view "v$$v" >/dev/null 2>&1; then \
-		tmp=$$(mktemp -d); \
-		tar -czf "$$tmp/gradient-skills.tar.gz" -C skills gradient-optimize gradient-report gradient-features; \
-		gh release create "v$$v" --title "gradient $$v" --generate-notes "$$tmp/gradient-skills.tar.gz"; \
-		rm -rf "$$tmp"; \
+		gh release create "v$$v" --title "gradient $$v" --generate-notes; \
 	fi; \
-	echo "v$$v released: tag + GitHub release with the skill tarball"; \
+	echo "v$$v released: tag + GitHub release"; \
 	echo "next: update gradient-web, then verify with: make release-check"
 
 # Verify the released version is aligned across GitHub Releases and the
