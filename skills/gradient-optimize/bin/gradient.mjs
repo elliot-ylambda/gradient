@@ -767,7 +767,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.8.1" : require2("../package.json").version;
+    VERSION = true ? "0.8.2" : require2("../package.json").version;
     BUNDLED = true;
   }
 });
@@ -792,6 +792,11 @@ function ownBinPath() {
   }
   return null;
 }
+function runnerWord(scriptPath) {
+  const versioned = VERSIONED_PLUGIN.exec(scriptPath);
+  if (!versioned) return shellQuote(scriptPath);
+  return `"$(ls -d ${shellQuote(versioned[1])}/*${versioned[2]} 2>/dev/null | sort -V | tail -1)"`;
+}
 function gradientCommand(opts = {}) {
   const scriptPath = opts.scriptPath === void 0 ? ownBinPath() : opts.scriptPath;
   if (!scriptPath) {
@@ -799,7 +804,7 @@ function gradientCommand(opts = {}) {
       "cannot locate gradient's own entry point, so any hook written now would never run \u2014 reinstall the gradient plugin or skill"
     );
   }
-  return `${shellQuote(opts.execPath ?? process.execPath)} ${shellQuote(scriptPath)}`;
+  return `${shellQuote(opts.execPath ?? process.execPath)} ${runnerWord(scriptPath)}`;
 }
 function gradientHookCommand(subcommand, opts = {}) {
   return `${gradientCommand(opts)} ${subcommand}`;
@@ -837,12 +842,13 @@ function displayCommand(opts = {}) {
   if (Object.keys(opts).length === 0) displayCache = command;
   return command;
 }
-var LEGACY_PATH_BINARY, displayCache;
+var LEGACY_PATH_BINARY, VERSIONED_PLUGIN, displayCache;
 var init_hookBinary = __esm({
   "src/core/hookBinary.ts"() {
     "use strict";
     init_version();
     LEGACY_PATH_BINARY = "gradient";
+    VERSIONED_PLUGIN = /^(.*[\\/]plugins[\\/]cache[\\/][^\\/]+[\\/][^\\/]+)[\\/][^\\/]+([\\/]bin[\\/]gradient\.mjs)$/;
   }
 });
 

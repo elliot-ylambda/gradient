@@ -55,6 +55,27 @@ function ownBinPath(): string | null {
 }
 
 /**
+ * Claude Code installs a plugin under
+ * `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`, and keeps the
+ * old version directories around. A hook that names this install's absolute
+ * path therefore pins itself to whichever version happened to be current when
+ * the feature was turned on: after an upgrade it silently keeps running the old
+ * build, and once that directory is pruned it stops running at all — with
+ * nowhere to report, which is the failure this module exists to prevent.
+ */
+const VERSIONED_PLUGIN = /^(.*[\\/]plugins[\\/]cache[\\/][^\\/]+[\\/][^\\/]+)[\\/][^\\/]+([\\/]bin[\\/]gradient\.mjs)$/;
+
+/** The shell word naming the runner: a literal path, or — inside a versioned
+ *  plugin cache — an expression picking the newest version at fire time. */
+function runnerWord(scriptPath: string): string {
+  const versioned = VERSIONED_PLUGIN.exec(scriptPath);
+  if (!versioned) return shellQuote(scriptPath);
+  // The base is quoted (a home directory may contain a space) and the glob is
+  // not, so the shell still expands it. `sort -V` orders 0.10 after 0.9.
+  return `"$(ls -d ${shellQuote(versioned[1])}/*${versioned[2]} 2>/dev/null | sort -V | tail -1)"`;
+}
+
+/**
  * The command prefix an installed hook should run.
  *
  * There is exactly one honest answer now: this node, running this install's own
@@ -64,10 +85,8 @@ function ownBinPath(): string | null {
  * coordinate that need not exist for the build doing the pinning, and hooks have
  * nowhere to report a failure.
  *
- * The resolved path is stable across upgrades. Claude Code re-clones a plugin in
- * place at `~/.claude/plugins/cache/<marketplace>/<plugin>`, and a copied skill
- * directory is the user's own. It stops resolving only when gradient is removed,
- * which is when a gradient hook should stop resolving.
+ * A copied skill directory is the user's own and never moves, so it is named
+ * directly. A plugin is versioned, so it is resolved at fire time instead.
  */
 export function gradientCommand(opts: { execPath?: string; scriptPath?: string | null } = {}): string {
   const scriptPath = opts.scriptPath === undefined ? ownBinPath() : opts.scriptPath;
@@ -76,7 +95,7 @@ export function gradientCommand(opts: { execPath?: string; scriptPath?: string |
       "cannot locate gradient's own entry point, so any hook written now would never run — reinstall the gradient plugin or skill",
     );
   }
-  return `${shellQuote(opts.execPath ?? process.execPath)} ${shellQuote(scriptPath)}`;
+  return `${shellQuote(opts.execPath ?? process.execPath)} ${runnerWord(scriptPath)}`;
 }
 
 /** The command an installed hook should run for one gradient subcommand. Every
