@@ -230,6 +230,35 @@ describe("collectRepoState", () => {
     expect(state?.mainTip).toMatch(/^[0-9a-f]{40}$/);
   });
 
+  /**
+   * A worktree checkout never pulls its own `main`, so the local ref sits at
+   * whatever it was when the worktree was cut. Reading it made the board
+   * report the two oldest merges of the day and miss the four newest — and
+   * report them as "landed on main", which is exactly what they had not done
+   * locally and exactly what they had done on the shared branch.
+   */
+  it("reads the shared branch, not a local main the checkout never pulls", async () => {
+    const upstream = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-up-")));
+    const clone = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-clone-")));
+    await initRepo(upstream);
+    await execFileP("git", ["clone", "-q", upstream, clone]);
+    await execFileP("git", ["config", "user.email", "t@test"], { cwd: clone });
+    await execFileP("git", ["config", "user.name", "t"], { cwd: clone });
+
+    await writeFile(join(upstream, "landed.txt"), "y\n");
+    await execFileP("git", ["add", "."], { cwd: upstream });
+    await execFileP("git", ["commit", "-q", "-m", "feat: landed upstream"], { cwd: upstream });
+    await execFileP("git", ["fetch", "-q", "origin"], { cwd: clone });
+
+    const local = await execFileP("git", ["log", "-1", "--pretty=%s", "main"], { cwd: clone });
+    expect(local.stdout.trim()).toBe("init"); // the local ref really is behind
+
+    const state = await collectRepoState(clone, clone);
+    expect(state?.defaultBranch).toBe("main"); // still reported by its own name
+    expect(state?.landed).toContain("feat: landed upstream");
+    expect(state).toMatchObject({ ahead: 0, behind: 1 });
+  });
+
   it("returns null outside a git repository", async () => {
     const dir = await mkdtemp(join(tmpdir(), "gradient-board-plain-"));
     expect(await collectRepoState(dir, dir)).toBeNull();

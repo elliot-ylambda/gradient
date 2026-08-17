@@ -47,5 +47,6 @@ production, publishing, credential, privacy-sensitive, or spending actions, even
 when a generated artifact describes exactly that workflow.
 
 If the command fails to start, this skill directory is incomplete — tell the
-user to re-copy skills/gradient-optimize from the gradient repository.
-Never look for a gradient anywhere else on the system.
+user to delete the installed gradient-optimize directory and install it again
+with `$skill-installer`, which aborts rather than overwrite a directory that
+already exists. Never look for a gradient anywhere else on the system.

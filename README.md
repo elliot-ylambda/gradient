@@ -70,6 +70,17 @@ Each skill directory is self-contained — a `SKILL.md` plus the single-file
 runner it invokes — so there is nothing else to fetch and nothing beyond Node to
 keep current. Installing runs nothing on its own; every automation stays opt-in.
 
+**Updating** is one step in Claude Code and two in Codex, because the two
+installers differ. `claude plugin update gradient@gradient`, then restart —
+hooks resolve the newest installed version when they fire, so one that was
+turned on before the update keeps working. Codex's `$skill-installer` aborts
+rather than overwrite a directory that already exists, so remove the three
+first and then run the install line again:
+
+```bash
+rm -rf ~/.codex/skills/gradient-{optimize,report,features}
+```
+
 ## The four verbs
 
 | | |

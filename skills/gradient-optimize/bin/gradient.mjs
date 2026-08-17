@@ -767,7 +767,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.8.3" : require2("../package.json").version;
+    VERSION = true ? "0.8.4" : require2("../package.json").version;
     BUNDLED = true;
   }
 });
@@ -16093,7 +16093,7 @@ async function canonicalRoot(path5) {
   }
 }
 function encodeProjectDir(cwd) {
-  return cwd.replace(/[\\/]/g, "-").replace(/:/g, "-");
+  return cwd.replace(/[^A-Za-z0-9]/g, "-");
 }
 async function projectRoots(base, projectsRoot, cwd, onRefused) {
   const encoded = encodeProjectDir(cwd);
@@ -16106,13 +16106,13 @@ async function projectRoots(base, projectsRoot, cwd, onRefused) {
     onRefused(error);
     return [exact];
   }
-  const worktreePrefix = `${encoded}--claude-worktrees-`;
+  const worktreePrefixes = [`${encoded}--claude-worktrees-`, `${encoded}--worktrees-`];
   const roots = [];
   let seen = 0;
   for await (const entry of directory) {
     seen += 1;
     if (seen > TRANSCRIPT_DISCOVERY_CAP) break;
-    if (entry.isDirectory() && (entry.name === encoded || entry.name.startsWith(worktreePrefix))) {
+    if (entry.isDirectory() && (entry.name === encoded || worktreePrefixes.some((prefix) => entry.name.startsWith(prefix)))) {
       roots.push(join20(projectsRoot, entry.name));
     }
   }
@@ -16163,9 +16163,13 @@ async function collect(opts) {
   for (const path5 of files) {
     try {
       const metadata = await lstat5(path5);
-      if (!metadata.isFile() || metadata.size > TRANSCRIPT_FILE_BYTES_CAP) continue;
+      if (!metadata.isFile()) continue;
       if (matchesSince(metadata.mtimeMs, opts.sinceDays, now)) {
-        candidates.push({ path: path5, mtimeMs: metadata.mtimeMs, size: metadata.size });
+        candidates.push({
+          path: path5,
+          mtimeMs: metadata.mtimeMs,
+          bytes: Math.min(metadata.size, MAX_TRANSCRIPT_BYTES)
+        });
       }
     } catch {
     }
@@ -16174,21 +16178,21 @@ async function collect(opts) {
   const kept = [];
   let totalBytes = 0;
   for (const candidate of candidates) {
-    if (kept.length >= TRANSCRIPT_FILE_CAP || totalBytes + candidate.size > TRANSCRIPT_TOTAL_BYTES_CAP) break;
+    if (kept.length >= TRANSCRIPT_FILE_CAP || totalBytes + candidate.bytes > TRANSCRIPT_TOTAL_BYTES_CAP) break;
     kept.push(candidate.path);
-    totalBytes += candidate.size;
+    totalBytes += candidate.bytes;
   }
   return kept;
 }
-var TRANSCRIPT_DISCOVERY_CAP, TRANSCRIPT_FILE_CAP, TRANSCRIPT_TOTAL_BYTES_CAP, TRANSCRIPT_FILE_BYTES_CAP, TRANSCRIPT_TREE_DEPTH_CAP;
+var TRANSCRIPT_DISCOVERY_CAP, TRANSCRIPT_FILE_CAP, TRANSCRIPT_TOTAL_BYTES_CAP, TRANSCRIPT_TREE_DEPTH_CAP;
 var init_collect = __esm({
   "src/core/collect.ts"() {
     "use strict";
     init_safeFs();
+    init_parse();
     TRANSCRIPT_DISCOVERY_CAP = 1e4;
     TRANSCRIPT_FILE_CAP = 5e3;
     TRANSCRIPT_TOTAL_BYTES_CAP = 512 * 1024 * 1024;
-    TRANSCRIPT_FILE_BYTES_CAP = 8e6;
     TRANSCRIPT_TREE_DEPTH_CAP = 20;
   }
 });
@@ -16501,17 +16505,28 @@ function landedLine(subject) {
   if (merge) return `PR #${merge[1]} ${redact(merge[2]).slice(0, 80)}`;
   return redact(subject).slice(0, 100);
 }
+async function resolveDefaultBranch(boardRoot) {
+  for (const name of ["main", "master"]) {
+    for (const ref of [`origin/${name}`, name]) {
+      if (await git(["rev-parse", "--verify", "--quiet", ref], boardRoot) !== null) {
+        return { name, ref };
+      }
+    }
+  }
+  return null;
+}
 async function collectRepoState(boardRoot, sessionCwd) {
-  const defaultBranch = await git(["rev-parse", "--verify", "--quiet", "main"], boardRoot) !== null ? "main" : await git(["rev-parse", "--verify", "--quiet", "master"], boardRoot) !== null ? "master" : null;
-  if (!defaultBranch) return null;
-  const mainTip = await git(["rev-parse", defaultBranch], boardRoot) ?? "";
+  const resolved = await resolveDefaultBranch(boardRoot);
+  if (!resolved) return null;
+  const { name: defaultBranch, ref } = resolved;
+  const mainTip = await git(["rev-parse", ref], boardRoot) ?? "";
   const log = await git(
-    ["log", defaultBranch, "--first-parent", "--since=24.hours", "--pretty=format:%s"],
+    ["log", ref, "--first-parent", "--since=24.hours", "--pretty=format:%s"],
     boardRoot
   );
   const landed = (log ? log.split("\n") : []).filter((subject) => subject.length > 0).map(landedLine).slice(0, LANDED_CAP);
   const counts = await git(
-    ["rev-list", "--left-right", "--count", `${defaultBranch}...HEAD`],
+    ["rev-list", "--left-right", "--count", `${ref}...HEAD`],
     sessionCwd
   );
   const parsed = counts ? counts.split(/\s+/).map((part) => Number.parseInt(part, 10)) : [0, 0];
@@ -16785,13 +16800,13 @@ async function setBoard(on, projectDir, opts = {}) {
         projectDir,
         "SessionStart",
         gradientHookCommand(DIGEST_SUB),
-        { replacing: [(cmd) => isGradientHookFor(cmd, DIGEST_SUB)] }
+        { replacing: [isDigestHook] }
       );
       const path6 = await installHook(
         projectDir,
         "UserPromptSubmit",
         gradientHookCommand(REFRESH_SUB),
-        { replacing: [(cmd) => isGradientHookFor(cmd, REFRESH_SUB)] }
+        { replacing: [isRefreshHook] }
       );
       projects.add(root);
       config.boardProjects = [...projects].sort();
@@ -16801,8 +16816,8 @@ async function setBoard(on, projectDir, opts = {}) {
       projects.delete(root);
       config.boardProjects = [...projects].sort();
       await saveConfig(config, opts.home).catch(() => void 0);
-      await removeHook(projectDir, "SessionStart", (cmd) => isGradientHookFor(cmd, DIGEST_SUB)).catch(() => void 0);
-      await removeHook(projectDir, "UserPromptSubmit", (cmd) => isGradientHookFor(cmd, REFRESH_SUB)).catch(() => void 0);
+      await removeHook(projectDir, "SessionStart", isDigestHook).catch(() => void 0);
+      await removeHook(projectDir, "UserPromptSubmit", isRefreshHook).catch(() => void 0);
       throw error;
     }
   }
@@ -16811,8 +16826,8 @@ async function setBoard(on, projectDir, opts = {}) {
   await saveConfig(config, opts.home);
   const userHome = opts.home ?? homedir11();
   await safeRemoveTree(userHome, boardStateDir(root, userHome)).catch(() => void 0);
-  await removeHook(projectDir, "SessionStart", (cmd) => isGradientHookFor(cmd, DIGEST_SUB));
-  const path5 = await removeHook(projectDir, "UserPromptSubmit", (cmd) => isGradientHookFor(cmd, REFRESH_SUB));
+  await removeHook(projectDir, "SessionStart", isDigestHook);
+  const path5 = await removeHook(projectDir, "UserPromptSubmit", isRefreshHook);
   return { on: false, settingsPath: path5 };
 }
 async function boardDigest(input, projectDir, opts = {}) {
@@ -16846,7 +16861,7 @@ async function boardShow(projectDir, opts = {}) {
   if (!state) throw new Error("gradient board requires a git repository");
   return renderDigest(state);
 }
-var DIGEST_SUB, REFRESH_SUB, DIGEST_COMMAND, REFRESH_COMMAND;
+var DIGEST_SUB, REFRESH_SUB, DIGEST_COMMAND, REFRESH_COMMAND, isDigestHook, isRefreshHook;
 var init_board2 = __esm({
   "src/commands/board.ts"() {
     "use strict";
@@ -16855,10 +16870,12 @@ var init_board2 = __esm({
     init_board();
     init_safeFs();
     init_hookBinary();
-    DIGEST_SUB = "board digest";
-    REFRESH_SUB = "board refresh";
+    DIGEST_SUB = "hook board-digest";
+    REFRESH_SUB = "hook board-refresh";
     DIGEST_COMMAND = `gradient ${DIGEST_SUB}`;
     REFRESH_COMMAND = `gradient ${REFRESH_SUB}`;
+    isDigestHook = (command) => isGradientHookFor(command, DIGEST_SUB) || isGradientHookFor(command, "board digest");
+    isRefreshHook = (command) => isGradientHookFor(command, REFRESH_SUB) || isGradientHookFor(command, "board refresh");
   }
 });
 

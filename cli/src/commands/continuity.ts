@@ -5,8 +5,10 @@ import { safeUnlink } from "../core/safeFs.js";
 import { progressPath } from "./checkpoint.js";
 import { gradientHookCommand, isGradientHookFor } from "../core/hookBinary.js";
 
-const CHECKPOINT_SUB = "checkpoint";
-const RECAP_SUB = "recap";
+// Exported so hooks.test.ts can hold every subcommand a feature writes against
+// what the CLI dispatches. The two drifted apart once, silently.
+export const CHECKPOINT_SUB = "checkpoint";
+export const RECAP_SUB = "recap";
 const RECAP_MATCHER = "resume|compact";
 
 export async function setContinuity(

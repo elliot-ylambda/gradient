@@ -58,11 +58,15 @@ export function forCodex(body, name) {
     [/node "\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/gradient\.mjs"/g, runner, true],
     ...CLAUDE_ONLY_KEYS.map(key => [new RegExp(`^${key}:[^\\n]*\\n`, "m"), "", false]),
     // Present only in the two skills that say what a startup failure means.
+    // The Codex wording names the installer, not a copy: `$skill-installer` is
+    // how these get installed, and it refuses an existing destination — so
+    // "reinstall" is two steps there and one step for the plugin.
     [
       /If the command fails to start, the plugin install is broken — tell the user to\nreinstall the gradient plugin\. Never fall back to a PATH-installed gradient\./g,
       `If the command fails to start, this skill directory is incomplete — tell the\n` +
-      `user to re-copy skills/${codexName(name)} from the gradient repository.\n` +
-      `Never look for a gradient anywhere else on the system.`,
+      `user to delete the installed ${codexName(name)} directory and install it again\n` +
+      `with \`$skill-installer\`, which aborts rather than overwrite a directory that\n` +
+      `already exists. Never look for a gradient anywhere else on the system.`,
       false,
     ],
   ];

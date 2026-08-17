@@ -21,6 +21,13 @@ each skill resolves its runner in **either** — one that hardcoded a single roo
 would be silently broken for everyone who used the other, which is exactly how
 this shipped broken once.
 
+The installer aborts rather than overwrite a destination that already exists, so
+updating is a removal and a reinstall, not one command:
+
+```bash
+rm -rf ~/.codex/skills/gradient-{optimize,report,features}
+```
+
 Claude Code users install the same three skills as a plugin instead — see the
 [root README](../README.md).
 
