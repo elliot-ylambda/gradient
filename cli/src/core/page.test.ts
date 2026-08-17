@@ -67,7 +67,11 @@ describe("renderPage", () => {
     expect(html).not.toContain("<img>");
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     // Exactly one script element: the page's own.
-    expect(html.match(/<script/g)).toHaveLength(1);
+    // Case-insensitive, because that is what "exactly one script element"
+    // means: HTML tag names are not case-sensitive, so a check that only sees
+    // lower-case ones is not counting script elements, it is counting a
+    // spelling of them.
+    expect(html.match(/<script/gi)).toHaveLength(1);
   });
 
   it("builds the apply command from ids alone", () => {
@@ -75,7 +79,7 @@ describe("renderPage", () => {
     expect(html).toContain('data-id="a1b2c3d4e5f6"');
     expect(html).toContain("node ~/.agents/skills/gradient-optimize/bin/gradient.mjs optimize");
     // Ids are hex, so nothing user-derived reaches the script.
-    const script = /<script>([\s\S]*)<\/script>/.exec(html)![1];
+    const script = /<script>([\s\S]*?)<\/script>/i.exec(html)![1];
     expect(script).not.toContain("scripts/build.sh");
     expect(script).not.toContain("CLAUDE.md");
   });
