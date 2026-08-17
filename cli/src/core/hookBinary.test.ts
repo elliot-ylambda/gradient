@@ -133,3 +133,39 @@ describe("displayCommand", () => {
       .toBe("/opt/node/bin/node /opt/gradient/bin/gradient.mjs");
   });
 });
+
+describe("a hook installed from a plugin survives the plugin upgrading", () => {
+  const plugin = (version: string) =>
+    `/Users/u/.claude/plugins/cache/gradient/gradient/${version}/bin/gradient.mjs`;
+
+  /**
+   * Claude Code keeps each plugin version in its own directory. Naming this
+   * install's absolute path pins the hook to the version that happened to be
+   * current when the feature was turned on — it then runs a stale build after
+   * an upgrade, and none at all once that directory is pruned.
+   */
+  it("resolves the newest installed version at fire time, not at install time", () => {
+    expect(gradientCommand({ execPath: "/usr/bin/node", scriptPath: plugin("0.8.1") }))
+      .toBe(`/usr/bin/node "$(ls -d /Users/u/.claude/plugins/cache/gradient/gradient/*/bin/gradient.mjs 2>/dev/null | sort -V | tail -1)"`);
+  });
+
+  it("quotes the base but not the glob, so a home directory with a space still expands", () => {
+    const command = gradientCommand({
+      execPath: "/usr/bin/node",
+      scriptPath: "/Users/a b/.claude/plugins/cache/gradient/gradient/0.8.1/bin/gradient.mjs",
+    });
+    expect(command).toContain(`'/Users/a b/.claude/plugins/cache/gradient/gradient'/*/bin/gradient.mjs`);
+  });
+
+  // A copied skill directory is the user's own: no version in the path, nothing
+  // to resolve, and an expression there would be noise.
+  it("names a copied skill's runner directly", () => {
+    expect(gradientCommand({ execPath: "/usr/bin/node", scriptPath: "/Users/u/.codex/skills/gradient-optimize/bin/gradient.mjs" }))
+      .toBe("/usr/bin/node /Users/u/.codex/skills/gradient-optimize/bin/gradient.mjs");
+  });
+
+  it("still matches removal, so `off` can take the hook back out", () => {
+    const command = gradientHookCommand("session-start", { execPath: "/usr/bin/node", scriptPath: plugin("0.8.1") });
+    expect(isGradientHookFor(command, "session-start")).toBe(true);
+  });
+});
