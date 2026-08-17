@@ -20,7 +20,9 @@ repository, in two shapes that carry the same single-file runner:
 - `plugin/` — the Claude Code plugin, added with
   `/plugin marketplace add elliot-ylambda/gradient`.
 - `skills/gradient-optimize`, `skills/gradient-report`, `skills/gradient-features`
-  — copied into `~/.agents/skills` for Codex.
+  — installed into Codex with its built-in `$skill-installer`, which writes to
+  `~/.codex/skills`. Codex also reads `~/.agents/skills`, and each skill
+  resolves its runner in either, so a hand copy works too.
 
 So the gate does not pack anything. It installs both shapes the way the README
 tells a user to, into a disposable home, and drives them from there.
@@ -103,7 +105,7 @@ Result: PASS | FAIL | BLOCKED
 ### Checklist
 
 Below, `G` is the runner the installed skill names — `bin/gradient.mjs` inside
-the plugin, or `~/.agents/skills/gradient-optimize/bin/gradient.mjs`. Prefer
+the plugin, or `~/.codex/skills/gradient-optimize/bin/gradient.mjs`. Prefer
 driving each step by *asking the assistant*, and fall back to typing `node $G`
 only to check something the skill does not surface.
 

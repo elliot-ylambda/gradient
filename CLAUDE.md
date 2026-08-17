@@ -3,8 +3,8 @@
 ## Project infrastructure
 
 - **This repo (`elliot-ylambda/gradient`)** — gradient itself. It is **published to no package registry**: it ships as files in this repository, in two shapes that both carry the same runner.
-  - `plugin/` — the Claude Code plugin, installed with `/plugin marketplace add elliot-ylambda/gradient`. Its three `SKILL.md` files are the **authored source**.
-  - `skills/gradient-*` — the copy-install skills for Codex, **generated** from `plugin/skills/` by `cli/scripts/skill-render.mjs`. Never hand-edit them; run `make artifacts`.
+  - `plugin/` — the Claude Code plugin, installed with `/plugin marketplace add elliot-ylambda/gradient` + `/plugin install gradient@gradient`. Its three `SKILL.md` files are the **authored source**.
+  - `skills/gradient-*` — the Codex skills, installed with Codex's built-in `$skill-installer`; **generated** from `plugin/skills/` by `cli/scripts/skill-render.mjs`. Never hand-edit them; run `make artifacts`.
   - `cli/` — TypeScript source only, built into `plugin/bin/gradient.mjs` and copied into each skill directory. `cli/package.json` is `private`.
   - Specs and implementation plans live in `docs/superpowers/` — dated records, not current documentation; see its README before trusting a command in one.
 - **`elliot-ylambda/gradient-web` (private repo)** — the marketing site at https://gradient.md. Next.js on Vercel; pushing its `main` deploys. When CLI features or copy change, keep the site's hero and feature grid in sync with the shipped `gradient` help output.

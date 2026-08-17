@@ -29,8 +29,28 @@ export const SKILLS = ["optimize", "report", "features"];
  */
 const CLAUDE_ONLY_KEYS = ["disable-model-invocation", "user-invocable", "disallowed-tools"];
 
+/**
+ * Where a Codex skill can end up, and why the command has to ask rather than
+ * assume.
+ *
+ * `$skill-installer` — the installer the official openai/skills catalog tells
+ * people to use — writes to `$CODEX_HOME/skills`. Copying by hand, the
+ * agentskills convention, puts it in `~/.agents/skills`. Codex discovers both.
+ * A skill that hardcodes either one is broken for half its users, and it breaks
+ * silently: the command is prose until an agent runs it.
+ *
+ * Resolved inline rather than once into a variable, because each tool call gets
+ * a fresh shell — a variable set in one command is gone by the next.
+ */
+const codexRunner = name => {
+  const dirs = [".codex/skills", ".agents/skills"]
+    .map(dir => `~/${dir}/${codexName(name)}/bin/gradient.mjs`)
+    .join(" ");
+  return `node "$(ls ${dirs} 2>/dev/null | head -1)"`;
+};
+
 export function forCodex(body, name) {
-  const runner = `node "$HOME/.agents/skills/${codexName(name)}/bin/gradient.mjs"`;
+  const runner = codexRunner(name);
   const swaps = [
     [new RegExp(`^name: ${name}$`, "m"), `name: ${codexName(name)}`, true],
     // `${CLAUDE_PLUGIN_ROOT}` is expanded by Claude Code alone. "$HOME" is

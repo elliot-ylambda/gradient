@@ -8,14 +8,17 @@ into the right place works in either.
 
 `gradient-optimize`, `gradient-report`, and `gradient-features` are how gradient
 is installed for Codex, which has no plugin marketplace. Each is self-contained —
-a `SKILL.md` plus the single-file runner it invokes — so installing is a copy,
-with no package manager, no PATH entry, and nothing global:
+a `SKILL.md` plus the single-file runner it invokes — so a copy is a complete
+install, with no package manager, no PATH entry, and nothing global. Use Codex's
+built-in installer:
 
-```bash
-mkdir -p ~/.agents/skills && curl -fsSL \
-  https://github.com/elliot-ylambda/gradient/releases/latest/download/gradient-skills.tar.gz \
-  | tar -xz -C ~/.agents/skills
 ```
+$skill-installer install gradient-optimize, gradient-report and gradient-features from elliot-ylambda/gradient
+```
+
+That writes to `~/.codex/skills`. Codex also reads `~/.agents/skills`, and each
+skill resolves its runner in **either** — a skill that hardcoded one of them
+would be silently broken for everyone who used the other.
 
 Claude Code users install the same three skills as a plugin instead — see the
 [root README](../README.md).

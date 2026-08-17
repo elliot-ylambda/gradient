@@ -6,7 +6,7 @@ description: Turn one of gradient's background features on or off — continuity
 Every feature here installs a hook that runs without being asked again. Explain
 what it does, then run the exact toggle the user chose — never choose for them:
 
-    node "$HOME/.agents/skills/gradient-features/bin/gradient.mjs" on|off <feature>
+    node "$(ls ~/.codex/skills/gradient-features/bin/gradient.mjs ~/.agents/skills/gradient-features/bin/gradient.mjs 2>/dev/null | head -1)" on|off <feature>
 
 - **continuity** — a `PreCompact` hook writes a bounded, redacted checkpoint of
   recent intent, and a `SessionStart` hook reads it back after a resume or a
@@ -23,7 +23,7 @@ what it does, then run the exact toggle the user chose — never choose for them
 With no feature named, run the bare report and read its `features:` line rather
 than guessing at state:
 
-    node "$HOME/.agents/skills/gradient-features/bin/gradient.mjs"
+    node "$(ls ~/.codex/skills/gradient-features/bin/gradient.mjs ~/.agents/skills/gradient-features/bin/gradient.mjs 2>/dev/null | head -1)"
 
 While autopilot is on, the bare report also carries its detail — mode, judge
 budget, `gradient.md` clamps, and recent decisions.
