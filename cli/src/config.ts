@@ -109,9 +109,6 @@ function validateConfig(value: unknown): Config {
   )) {
     throw new Error("config ignorePatterns must be a bounded string array");
   }
-  if (config.emitTarget !== undefined && config.emitTarget !== "skill" && config.emitTarget !== "command") {
-    throw new Error("config emitTarget must be skill or command");
-  }
   resolveTargets(config);
   resolveCheapModel(config);
   return config;

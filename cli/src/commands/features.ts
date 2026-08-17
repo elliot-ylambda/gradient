@@ -12,7 +12,7 @@ import { setContinuity } from "./continuity.js";
  * on`, `autopilot nudge`, `board on`, `init --session-scan`. They ask the same
  * question, so they get one answer: `gradient on <feature>`.
  */
-export const FEATURES = ["continuity", "autopilot", "board", "session-scan"] as const;
+export const FEATURES = ["continuity", "autopilot", "board", "optimize"] as const;
 export type FeatureName = (typeof FEATURES)[number];
 
 export function isFeatureName(value: string): value is FeatureName {
@@ -48,37 +48,49 @@ export async function setFeature(
       const result = await setBoard(on, projectDir, opts);
       return { on: result.on, settingsPath: result.settingsPath, detail: "cross-session digest on start and on prompt" };
     }
-    case "session-scan":
-      return setSessionScan(on, projectDir, opts.home);
+    case "optimize":
+      return setOptimize(on, projectDir, opts.home);
   }
 }
 
-export const SESSION_SCAN_SUB = "session-start";
+export const SESSION_START_SUB = "session-start";
+export const SESSION_END_SUB = "session-end";
 
-async function setSessionScan(
+async function setOptimize(
   on: boolean,
   projectDir: string,
   home?: string,
 ): Promise<FeatureResult> {
   const config = await loadConfig(home);
   if (on) {
-    const settingsPath = await installHook(projectDir, "SessionStart", gradientHookCommand(SESSION_SCAN_SUB), {
+    // Both halves of the loop, because one without the other is half a feature:
+    // SessionEnd keeps the findings current, SessionStart is where you see them.
+    const settingsPath = await installHook(projectDir, "SessionStart", gradientHookCommand(SESSION_START_SUB), {
       // The pre-0.5 form is still in some users' settings and names a flag the
       // CLI no longer parses; replace it rather than sitting beside it.
-      replacing: ["gradient scan --detach", cmd => isGradientHookFor(cmd, SESSION_SCAN_SUB)],
+      replacing: ["gradient scan --detach", cmd => isGradientHookFor(cmd, SESSION_START_SUB)],
+    });
+    await installHook(projectDir, "SessionEnd", gradientHookCommand(SESSION_END_SUB), {
+      replacing: [cmd => isGradientHookFor(cmd, SESSION_END_SUB)],
     });
     config.scanOnSessionStart = true;
     try {
       await saveConfig(config, home);
     } catch (error) {
-      await removeHook(projectDir, "SessionStart", cmd => isGradientHookFor(cmd, SESSION_SCAN_SUB)).catch(() => undefined);
+      await removeHook(projectDir, "SessionStart", cmd => isGradientHookFor(cmd, SESSION_START_SUB)).catch(() => undefined);
+      await removeHook(projectDir, "SessionEnd", cmd => isGradientHookFor(cmd, SESSION_END_SUB)).catch(() => undefined);
       throw error;
     }
-    return { on: true, settingsPath, detail: "surface one suggestion at session start, then rescan" };
+    return {
+      on: true,
+      settingsPath,
+      detail: "re-check after a session ends (at most daily), surface it at the next start",
+    };
   }
 
   config.scanOnSessionStart = false;
   await saveConfig(config, home);
-  const settingsPath = await removeHook(projectDir, "SessionStart", cmd => isGradientHookFor(cmd, SESSION_SCAN_SUB));
+  await removeHook(projectDir, "SessionEnd", cmd => isGradientHookFor(cmd, SESSION_END_SUB));
+  const settingsPath = await removeHook(projectDir, "SessionStart", cmd => isGradientHookFor(cmd, SESSION_START_SUB));
   return { on: false, settingsPath };
 }

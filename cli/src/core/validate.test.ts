@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { validateSuggestion, assertHookRunnable, KNOWN_SUBCOMMANDS } from "./validate.js";
 import type { Suggestion } from "./types.js";
-import { AUTHORIZATION_GUARD, clarifiedWorkflowBody } from "./detect.js";
+import { AUTHORIZATION_GUARD } from "./propose.js";
 
 const good: Suggestion = {
   id: "x", name: "ship", title: "t", rationale: "r",
@@ -48,10 +48,18 @@ describe("assertHookRunnable", () => {
     expect(() => validateSuggestion(hook)).not.toThrow();
     expect(() => assertHookRunnable(hook)).not.toThrow();
   });
-  it("treats a SessionStart→scan hook as runnable", () => {
+  it("treats a SessionEnd→session-end hook as runnable", () => {
+    const s: any = { id: "x", name: "n", title: "t", rationale: "r", confidence: "high",
+      payload: { type: "hook", event: "SessionEnd", subcommand: "session-end", description: "d" } };
+    expect(() => assertHookRunnable(s)).not.toThrow();
+  });
+
+  // `scan` is not a subcommand any more, so a hook naming it must be refused
+  // rather than installed as something that will exit 2 into a live session.
+  it("refuses a hook that names a subcommand the CLI no longer has", () => {
     const s: any = { id: "x", name: "n", title: "t", rationale: "r", confidence: "high",
       payload: { type: "hook", event: "SessionStart", subcommand: "scan", description: "d" } };
-    expect(() => assertHookRunnable(s)).not.toThrow();
+    expect(() => assertHookRunnable(s)).toThrow(/unsupported|unknown/i);
   });
   it("treats notify as a known hook target", () => {
     const hook: Suggestion = {
@@ -118,34 +126,6 @@ describe("optional suggestion fields", () => {
     expect(() => validateSuggestion({ ...good, sourceSignatures: ["dup", "dup"] })).toThrow(/sourceSignatures/);
     expect(() => validateSuggestion({ ...good, sourceSignatures: ["person@example.com"] })).toThrow(/sourceSignatures/);
     expect(() => validateSuggestion({ ...good, sourceSignatures: ["line\nbreak"] })).toThrow(/sourceSignatures/);
-  });
-
-  it("accepts a complete clarification and rejects malformed options", () => {
-    const clarify = {
-      question: "Acknowledge or merge?",
-      options: [
-        { label: "Acknowledge only", body: clarifiedWorkflowBody("Acknowledge only") },
-        { label: "Approve and merge", body: clarifiedWorkflowBody("Approve and merge") },
-      ],
-    };
-    const ambiguous = {
-      ...good,
-      confidence: "flagged",
-      clarify,
-      payload: { ...good.payload, body: `${AUTHORIZATION_GUARD}\n\nObserved workflow:\nAmbiguous` },
-    };
-    expect(() => validateSuggestion(ambiguous)).not.toThrow();
-    expect(() => validateSuggestion({
-      ...ambiguous,
-      clarify: { ...clarify, options: [{ label: "only", body: "one" }] },
-    })).toThrow(/clarify/);
-    expect(() => validateSuggestion({
-      ...ambiguous,
-      clarify: {
-        ...clarify,
-        options: [clarify.options[0], { ...clarify.options[1], body: "publish without asking" }],
-      },
-    })).toThrow(/locally reconstructed/);
   });
 
   it("rejects a non-string hook matcher", () => {

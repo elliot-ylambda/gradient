@@ -9,7 +9,6 @@ import {
   buildCostRows,
   buildRecommendations,
   computeMetrics,
-  renderInsightsHtml,
   sumAutopilotAvoided,
   type CostRow,
   type InsightsMetrics,
@@ -201,11 +200,11 @@ export async function insights(
   });
   if (toolActivity.postEditRituals > 0) recommendations.unshift({
     metric: "post-edit-rituals",
-    line: `${toolActivity.postEditRituals} post-edit ritual(s) detected — run gradient scan`,
+    line: `${toolActivity.postEditRituals} post-edit ritual(s) detected — run gradient optimize`,
   });
   if (toolActivity.failureLoops > 0) recommendations.unshift({
     metric: "failure-loops",
-    line: `${toolActivity.failureLoops} recurring in-session command failure loop(s) — run gradient scan`,
+    line: `${toolActivity.failureLoops} recurring in-session command failure loop(s) — run gradient optimize`,
   });
 
   return {
@@ -220,8 +219,3 @@ export async function insights(
   };
 }
 
-export async function writeInsightsHtml(projectDir: string, report: InsightsReport): Promise<string> {
-  const path = join(gradientDir(projectDir), "insights.html");
-  await safeWriteFile(projectDir, path, renderInsightsHtml(report), { mode: 0o600 });
-  return path;
-}

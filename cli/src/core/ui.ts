@@ -67,6 +67,14 @@ export function confidenceChip(conf: Confidence): string {
   }
 }
 
+/** Colored finding-severity chip. Same three-slot shape as the confidence chip,
+ *  so a findings list and a suggestions list scan identically. */
+export function severityChip(severity: "high" | "medium" | "low"): string {
+  if (severity === "high") return c.coral("[high]");
+  if (severity === "medium") return c.orchid("[med ]");
+  return c.muted("[low ]");
+}
+
 /** Colored artifact-kind label (matches the website palette). */
 export function kindLabel(type: ArtifactType): string {
   switch (type) {
@@ -80,6 +88,8 @@ export function kindLabel(type: ArtifactType): string {
       return c.blue(type);
     case "rule":
       return c.blue(type);
+    case "block-rule":
+      return c.blue("rule");
     case "playbook-entry":
       return c.blue("gradient.md");
   }

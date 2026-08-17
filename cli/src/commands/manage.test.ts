@@ -32,15 +32,6 @@ describe("manage commands", () => {
     expect(await loadArtifactApprovals(dir, home)).toEqual([]);
   });
 
-  it("apply honors the configured command emit target", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "grad-"));
-    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
-    await seed(dir, home);
-    await saveConfig({ emitTarget: "command" }, home);
-    const [applied] = await applyByIds(["id-ship"], dir, { home });
-    expect(applied.written).toBe(join(dir, ".claude", "commands", "ship.md"));
-  });
-
   it("applies by id, lists, then removes (unlinking the file)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));
@@ -134,5 +125,32 @@ describe("manage commands", () => {
     }]));
     await expect(remove(dir, "ship")).rejects.toThrow(/symlink/);
     expect(await readFile(victim, "utf8")).toContain("keep");
+  });
+});
+
+describe("suggestion cache degradation", () => {
+  it("treats an unreadable cache as an empty one rather than failing every command", async () => {
+    const { rm } = await import("node:fs/promises");
+    const { loadSuggestions } = await import("./apply.js");
+    const dir = await mkdtemp(join(tmpdir(), "grad-cache-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const path = suggestionsPath(dir, home);
+    const skipped: string[] = [];
+
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, "{broken", { mode: 0o600 });
+    expect(await loadSuggestions(dir, { home, onSkip: m => skipped.push(m) })).toEqual([]);
+
+    await writeFile(path, `[${" ".repeat(5_000_100)}]`, { mode: 0o600 });
+    expect(await loadSuggestions(dir, { home, onSkip: m => skipped.push(m) })).toEqual([]);
+
+    // Refusing to follow a symlinked cache is the security property; degrading
+    // rather than throwing is what stops that refusal being a denial of service.
+    const outside = join(dir, "outside.json");
+    await writeFile(outside, "[]");
+    await rm(path, { force: true });
+    await symlink(outside, path);
+    expect(await loadSuggestions(dir, { home, onSkip: m => skipped.push(m) })).toEqual([]);
+    expect(skipped.some(m => m.includes("unreadable"))).toBe(true);
   });
 });

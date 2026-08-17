@@ -1,19 +1,48 @@
 # gradient skills
 
-Reusable, open-standard skills for Claude Code and Codex. Each skill has one canonical `SKILL.md`; the installer links that same source into each assistant's discovery directory.
+Open-standard skills for Claude Code and Codex. Both assistants implement the
+[Agent Skills standard](https://agentskills.io), so a skill directory copied
+into the right place works in either.
 
-## Available skills
+## gradient itself
 
-### vibe-security-check
+`gradient-optimize`, `gradient-report`, and `gradient-features` are how gradient
+is installed for Codex, which has no plugin marketplace. Each is self-contained —
+a `SKILL.md` plus the single-file runner it invokes — so installing is a copy,
+with no package manager, no PATH entry, and nothing global:
 
-Audit a rapidly built web or SaaS application for the security guards that AI-generated features commonly omit. It includes a ten-check launch-blocker pass based on two practitioner writeups, plus a broader baseline for secrets, sessions, input handling, payments, webhooks, uploads, dependencies, logging, and production configuration.
+```bash
+mkdir -p ~/.agents/skills && curl -fsSL \
+  https://github.com/elliot-ylambda/gradient/releases/latest/download/gradient-skills.tar.gz \
+  | tar -xz -C ~/.agents/skills
+```
+
+Claude Code users install the same three skills as a plugin instead — see the
+[root README](../README.md).
+
+> **These three are generated.** [`plugin/skills/`](../plugin/skills/) holds the
+> authored source; `cli/scripts/skill-render.mjs` derives these from it, and
+> `make artifacts` rewrites them. Editing them here is undone by the next build,
+> and `cli/src/skills.test.ts` fails when they no longer match. Only the name,
+> the runner path, and the Claude-Code-only frontmatter keys differ — everything
+> a skill actually says is written once.
+
+## vibe-security-check
+
+Audit a rapidly built web or SaaS application for the security guards that
+AI-generated features commonly omit: a ten-check launch-blocker pass based on two
+practitioner writeups, plus a broader baseline for secrets, sessions, input
+handling, payments, webhooks, uploads, dependencies, logging, and production
+configuration.
 
 [Read the skill](vibe-security-check/SKILL.md) · [Review the full checklist](vibe-security-check/references/checklist.md)
 
-Install it globally for both assistants:
+Copy it wherever your assistant looks — `~/.claude/skills/vibe-security-check`
+for Claude Code, `~/.agents/skills/vibe-security-check` for Codex, or the same
+paths inside a project to scope it there:
 
 ```bash
-npx skills add elliot-ylambda/gradient --skill vibe-security-check -g -a claude-code -a codex
+cp -R skills/vibe-security-check ~/.agents/skills/
 ```
 
 Then invoke it explicitly:
@@ -26,11 +55,13 @@ Then invoke it explicitly:
 $vibe-security-check Audit this app before launch.
 ```
 
-Both assistants implement the [Agent Skills open standard](https://agentskills.io). For a manual project install, copy the skill directory to `.claude/skills/vibe-security-check` for Claude Code or `.agents/skills/vibe-security-check` for Codex.
-
 ## Design rules
 
-- Keep the shared workflow assistant-neutral; do not use Claude-only frontmatter or Codex-only tool names in `SKILL.md`.
+- Keep the shared workflow assistant-neutral; do not use Claude-only frontmatter
+  or Codex-only tool names in a `SKILL.md` that both assistants load.
 - Put detailed, selectively loaded guidance in `references/`.
-- Include only `name` and `description` in shared skill frontmatter.
-- Validate each skill before publishing and test it against a realistic repository.
+- A skill that invokes a program must name a command that resolves from the
+  skill's own directory. A command in a `SKILL.md` is prose until an agent runs
+  it, so an unresolvable one is not a degraded skill — it is a skill that can do
+  nothing, and nothing finds out until it fails in a session.
+- Validate each skill before publishing and test it against a real repository.

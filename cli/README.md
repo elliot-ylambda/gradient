@@ -1,196 +1,184 @@
 # gradient CLI
 
-The local-first `gradient` command-line tool.
+The local-first engine behind the gradient skills. This directory is source, not
+a package: it is **published nowhere**, and is built into the single-file runner
+that both shipping shapes carry — the Claude Code plugin, and the three skill
+directories a Codex user copies into `~/.agents/skills`. See the
+[root README](../README.md) for how to install either.
+
+That is the whole distribution story. There is no npm package, no `npx`, and
+nothing on your PATH: a skill directory carries its own runner, so it keeps
+working with no network, no cache that can be evicted, and no global install to
+keep current.
 
 ```bash
-npx gradient.md init --target both --session-scan # configure + surface one suggestion next session
-npx gradient.md           # interactive mirror of the top pending suggestions
-npx gradient.md scan      # mine bounded prompt and tool-activity candidates
-npx gradient.md review    # approve, explain, or persistently dismiss suggestions
-npx gradient.md list      # see what it generated · npx gradient.md remove <name> to undo
-npx gradient.md migrate   # convert older generated commands into skills
-npx gradient.md recall on # hint when prompts match installed artifacts
-npx gradient.md stats     # estimated leverage and realized minutes saved
-npx gradient.md insights  # local behavior report and recommended actions
-npx gradient.md continuity on # preserve context across compact/resume
-npx gradient.md bundle team-kit # package approved artifacts as a plugin
+# `G` is the runner the installed skill names — bin/gradient.mjs inside the
+# plugin, or ~/.agents/skills/gradient-optimize/bin/gradient.mjs.
+node $G optimize      # find what recurs and what has gone stale, then propose
+node $G               # the report: what it cost, what is installed, what else is running
+node $G remove <name> # uninstall a generated artifact
+node $G on optimize   # re-check after a session ends, at most once a day
 ```
 
-## How it works
+Normally you do not type these at all — you ask your assistant to optimize your
+setup, and the skill runs them. Hooks gradient installs name the same runner by
+absolute path, which is why turning a feature on needs no PATH entry either.
 
-1. Reads enabled local histories: Claude Code (`~/.claude/projects/**/*.jsonl`)
-   and Codex (`~/.codex/sessions/**/*.jsonl`). Spawned subagent logs are
-   excluded. The Claude pass also pairs Bash calls with their results and notes
-   Edit/Write/NotebookEdit events using bounded reads.
-2. Clusters repeated prompts, failing-command pastes, recurring sequences, and
-   conservative low-impact Q→A preferences locally (no LLM). It separately
-   detects commands that fail across sessions and commands repeatedly run after
-   edits. Project scans also audit `CLAUDE.md`, `CLAUDE.local.md`, and
-   `.claude/rules/*.md` read-only for instructions you keep restating or
-   correcting after assistant activity. Tool candidates retain only bounded
-   command heads and redacted first error lines—never successful output or file
-   contents. Pasted bodies and command arguments are discarded; cross-project
-   scans skip Q→A rules. It also measures long Claude question→answer waits with
-   bounded local reads.
-3. Sends only the top candidates to an LLM (`claude` by default, isolated
-   `codex exec --ephemeral` for a Codex-only target, with an Anthropic API-key
-   fallback) to name and type them.
-4. You inspect the exact rendered artifact and approve, explain, or dismiss it;
-   skips persist in the human-editable `.gradient/dismissed.json` and resurface
-   only when a later scan adds genuinely new source evidence. Approval writes
-   `.claude/skills/<name>/SKILL.md`, portable Codex skills under
-   `.agents/skills/<name>/SKILL.md`, and project rules under `.claude/rules/`,
-   prints `/loop` instructions, or installs explicitly reviewed local hook
-   settings that call allowlisted `gradient` subcommands.
+## The CLI makes no network calls
+
+Not "by default" — at all. It calls no model and stores no API key. Everything
+it reports is either counted from your local transcripts or read out of your own
+configuration files, and everything it proposes is checkable:
+
+- a path, script, or make target an instruction names that the repository no
+  longer has
+- a skill frontmatter key outside the Agent Skills spec, a missing description,
+  or one past the 1,536-character listing cap
+- an artifact installed thirty days ago that nothing has ever invoked
+- a phrase you typed nine times across five sessions that your CLAUDE.md
+  already contains
+
+Judgment — rewriting a rule that is not holding, deciding whether today's
+published guidance still says what gradient thinks — belongs to the bundled
+`gradient` skill, which runs inside Claude Code or Codex and has both a model
+and a network. `gradient optimize --json` is the interface between them.
+
+## How a run works
+
+1. **Consent.** The first run asks which assistants to optimize for and
+   remembers the answer. `--target claude-code|codex|both` overrides it. A
+   non-interactive run with nothing configured fails with the flag to pass
+   rather than guessing.
+2. **Mine.** Reads enabled local histories — Claude Code
+   (`~/.claude/projects/**/*.jsonl`) and Codex (`~/.codex/sessions/**/*.jsonl`),
+   excluding spawned subagent logs. The Claude pass also pairs Bash calls with
+   their results and notes Edit/Write/NotebookEdit events using bounded reads.
+   Clusters repeated prompts, failing-command pastes, recurring sequences, and
+   conservative low-impact Q→A preferences. Tool candidates retain only bounded
+   command heads and redacted first error lines — never successful output or
+   file contents.
+3. **Inspect.** Reads the instruction files each assistant actually loads
+   (`CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/**`,
+   `~/.claude/CLAUDE.md`, `~/.claude/rules/**`, `AGENTS.md`,
+   `~/.codex/AGENTS.md`), every installed skill for both assistants, and — read
+   only, never written — the auto-memory index.
+4. **Find.** Turns all of it into one ranked list of findings, each with a
+   quotable evidence line and the exact change it would make.
+5. **Apply.** `--apply <id>...` writes only what you named, under an advisory
+   lock, snapshotting every file gradient does not own and refusing any change
+   whose file moved since the finding was computed.
+
+`--apply` deliberately does not re-mine: it is a follow-up to a run you are
+already looking at, and rebuilding findings from hundreds of transcripts would
+make approving a one-line change the slowest thing gradient does.
+
+## Turning findings into artifacts
+
+Approval writes `.claude/skills/<name>/SKILL.md`, portable Codex skills under
+`.agents/skills/<name>/SKILL.md`, and project rules under
+`.claude/rules/gradient-<name>.md` — which Claude Code auto-loads at launch with
+the same priority as `.claude/CLAUDE.md`. Codex has no rules directory, so a
+rule for Codex becomes one tagged line under gradient's own `## gradient`
+heading in `AGENTS.md`; removal splices that line out and drops the heading when
+it empties, never touching the rest of the file.
+
+Suggestion ids derive from source evidence rather than a generated name, so
+renaming an artifact never changes its identity. Skips persist in the
+human-editable `.gradient/dismissed.json` and resurface only when a later run
+adds genuinely new evidence.
 
 Paste and sequence findings are advisory: prior behavior is never treated as
 authorization to rerun a command or execute later workflow steps. Preference
 rules require repeated support across sessions, are limited to low-impact
 format/style/tool choices, and preserve confirmation for consequential actions.
-Recurring failures remain advisory rules or skills. A detected post-edit ritual
-can become a `PostToolUse` hook only after `review` shows the exact command and
-the user approves its automatic execution. Set `"mineToolEvents": false` in
-`~/.config/gradient/config.json` to disable tool-event extraction entirely.
+A detected post-edit ritual becomes a `PostToolUse` hook only after you see the
+exact command and approve its automatic execution. Set `"mineToolEvents": false`
+in `~/.config/gradient/config.json` to disable tool-event extraction entirely.
 
-Skills are the default because Claude Code can invoke them from their mined
-trigger descriptions. Set `emitTarget` to `"command"` in the gradient config
-for legacy `.claude/commands/*.md` output. `gradient migrate --dry-run` previews
-conversion of manifest-tracked commands; `gradient migrate` performs it without
-touching hand-written files. Commands created before the hardened private
-approval ledger are skipped; re-scan, review, and apply those workflows first.
+## Reviewing
 
-Starting in 0.6, suggestion ids derive from source evidence instead of an
-LLM-chosen name. After upgrading, run `gradient scan` and `gradient review`. If
-an already-applied artifact appears again, re-apply the reviewed suggestion and
-remove the old manifest entry with `gradient remove <name>`. Gradient never
-rewrites or deletes existing artifacts as part of this migration.
+```bash
+gradient optimize --json    # the full finding set, for an agent to drive
+gradient optimize --page    # a self-contained local page you click through
+```
 
-Also starting in 0.6, `gradient session-start` prints the single
-highest-leverage pending suggestion before its detached rescan, instead of
-running silently. Existing installs keep the old silent `gradient scan
---detach` hook exactly as configured until they rerun `gradient init
---session-scan`, which migrates it to `gradient session-start` in place.
+The page is a `file://` document with no server, no port, and no external
+reference of any kind — no stylesheet, script, font, or image — so it renders
+identically offline and cannot report what it is displaying. Accept or deny each
+finding and it builds the `gradient optimize --apply …` line to copy back.
 
-Configure `"targets": ["claude-code", "codex"]` to fan approved skills out to
-both assistants. The default remains `["claude-code"]`. Mechanical Claude Code
-skills use `"cheapSkillModel": "haiku"` by default; set it to `""` to disable
-model frontmatter. Codex output stays portable and contains only the Agent
-Skills `name` and `description` metadata.
+## Headless and scheduled
 
-`gradient init --session-scan` installs a fail-open `SessionStart` hook. It
-prints at most one high-leverage cached suggestion, then launches a detached
-bounded scan; startup never waits on the scan. Interactive bare `gradient`
-shows up to three pending suggestions straight from the cache when it's
-fresh — under a day old — and refreshes it first (rescanning recent
-user-scope history) otherwise. Explicit `gradient help` and non-interactive
-bare invocations remain script-safe help output.
+```bash
+gradient optimize --auto             # additive, reversible, gradient-owned changes only
+gradient on optimize                 # SessionEnd re-check (≤ daily) + SessionStart surface
+gradient optimize --print-schedule   # a cron/launchd/schtasks snippet for this platform
+```
 
-`gradient recall on` installs an LLM-free `UserPromptSubmit` hook in
-`.claude/settings.local.json`. Its private user-cache index covers project and
-user-level commands and skills; its adoption log stores
-only artifact names and match scores, never prompt text. `gradient stats` shows
-uses, realized minutes saved, last use, retypes caught, and stale-artifact
-removal suggestions.
+`--auto` never edits prose a person wrote, never installs a new artifact, and
+never applies a line whose text carries a command invocation. gradient installs
+no daemon and owns no timer; `--print-schedule` prints the snippet and leaves
+installing — and removing — it to you.
 
-`scan` writes a private per-project user cache, but it does not install Claude
-artifacts or update the autopilot playbook. Approved artifacts are tracked in
-`.gradient/manifest.json` so `remove` cleanly undoes them.
+## Undo
 
-Flagged suggestions may include one 2–3 choice clarification. `gradient review`
-resolves that choice locally and shows the exact rendered artifact before a
-separate approval. The model can propose only bounded, redacted labels; every
-installable body is reconstructed from a fixed local authorization guard. The
-choice persists in the private user cache and appears in `gradient explain`;
-deciding later leaves the suggestion flagged and unapplied.
+Every run that writes gets an id. Every write to a file gradient does not own is
+snapshotted first.
 
-Five or more Claude Code sessions with waits of at least five minutes produce a
-suggested `Notification` hook matched to `permission_prompt|idle_prompt`.
-Approved hook output calls the silent `gradient notify` target, which uses only
-the static message “Claude Code is waiting on you” via macOS `osascript` or
-Linux `notify-send`. Notification failures are ignored, and transcript text is
-never passed to the OS. Codex history does not produce this Claude-only hook.
+```bash
+gradient optimize --undo 20260813-221000-abc123
+```
 
-`gradient insights [--user] [--html]` is also LLM-free. It counts behavior
-signals such as nudges, interrupts, compacts, error pastes, and model churn,
-then routes them to concrete gradient actions. `gradient continuity on`
-records private per-project consent and installs paired checkpoint/recap hooks;
-the bounded, best-effort-redacted user-intent checkpoint lives in the private
-user cache, not the repo, and returns to Claude as explicitly untrusted context.
-Raw assistant/tool-output prose is excluded, and `continuity off` deletes it.
-`--html` explicitly writes a private `.gradient/insights.html` report.
-
-`gradient bundle <name>` atomically rebuilds a dual Claude Code/Codex plugin under
-`.gradient/bundle/<name>/` from manifest-tracked artifacts only. It copies no
-raw transcript or cache files, evidence counts, local provenance IDs, or hooks;
-artifact text can still quote or derive from redacted prompts. Every source must
-match a private exact-content approval from the hardened generator. Legacy,
-changed, unapproved, unmarked, and sensitive-looking artifacts are skipped.
-Secret detection is best effort, so review every output. The generated README
-explains the manual rule-copy/review step. Hook export is disabled until
-recipients have their own consent boundary.
+A file that changed *again* after the run is reported rather than restored:
+undo must never be the thing that loses work.
 
 ## Autopilot (opt-in)
 
-`gradient autopilot` installs a `Stop` hook that answers the nudges you type most
-(`continue`, `what's next?`) with the fixed non-authorizing nudge `Continue.`.
-
-```bash
-npx gradient.md autopilot nudge    # opt in: push unfinished work forward
-npx gradient.md autopilot status   # what did it do while I was away?
-npx gradient.md autopilot off      # remove the hook
-```
+`gradient on autopilot` installs a `Stop` hook that answers the nudges you type
+most (`continue`, `what's next?`) with the fixed non-authorizing nudge
+`Continue.`. It is the one feature that still calls a model.
 
 It is consented per project, bounded by paid judge attempts (default 10,
-absolute ceiling 100), latches off when it
-sees no progress, and fails open — any error means the stop simply stands. The
-judge runs in safe mode with tools and customizations disabled; its text is never
-relayed. `full` mode is disabled in `0.3.1`. A committed `gradient.md` can only
-lower mode or budget through structured frontmatter; repository prose is ignored.
+absolute ceiling 100), latches off when it sees no progress, and fails open —
+any error means the stop simply stands. The judge runs in safe mode with tools
+and customizations disabled; its text is never relayed. A committed
+`gradient.md` can only lower mode or budget through structured frontmatter;
+repository prose is ignored. `gradient` (the bare report) shows its mode,
+budget, clamps, and recent decisions while it is on.
 
 ## Model use and billing
 
-gradient uses `claude -p` or isolated `codex exec --ephemeral` calls under the
-account and limits of your existing CLI login. `scan` costs one classification
-call per run; Claude Code autopilot can call once per stop up to its attempt
-budget. For CI or anything shared, use a service credential: set
+The optimize path costs nothing: no model call, no API key, no network. Only
+autopilot's Stop-hook judge calls a model, using `claude -p` or an isolated
+`codex exec --ephemeral` under your existing CLI login, and only when you have
+turned it on for that project. For CI or anything shared, set
 `ANTHROPIC_API_KEY` and pin `"backend": "anthropic"`; an unavailable pinned
 backend fails closed rather than silently falling back.
 
-Candidate snippets (including bounded assistant question text for project-only
-preference mining) and autopilot tails are sent to the selected model after
-common credential/PII redaction. Redaction cannot identify every kind of
-sensitive or proprietary text. Scan input, candidates, caches, playbooks,
-settings, and logs have hard resource ceilings; custom `ignorePatterns` use a
-capped, linear-looking regex subset. See the repository's
+See the repository's
 [security and data-boundary documentation](https://github.com/elliot-ylambda/gradient#data-and-trust-boundaries).
 
-Full details: [Model use and billing](https://github.com/elliot-ylambda/gradient#model-use-and-billing).
-
 ## Development
-
-This package is built test-first. The complete v2 funnel is specified in
-the [v2 funnel design](https://github.com/elliot-ylambda/gradient/blob/main/docs/superpowers/specs/2026-07-06-gradient-v2-funnel-design.md)
-and its five implementation plans under `docs/superpowers/plans/`.
 
 ```bash
 npm install
 npm test         # vitest
 npm run build    # tsc → dist/
-npm run dogfood  # packed install → 19 synthetic end-to-end scenario groups
+npm run dogfood  # packed offline install → 18 end-to-end scenario groups
 ```
 
 `GRADIENT_HOME=/absolute/path` is an optional isolation override for CI,
-portable test environments, and dogfooding. It redirects Gradient's config,
+portable test environments, and dogfooding. It redirects gradient's config,
 state, installed-skill, and assistant-history roots without changing the
-process's system home; repository artifacts still belong to the current
-project. With the variable unset, all paths behave as before.
+process's system home.
 
 `npm run dogfood -- --output ../artifacts/dogfood` writes `report.json`,
-`report.md`, and a self-contained `report.html`. The run uses invented
-transcripts and deterministic local backend stand-ins, so it never reads real
-history or spends model credits. The repository
-[dogfood guide](../docs/dogfood.md) separates this automated proof from the
-opt-in live checks that require a human or real OS integration.
+`report.md`, and a self-contained `report.html`. The run packs the real tarball,
+installs it into a disposable consumer with an empty cache, and drives the
+installed binary against invented transcripts and deterministic local backend
+stand-ins — it never reads real history or spends model credits. It also asserts
+that every command in `--help` has a scenario, so the surface cannot drift from
+its coverage.
 
 ## Releasing
 

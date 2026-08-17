@@ -10,7 +10,7 @@ import {
   markLoops,
   SCHEDULE_MIN_DAYS,
 } from "./classify.js";
-import { idFor } from "./detect.js";
+import { idFor } from "./propose.js";
 import { cluster } from "./cluster.js";
 import { annotateTemporal } from "./temporal.js";
 import type { Candidate, CommandEvent, Turn } from "./types.js";

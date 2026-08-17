@@ -8,7 +8,7 @@ import { validateSuggestion } from "../core/validate.js";
 import { isRestatement } from "../core/restatement.js";
 import { loadManifest } from "../core/manifest.js";
 import { writePlaybook } from "../core/playbook.js";
-import { resolveHookBinary } from "../core/hookBinary.js";
+import { gradientCommand } from "../core/hookBinary.js";
 
 const SUGGESTIONS_MAX_BYTES = 5_000_000;
 const SUGGESTIONS_MAX_ENTRIES = 1_000;
@@ -60,7 +60,18 @@ export async function loadSuggestions(
     }
     return suggestions;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return [];
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || error instanceof SyntaxError) return [];
+    // The cache is gradient's own file. Oversized, symlinked, or otherwise
+    // unreadable, the right answer is the same as corrupt — no suggestions —
+    // not failing every command until the user finds and deletes it themselves.
+    // A symlinked cache is the interesting case: refusing to follow it is the
+    // security property, and degrading rather than crashing is what keeps that
+    // refusal from being a denial of service on the whole CLI.
+    if (code === "EFBIG" || code === "ELOOP" || code === "ESYMLINK" || code === "EISDIR") {
+      onSkip(`ignoring unreadable suggestion cache: ${(error as Error).message}`);
+      return [];
+    }
     throw error;
   }
 }
@@ -103,28 +114,22 @@ export async function applyByIds(
   const all = await loadSuggestions(projectDir, opts);
   const wanted = all.filter(suggestion => ids.includes(suggestion.id) || ids.includes(suggestion.name));
   const config = await loadConfig(opts.home);
-  const emitTarget = config.emitTarget ?? "skill";
   const targets = resolveTargets(config);
   const cheapModel = resolveCheapModel(config);
-  // Resolved once per run, and only announced when a hook is actually written.
-  const hookBinary = resolveHookBinary();
-  let hookWarned = false;
+  // Resolved once per run. It no longer carries a caveat to announce: the
+  // command is this install's own entry point, which is as durable as gradient.
+  const hookBinary = gradientCommand();
   const out: ApplyResult[] = [];
   for (const suggestion of wanted) {
     if (suggestion.confidence === "flagged") {
       opts.onSkip?.(`skipping unresolved flagged suggestion: ${suggestion.name}`);
       continue;
     }
-    if (suggestion.payload.type === "hook" && hookBinary.warning && !hookWarned) {
-      opts.onNote?.(hookBinary.warning);
-      hookWarned = true;
-    }
     out.push(await applySuggestion(suggestion, projectDir, {
-      emitTarget,
       targets,
       cheapModel,
       home: opts.home,
-      hookBinary: hookBinary.command,
+      hookBinary,
     }));
   }
   if (out.length > 0) {

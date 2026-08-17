@@ -55,8 +55,11 @@ jobs:
           cache-dependency-path: cli/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm run build:plugin
-      - name: Verify the committed plugin bundle is current
-        run: git diff --exit-code -- ../plugin/.claude-plugin/plugin.json ../plugin/bin/gradient.mjs
+      # Every shipping artifact is committed, so a stale one is a stale release.
+      # The skill directories are generated from plugin/skills/, and nothing at
+      # install time regenerates them: a user copies exactly what is here.
+      - name: Verify the committed artifacts are current
+        run: git diff --exit-code -- ../plugin/.claude-plugin/plugin.json ../plugin/bin/gradient.mjs ../skills
       - name: Smoke-test the bundled CLI
         run: node ../plugin/bin/gradient.mjs --version
       - name: Run the packaged dogfood release gate

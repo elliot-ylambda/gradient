@@ -34,12 +34,13 @@ describe("binary bootstrap", () => {
   // `recall` is retired. A user who had it on still has a UserPromptSubmit hook
   // pointing at it, and that event's stdout is read as model context — so the
   // fast path must stay, stay silent, and take the hook with it.
-  it("retires a leftover recall hook silently instead of reaching the unknown-command handler", async () => {
+  // `recall` ran on UserPromptSubmit, whose stdout is read as model context.
+  // The verb is gone, but a stray settings entry reaching the unknown-command
+  // handler would inject usage text into a live session, so the binary exits
+  // silently on it rather than falling through.
+  it("exits silently on a leftover recall hook instead of reaching the unknown-command handler", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-bin-recall-"));
     const home = await mkdtemp(join(tmpdir(), "grad-bin-home-"));
-    await saveConfig({ recallProjects: [dir] } as Record<string, unknown>, home);
-    await installHook(dir, "UserPromptSubmit", "gradient recall", { timeout: 5 });
-    expect(await hookInstalled(dir, "UserPromptSubmit", "gradient recall")).toBe(true);
 
     const output: string[] = [];
     const code = await runBinary(["recall"], {
@@ -51,8 +52,6 @@ describe("binary bootstrap", () => {
 
     expect(code).toBe(0);
     expect(output.join("")).toBe("");
-    expect(await hookInstalled(dir, "UserPromptSubmit", "gradient recall")).toBe(false);
-    expect((await loadConfig(home) as Record<string, unknown>).recallProjects).toBeUndefined();
   });
 
   it("is idempotent when there is nothing left to retire", async () => {

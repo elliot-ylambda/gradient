@@ -47,13 +47,15 @@ describe("applySuggestion", () => {
     expect(approvalMatches(await loadArtifactApprovals(dir, home), (await loadManifest(dir))[0], await readFile(r.written!, "utf8"))).toBe(true);
   });
 
-  it("writes a command file and records it in the manifest", async () => {
+  // Custom commands were merged into skills upstream, and only a skill can be
+  // loaded automatically when it is relevant, so skills are all gradient emits.
+  it("writes a command payload as a skill and records it in the manifest", async () => {
     const { dir, home } = await testDirs();
     const s: Suggestion = { ...base, name: "ship", payload: { type: "command", commandName: "ship", body: "do it" } };
-    const r = await applySuggestion(s, dir, { emitTarget: "command", home });
-    expect(r.written).toBe(join(dir, ".claude/commands/ship.md"));
+    const r = await applySuggestion(s, dir, { home });
+    expect(r.written).toBe(join(dir, ".claude/skills/ship/SKILL.md"));
     expect(await readFile(r.written!, "utf8")).toContain("do it");
-    expect((await loadManifest(dir))[0]).toMatchObject({ name: "ship", type: "command" });
+    expect((await loadManifest(dir))[0]).toMatchObject({ name: "ship", type: "skill" });
   });
 
   it("refuses to overwrite an untracked hand-written skill", async () => {
@@ -161,7 +163,7 @@ describe("applySuggestion", () => {
     await expect(readFile(join(outside, "gradient-prefer-pnpm.md"), "utf8")).rejects.toThrow();
   });
 
-  it("prints a user rule without writing a file", async () => {
+  it("writes a rule as its own auto-loaded file, touching no hand-written prose", async () => {
     const { dir, home } = await testDirs();
     const suggestion: Suggestion = {
       ...base,
@@ -169,15 +171,16 @@ describe("applySuggestion", () => {
       name: "prefer-recommended",
       payload: {
         type: "rule",
-        target: "user",
+        target: "project",
         ruleName: "prefer-recommended",
         text: "Default to the recommended option.",
       },
     };
     const result = await applySuggestion(suggestion, dir, { home });
-    expect(result.written).toBeUndefined();
-    expect(result.printed).toContain("~/.claude/CLAUDE.md");
-    expect((await loadManifest(dir))[0]).toMatchObject({ type: "rule", path: "" });
+    expect(result.written).toContain(".claude/rules/gradient-prefer-recommended.md");
+    expect((await loadManifest(dir))[0]).toMatchObject({ type: "rule" });
+    // No CLAUDE.md anywhere: additions never edit a file the user wrote.
+    await expect(readFile(join(dir, "CLAUDE.md"), "utf8")).rejects.toThrow();
   });
 
   it("fans command skills out to Claude Code and Codex", async () => {
@@ -247,7 +250,7 @@ describe("applySuggestion", () => {
     await expect(readFile(join(outside, "skills", "ship", "SKILL.md"), "utf8")).rejects.toThrow();
   });
 
-  it("writes a Claude project rule but keeps the Codex AGENTS.md step print-only", async () => {
+  it("writes a Claude rules file and a tagged AGENTS.md line for the same rule", async () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-"));
     const suggestion: Suggestion = {
       ...base,
@@ -260,10 +263,34 @@ describe("applySuggestion", () => {
       },
     };
     const result = await applySuggestion(suggestion, dir, { targets: ["claude-code", "codex"] });
-    expect(result.writes).toHaveLength(1);
-    expect(result.printed).toContain("repository AGENTS.md");
-    expect(result.printed).toContain("Use pnpm without asking.");
+    expect(result.writes).toHaveLength(2);
     expect(await loadManifest(dir)).toHaveLength(2);
+
+    const agents = await readFile(join(dir, "AGENTS.md"), "utf8");
+    expect(agents).toContain("## gradient");
+    expect(agents).toContain("Use pnpm without asking.");
+    expect(agents).toContain(`<!-- gradient:${suggestion.id} -->`);
+  });
+
+  it("adds a rule to an existing AGENTS.md without disturbing a single other byte", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    const original = "# AGENTS.md\n\n## Team policy\n\n- Never force-push to main.\n";
+    await writeFile(join(dir, "AGENTS.md"), original);
+    const suggestion: Suggestion = {
+      ...base,
+      name: "prefer-pnpm",
+      payload: { type: "rule", target: "project", ruleName: "prefer-pnpm", text: "Use pnpm without asking." },
+    };
+    await applySuggestion(suggestion, dir, { targets: ["codex"] });
+
+    const after = await readFile(join(dir, "AGENTS.md"), "utf8");
+    expect(after.startsWith(original.trimEnd())).toBe(true);
+    expect(after).toContain("Never force-push to main.");
+    expect(after).toContain("## gradient");
+
+    // Re-applying is a no-op rather than a duplicate line.
+    await applySuggestion(suggestion, dir, { targets: ["codex"] });
+    expect((await readFile(join(dir, "AGENTS.md"), "utf8")).match(/Use pnpm without asking/g)).toHaveLength(1);
   });
 
   it("approving a hook installs it into project settings instead of printing JSON", async () => {
@@ -279,20 +306,20 @@ describe("applySuggestion", () => {
         description: "Desktop notification when Claude needs input",
       },
     };
-    const result = await applySuggestion(suggestion, dir, { home });
+    const result = await applySuggestion(suggestion, dir, { home, hookBinary: "node /opt/gradient/bin/gradient.mjs" });
     expect(result.printed).toBeUndefined();
     expect(result.writes).toHaveLength(1);
     expect(result.writes[0].path).toBe(join(dir, ".claude", "settings.local.json"));
     const settings = JSON.parse(await readFile(result.writes[0].path, "utf8"));
     expect(settings.hooks.Notification[0]).toMatchObject({
       matcher: "permission_prompt|idle_prompt",
-      hooks: [{ type: "command", command: "gradient notify" }],
+      hooks: [{ type: "command", command: "node /opt/gradient/bin/gradient.mjs notify" }],
     });
     expect((await loadManifest(dir))[0]).toMatchObject({
       name: "notify-when-waiting",
       type: "hook",
       path: "",
-      hook: { event: "Notification", command: "gradient notify" },
+      hook: { event: "Notification", command: "node /opt/gradient/bin/gradient.mjs notify" },
     });
   });
 

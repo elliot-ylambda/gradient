@@ -155,36 +155,3 @@ describe("buildCostRows", () => {
   });
 });
 
-describe("renderInsightsHtml", () => {
-  const report = {
-    label: "project scope",
-    avoided: 2,
-    metrics: {
-      prompts: 10,
-      nudges: 3,
-      interrupts: 1,
-      continuations: 2,
-      notifications: 0,
-      compacts: 4,
-      modelSwitches: 0,
-      effortSwitches: 0,
-      errorPastes: 1,
-    },
-    recommendations: [{ metric: "nudges", line: "try <gradient on autopilot> & friends" }],
-    costs: [{ metric: "nudges" as const, tokens: 123, prompts: 3, recoverable: false, line: "≈123 tokens · 3 nudges" }],
-    toolActivity: { failureLoops: 2, postEditRituals: 1 },
-  };
-
-  it("is self-contained and escapes dynamic content", () => {
-    const html = renderInsightsHtml(report);
-    expect(html).toContain("<style>");
-    expect(html).not.toContain("<script");
-    expect(html).not.toMatch(/https?:\/\//);
-    expect(html).toContain("&lt;gradient on autopilot&gt; &amp; friends");
-    expect(html).toContain("project scope");
-    expect(html).toContain("cost of unautomated habits");
-    expect(html).toContain("≈123 tokens");
-    expect(html).toContain("in-session failure loops");
-    expect(html).toContain("post-edit rituals");
-  });
-});

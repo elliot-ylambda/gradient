@@ -1,84 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import {
-  DEFAULT_HOOK_BINARY,
-  gradientHookCommand,
-  isGradientHookFor,
-  resolveHookBinary,
-  shellQuote,
-} from "./hookBinary.js";
+import { dirname } from "node:path";
+import { displayCommand, gradientCommand, gradientHookCommand, isGradientHookFor, shellQuote } from "./hookBinary.js";
 
-function dirWithGradient(): string {
-  const dir = mkdtempSync(join(tmpdir(), "gradient-hookbin-"));
-  const bin = join(dir, DEFAULT_HOOK_BINARY);
-  writeFileSync(bin, "#!/bin/sh\n");
-  chmodSync(bin, 0o755);
-  return dir;
-}
-
-describe("resolveHookBinary", () => {
-  it("uses the bare command when gradient is on PATH", () => {
-    const result = resolveHookBinary({ env: { PATH: dirWithGradient() } });
-    expect(result).toEqual({ command: "gradient", durable: true });
-  });
-
-  it("ignores a PATH entry holding a non-executable file of the same name", () => {
-    const dir = mkdtempSync(join(tmpdir(), "gradient-hookbin-"));
-    writeFileSync(join(dir, DEFAULT_HOOK_BINARY), "not executable\n");
-    chmodSync(join(dir, DEFAULT_HOOK_BINARY), 0o644);
-    const result = resolveHookBinary({
-      env: { PATH: dir },
-      execPath: "/usr/bin/node",
-      scriptPath: "/opt/gradient/bin.js",
-    });
-    expect(result.command).toBe("/usr/bin/node /opt/gradient/bin.js");
-  });
-
-  it("pins to the running install when gradient is absent but the path is stable", () => {
-    const result = resolveHookBinary({
-      env: { PATH: "/nonexistent" },
-      execPath: "/usr/local/bin/node",
-      scriptPath: "/opt/gradient/dist/bin.js",
-    });
-    expect(result.command).toBe("/usr/local/bin/node /opt/gradient/dist/bin.js");
-    expect(result.durable).toBe(true);
-    expect(result.warning).toMatch(/not on PATH/);
+describe("gradientCommand", () => {
+  it("runs this install's own entry point with this node", () => {
+    expect(gradientCommand({ execPath: "/usr/local/bin/node", scriptPath: "/opt/gradient/bin/gradient.mjs" }))
+      .toBe("/usr/local/bin/node /opt/gradient/bin/gradient.mjs");
   });
 
   it("quotes paths containing spaces so the hook stays one command", () => {
-    const result = resolveHookBinary({
-      env: { PATH: "/nonexistent" },
-      execPath: "/usr/bin/node",
-      scriptPath: "/Users/a b/gradient/bin.js",
-    });
-    expect(result.command).toBe("/usr/bin/node '/Users/a b/gradient/bin.js'");
+    expect(gradientCommand({ execPath: "/usr/bin/node", scriptPath: "/Users/a b/gradient/bin/gradient.mjs" }))
+      .toBe("/usr/bin/node '/Users/a b/gradient/bin/gradient.mjs'");
   });
 
-  it("falls back to a pinned npx spec when running from an npx cache", () => {
-    const result = resolveHookBinary({
-      env: { PATH: "/nonexistent" },
-      execPath: "/usr/bin/node",
-      scriptPath: "/Users/me/.npm/_npx/abc123/node_modules/gradient.md/dist/bin.js",
-      version: "9.9.9",
-    });
-    expect(result.command).toBe("npx -y gradient.md@9.9.9");
-    expect(result.durable).toBe(false);
-    expect(result.warning).toMatch(/npx/);
-  });
-
-  it("never emits a bare gradient when it is not on PATH", () => {
-    for (const scriptPath of ["/opt/gradient/bin.js", "/x/_npx/y/bin.js"]) {
-      const result = resolveHookBinary({ env: { PATH: "/nonexistent" }, scriptPath });
-      expect(result.command).not.toBe(DEFAULT_HOOK_BINARY);
-      expect(result.warning).toBeTruthy();
+  /**
+   * The defect this replaces: gradient shipped as a single-file bundle, and the
+   * resolver looked for `../bin.js` beside its own module. In the bundle that
+   * resolved to plugin/bin.js, which does not exist, so it concluded gradient
+   * was unreachable and fell back to `npx -y gradient.md@<version>` — a registry
+   * coordinate that need not be published for the build doing the pinning. The
+   * plugin advertised "no npm needed" and then wrote npm into every hook, where
+   * the failure is invisible because hooks have nowhere to report.
+   */
+  it("never reaches for a package manager, whatever it resolves to", () => {
+    for (const scriptPath of [
+      "/opt/gradient/bin/gradient.mjs",
+      "/Users/me/.npm/_npx/abc123/node_modules/gradient.md/dist/bin.js",
+      "/Users/me/.claude/plugins/cache/gradient/gradient/bin/gradient.mjs",
+    ]) {
+      // Compared whole: an npx path contains the string "npm", so a substring
+      // check would pass on a command that shelled out to it.
+      expect(gradientCommand({ execPath: "/usr/bin/node", scriptPath }))
+        .toBe(`/usr/bin/node ${shellQuote(scriptPath)}`);
     }
   });
 
-  it("treats a missing PATH as no gradient rather than throwing", () => {
-    const result = resolveHookBinary({ env: {}, execPath: "/usr/bin/node", scriptPath: "/opt/g/bin.js" });
-    expect(result.command).toBe("/usr/bin/node /opt/g/bin.js");
+  // Emitting something unrunnable is the failure mode; refusing is recoverable.
+  it("refuses rather than emitting a command that cannot run", () => {
+    expect(() => gradientCommand({ scriptPath: null }))
+      .toThrow(/cannot locate gradient's own entry point/);
+  });
+
+  it("resolves from its own location when nothing is injected", () => {
+    expect(gradientCommand()).toContain(process.execPath);
   });
 });
 
@@ -93,11 +57,17 @@ describe("shellQuote", () => {
 });
 
 describe("isGradientHookFor", () => {
+  /**
+   * Removal has to recognise every form gradient has ever written, including
+   * the two it no longer writes: a bare `gradient` from when npm put one on
+   * PATH, and an npx spec from the fallback above. Machines that ran those
+   * versions still have those hooks, and `off` is the only way out of them.
+   */
   it("matches every binary form gradient may have installed", () => {
     for (const command of [
       "gradient recall",
       "/usr/bin/node /opt/gradient/dist/bin.js recall",
-      "'/usr/bin/node' '/Users/a b/gradient/bin.js' recall",
+      "'/usr/bin/node' '/Users/a b/gradient/bin/gradient.mjs' recall",
       "npx -y gradient.md@0.6.1 recall",
     ]) {
       expect(isGradientHookFor(command, "recall")).toBe(true);
@@ -120,19 +90,46 @@ describe("isGradientHookFor", () => {
 });
 
 describe("gradientHookCommand", () => {
-  it("appends the subcommand to the resolved binary", () => {
+  it("appends the subcommand, and what it writes is what removal matches", () => {
     const command = gradientHookCommand("checkpoint", {
-      env: { PATH: "/nonexistent" },
       execPath: "/usr/bin/node",
-      scriptPath: "/opt/gradient/bin.js",
+      scriptPath: "/opt/gradient/bin/gradient.mjs",
     });
-    expect(command).toBe("/usr/bin/node /opt/gradient/bin.js checkpoint");
+    expect(command).toBe("/usr/bin/node /opt/gradient/bin/gradient.mjs checkpoint");
     expect(isGradientHookFor(command, "checkpoint")).toBe(true);
   });
+});
 
-  it("round-trips through install and removal matching", () => {
-    const installed = gradientHookCommand("recall", { env: { PATH: dirWithGradient() } });
-    expect(installed).toBe("gradient recall");
-    expect(isGradientHookFor(installed, "recall")).toBe(true);
+describe("displayCommand", () => {
+  const home = "/Users/someone";
+  const script = `${home}/.agents/skills/gradient-optimize/bin/gradient.mjs`;
+  // A PATH that genuinely resolves `node` — this machine's own.
+  const onPathEnv = { PATH: dirname(process.execPath) };
+
+  it("shortens the home prefix, so a report never carries the user's account name", () => {
+    expect(displayCommand({ execPath: "/opt/node/bin/node", scriptPath: script, home, env: onPathEnv }))
+      .toBe("node ~/.agents/skills/gradient-optimize/bin/gradient.mjs");
+  });
+
+  it("keeps the absolute node when no node resolves on PATH to undo the shortening", () => {
+    expect(displayCommand({ execPath: "/opt/node/bin/node", scriptPath: script, home, env: { PATH: "/nonexistent" } }))
+      .toBe("/opt/node/bin/node ~/.agents/skills/gradient-optimize/bin/gradient.mjs");
+  });
+
+  /**
+   * Tilde expansion is not word-split, so a space in the *home* part is fine —
+   * but a space after it is, and would split the command in two. Quoting the
+   * path instead would quote the tilde, which stops it expanding at all, so the
+   * only correct answer is the absolute path.
+   */
+  it("stays absolute when the path below home needs quoting", () => {
+    const spaced = `${home}/My Skills/gradient/bin/gradient.mjs`;
+    expect(displayCommand({ execPath: "/opt/node/bin/node", scriptPath: spaced, home, env: onPathEnv }))
+      .toBe(`/opt/node/bin/node '${spaced}'`);
+  });
+
+  it("stays absolute for a runner outside the home directory", () => {
+    expect(displayCommand({ execPath: "/opt/node/bin/node", scriptPath: "/opt/gradient/bin/gradient.mjs", home, env: onPathEnv }))
+      .toBe("/opt/node/bin/node /opt/gradient/bin/gradient.mjs");
   });
 });

@@ -25,12 +25,10 @@ import { commandEventIdentity, dedupeReplayedEvents, toolEventIdentity, turnIden
 import { hookFromEvents, markLoops } from "../core/classify.js";
 import { markCorrections } from "../core/corrections.js";
 import { mineSequences, SEQ_MAX_BIGRAMS } from "../core/sequence.js";
-import { boundedDetectLimit, detect } from "../core/detect.js";
+import { boundedProposeLimit, propose } from "../core/propose.js";
 import { validateSuggestion } from "../core/validate.js";
 import { findHusks, findMissingSessions } from "../core/coverage.js";
-import { selectBackend } from "../llm/index.js";
 import { loadConfig, resolveTargets } from "../config.js";
-import type { LLMBackend } from "../llm/backend.js";
 import { saveSuggestions } from "./apply.js";
 import { detectPasteCandidates, extractPasteKey } from "../core/paste.js";
 import { ANSWER_MAX_PAIRS, extractAnswerPairs, mineAnswerCandidates } from "../core/answers.js";
@@ -67,7 +65,6 @@ export interface ScanOptions {
 }
 
 export interface ScanDeps {
-  backend?: LLMBackend | null;
   config?: Config;
   collectFn?: (options: ScanOptions) => Promise<string[]>;
   collectCodexFn?: (options: ScanOptions) => Promise<string[]>;
@@ -89,7 +86,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const max = boundedPromptLimit(requestedMax);
   if (max !== requestedMax) log(`max-prompts safety-capped to ${max}`);
   const requestedWindow = opts.limit ?? DEFAULT_DETECT_WINDOW;
-  const window = boundedDetectLimit(requestedWindow, DEFAULT_DETECT_WINDOW);
+  const window = boundedProposeLimit(requestedWindow, DEFAULT_DETECT_WINDOW);
   if (window !== requestedWindow) log(`candidate limit safety-capped to ${window}`);
 
   const collectFn = deps.collectFn ?? ((options: ScanOptions) => collect({ ...options, onWarn: log }));
@@ -206,7 +203,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
 
   // Replay dedupe before counting, matching the events above and the report:
   // one prompt a resumed session inherited from its parent is one prompt, and
-  // any other answer makes `gradient` and `gradient scan` disagree about the
+  // any other answer makes `gradient` and `gradient optimize` disagree about the
   // same corpus.
   const filtered = filterPrompts(turns, ignore);
   const deduped = dedupeReplayedEvents(filtered, turnIdentity);
@@ -352,11 +349,9 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   if (gated.length < dayGated.length) {
     log(`nudge filter → ${dayGated.length - gated.length} approval phrase(s) dropped; see gradient on autopilot`);
   }
-  log(`mining → ${gated.length} candidate patterns; sending top ${window} to llm`);
+  log(`mining → ${gated.length} candidate patterns; proposing from the top ${window}`);
 
-  const backend = deps.backend !== undefined ? deps.backend : await selectBackend({ config });
-  if (!backend) log("no LLM backend available — degrading to exact-repeat command suggestions only");
-  const suggestions = await detect(gated, backend, {
+  const suggestions = propose(gated, {
     limit: window,
     onCap: count => log(`capped to top ${window}; ${count} lower-frequency candidates dropped`),
   });
@@ -384,7 +379,6 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   }
 
   // Deterministic checkpoint-hook proposal from raw /compact command evidence
-  // — independent of the LLM/backend, so it works in degraded mode too.
   try {
     const hookSuggestion = hookFromEvents(events);
     // Dedupe by semantic hook type, not id: an LLM-sourced PreCompact hook

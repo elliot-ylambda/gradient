@@ -92,4 +92,35 @@ describe("playbook-entry manifest entries", () => {
       createdAt: "2026-07-18", suggestionId: "abc125", target: "codex",
     })).rejects.toThrow(/codex/);
   });
+
+  /**
+   * The cap on a hook command was 200, set when gradient installed
+   * `gradient checkpoint`. gradient now installs `<node> <its own runner>
+   * <subcommand>` — two absolute paths — and 200 rejected them, so turning on a
+   * feature reported "invalid hook record" and silently applied nothing. The
+   * cap is still a cap; it just has to fit two real paths.
+   */
+  it("accepts the two-absolute-path command gradient actually installs", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    // The exact shape the dogfood harness produced when this first failed.
+    const node = "/Users/a-fairly-long-account-name/.local/share/mise/installs/node/24.1.0/bin/node";
+    const runner = "/var/folders/8k/9v0m4c1n7wl0qk3z9f2r5xh0000gn/T/gradient-dogfood-a1b2c3" +
+      "/gradient-home/.agents/skills/gradient-optimize/bin/gradient.mjs";
+    const command = `${node} ${runner} session-start`;
+    expect(command.length).toBeGreaterThan(200);
+
+    await addEntry(dir, {
+      name: "optimize-session", type: "hook", path: "", createdAt: "2026-08-16",
+      suggestionId: "optimize-session", hook: { event: "SessionStart", command },
+    });
+    expect((await loadManifest(dir))[0]?.hook?.command).toBe(command);
+  });
+
+  it("still refuses a hook command longer than any pair of real paths", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-"));
+    await expect(addEntry(dir, {
+      name: "huge", type: "hook", path: "", createdAt: "2026-08-16",
+      suggestionId: "huge", hook: { event: "SessionStart", command: `x${"y".repeat(2_200)}` },
+    })).rejects.toThrow(/invalid hook record/);
+  });
 });

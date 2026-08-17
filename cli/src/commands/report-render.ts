@@ -3,6 +3,7 @@ import type { Suggestion } from "../core/types.js";
 import { c, confidenceChip } from "../core/ui.js";
 import { isMeasured } from "../core/classify.js";
 import { stripUnsafeControls } from "../core/security.js";
+import { displayCommand } from "../core/hookBinary.js";
 
 function oneLine(value: unknown): string {
   return stripUnsafeControls(String(value)).replace(/[\r\n\t]+/g, " ");
@@ -19,6 +20,10 @@ export function renderReport(report: Report): string[] {
   const metrics = insights.metrics;
 
   lines.push(c.dim(insights.label));
+  // Nothing puts `gradient` on PATH, so the verbs below would name a command
+  // the reader cannot run. Spelling the runner out on every line buries the
+  // numbers; saying it once here does not.
+  lines.push(c.dim(`gradient = ${displayCommand()}`));
   if (insights.capped) lines.push(c.dim("input cap reached; figures cover the bounded recent corpus"));
   lines.push(`  ${c.bold("prompts")} ${metrics.prompts}   ${c.bold("nudges")} ${metrics.nudges}   ${c.bold("interrupts")} ${metrics.interrupts}`);
   lines.push(`  ${c.bold("context deaths")} ${metrics.continuations}   ${c.bold("compacts")} ${metrics.compacts}   ${c.bold("error pastes")} ${metrics.errorPastes}`);
@@ -44,6 +49,8 @@ export function renderReport(report: Report): string[] {
       for (const line of board.split("\n")) lines.push(`  ${line}`);
     }
   }
+
+  lines.push(...renderAutopilot(report));
 
   const featureLine = report.features
     .map(feature => `${feature.name} ${feature.on ? c.ok(feature.detail ?? "on") : c.muted("off")}`)
@@ -74,12 +81,45 @@ function renderInstalled(report: Report): string[] {
 
 function renderPending(pending: Suggestion[]): string[] {
   if (pending.length === 0) return [];
-  const lines = [`\n${c.bold("pending suggestions")} ${c.dim("— review with gradient scan")}`];
+  const lines = [`\n${c.bold("pending suggestions")} ${c.dim("— review with gradient optimize")}`];
   for (const suggestion of pending) {
     const tier = isMeasured(suggestion) ? c.dim(" measured") : "";
     lines.push(
       `  ${confidenceChip(suggestion.confidence)} ${c.bold(oneLine(suggestion.name))}  ` +
       `${c.muted(oneLine(suggestion.title))}${tier}`,
+    );
+  }
+  return lines;
+}
+
+/**
+ * Autopilot's detail block, folded in from what used to be its own verb.
+ *
+ * Mode, budget, clamps, and recent decisions are too specific for the one-line
+ * feature row, which is why `gradient autopilot status` existed; rendering them
+ * here when — and only when — autopilot is on removes the verb without losing
+ * anything a user could see before.
+ */
+function renderAutopilot(report: Report): string[] {
+  const status = report.autopilot;
+  if (!status) return [];
+  const lines = [`\n${c.bold("autopilot")}`];
+  lines.push(
+    `  ${c.muted("mode")} ${c.bold(status.mode)}` +
+    (status.effectiveMode !== status.mode ? c.dim(` → ${status.effectiveMode} here (clamped by project gradient.md)`) : ""),
+  );
+  lines.push(
+    `  ${c.muted("budget")} ${status.budget} judge attempt(s)/session` +
+    (status.effectiveBudget !== status.budget ? c.dim(` → ${status.effectiveBudget} here (clamped)`) : ""),
+  );
+  if (status.projectPlaybookExists && status.projectMalformed) {
+    lines.push(c.coral("  project gradient.md is malformed — autopilot is off here"));
+  }
+  if (!status.hookInstalled) lines.push(c.dim("  stop hook not installed in this project"));
+  for (const entry of status.recent.slice(0, 3)) {
+    lines.push(
+      `  ${c.dim(oneLine(entry.ts))} ` +
+      `${entry.action === "continue" ? c.ok("continued") : c.muted("stood down")}  ${c.dim(oneLine(entry.why))}`,
     );
   }
   return lines;

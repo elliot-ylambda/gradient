@@ -1,6 +1,6 @@
 import type { Suggestion } from "../types.js";
 import { assertHookRunnable } from "../validate.js";
-import { DEFAULT_HOOK_BINARY } from "../hookBinary.js";
+import { gradientCommand } from "../hookBinary.js";
 
 const KNOWN_HOOK_EVENTS = new Set([
   "PreToolUse", "PostToolUse", "UserPromptSubmit", "Notification",
@@ -15,7 +15,7 @@ export interface HookInstall {
 
 export function emitHook(
   s: Suggestion,
-  hookBinary: string = DEFAULT_HOOK_BINARY,
+  hookBinary: string = gradientCommand(),
 ): { settingsPatch?: string; install?: HookInstall } {
   if (s.payload.type !== "hook") throw new Error("emitHook needs a hook payload");
   assertHookRunnable(s);

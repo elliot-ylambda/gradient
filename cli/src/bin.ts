@@ -39,19 +39,12 @@ async function readStdinJson(): Promise<Record<string, unknown>> {
 export async function runBinary(argv: string[], io: BinaryIo = {}): Promise<number> {
   const write = io.write ?? (chunk => process.stdout.write(chunk));
 
-  // `recall` is retired. Keep the fast path so a settings entry left behind by
-  // the old feature never reaches the full CLI's unknown-command handler, which
-  // would print usage text into the one hook event that reads stdout as model
-  // context. It removes itself instead.
-  if (argv.length === 1 && argv[0] === "recall") {
-    try {
-      const { retireRecall } = await import("./commands/retire.js");
-      await retireRecall(io.cwd ?? process.cwd(), io.home);
-    } catch {
-      // Fail open: no output, successful exit, original prompt continues.
-    }
-    return 0;
-  }
+  // `recall` is gone, and no settings file on any machine still names it — but
+  // it ran on UserPromptSubmit, the one hook event whose stdout is read as model
+  // context, so a stray entry reaching the unknown-command handler would inject
+  // usage text into a session. Exiting silently costs two lines and removes that
+  // possibility entirely.
+  if (argv.length === 1 && argv[0] === "recall") return 0;
 
   if (argv.length === 1 && argv[0] === "notify") {
     try {

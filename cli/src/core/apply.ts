@@ -1,11 +1,11 @@
 import { isAbsolute, join, resolve } from "node:path";
 import type { ArtifactType, Assistant, ManifestEntry, Suggestion } from "./types.js";
-import { emit, type EmitTarget } from "./emit/index.js";
+import { emit } from "./emit/index.js";
 import { assertInside } from "./security.js";
 import { addEntry, artifactHasMarker, loadManifest, manifestTarget } from "./manifest.js";
 import { safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
 import { installHook, removeHook } from "./settings.js";
-import { DEFAULT_HOOK_BINARY } from "./hookBinary.js";
+import { gradientCommand } from "./hookBinary.js";
 import { loadConfig, projectKey, saveConfig } from "../config.js";
 
 /**
@@ -34,7 +34,7 @@ async function grantContinuityConsent(projectDir: string, home?: string): Promis
 }
 import { validateSuggestion } from "./validate.js";
 import { hookApprovalContent, recordArtifactApproval } from "./approvals.js";
-import { spliceLine } from "./playbook-splice.js";
+import { AGENTS_MD_TEMPLATE, SHARED_FILE_HEADING, spliceLine, spliceUnderHeading } from "./playbook-splice.js";
 import { parseProjectPlaybook, savePlaybookPin } from "./playbook.js";
 
 export interface ApplyResult {
@@ -76,7 +76,6 @@ export async function applySuggestion(
   suggestion: Suggestion,
   projectDir: string,
   opts: {
-    emitTarget?: EmitTarget;
     targets?: Assistant[];
     cheapModel?: string;
     home?: string;
@@ -85,7 +84,7 @@ export async function applySuggestion(
 ): Promise<ApplyResult> {
   validateSuggestion(suggestion);
   if (suggestion.confidence === "flagged") {
-    throw new Error("refusing to apply an unresolved flagged suggestion; resolve it through gradient scan first");
+    throw new Error("refusing to apply an unresolved flagged suggestion; resolve it through gradient optimize first");
   }
   const targets = normalizeTargets(opts.targets);
   const writes: ApplyResult["writes"] = [];
@@ -101,7 +100,6 @@ export async function applySuggestion(
 
     try {
       const result = emit(suggestion, {
-        target: opts.emitTarget,
         assistant: target,
         cheapModel: opts.cheapModel,
         ...(opts.hookBinary !== undefined ? { hookBinary: opts.hookBinary } : {}),
@@ -118,7 +116,7 @@ export async function applySuggestion(
         settingsFile: string;
       } | undefined;
 
-      if (result.kind === "command" || result.kind === "skill" || result.kind === "rule") {
+      if (result.kind === "skill" || result.kind === "rule") {
         const abs = join(projectDir, result.path);
         const assistantRoot = target === "codex" ? ".agents" : ".claude";
         assertInside(join(projectDir, assistantRoot), abs);
@@ -162,10 +160,30 @@ export async function applySuggestion(
         written = abs;
         approvalContent = result.line;
         type = "playbook-entry";
+      } else if (result.kind === "block-line") {
+        // The second and last carve-out beside gradient.md: a rule for Codex has
+        // nowhere else to live, because Codex has no rules directory. The path is
+        // constructed, never taken from the suggestion, and only the tagged line
+        // is written — every other byte of the user's AGENTS.md is preserved.
+        const abs = join(projectDir, "AGENTS.md");
+        let existingContent: string | null = null;
+        try {
+          existingContent = await safeReadFile(projectDir, abs, { maxBytes: 256_000 });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        const next = spliceUnderHeading(
+          existingContent, SHARED_FILE_HEADING, result.line, suggestion.id, AGENTS_MD_TEMPLATE);
+        if (next !== existingContent) {
+          await safeWriteFile(projectDir, abs, next, { mode: 0o644 });
+        }
+        created = existingContent === null;
+        previousContent = existingContent ?? undefined;
+        written = abs;
+        approvalContent = result.line;
+        type = "block-rule";
       } else if (result.kind === "loop") {
         type = "loop";
-      } else if (result.kind === "rule-print") {
-        type = "rule";
       } else {
         // Approval means installation: merge the hook into the project's
         // settings rather than printing JSON the user would have to hand-merge.
@@ -173,7 +191,7 @@ export async function applySuggestion(
         const install = result.install ?? {
           event: suggestion.payload.event,
           ...(suggestion.payload.matcher !== undefined ? { matcher: suggestion.payload.matcher } : {}),
-          command: `${opts.hookBinary ?? DEFAULT_HOOK_BINARY} ${suggestion.payload.subcommand}`,
+          command: `${opts.hookBinary ?? gradientCommand()} ${suggestion.payload.subcommand}`,
         };
         const settingsFile = await installHook(projectDir, install.event, install.command, {
           ...(install.matcher !== undefined ? { matcher: install.matcher } : {}),
@@ -237,11 +255,7 @@ export async function applySuggestion(
 
       if (written) writes.push({ target, path: written });
       else if (installedHook) writes.push({ target, path: installedHook.settingsFile });
-      const targetPrinted = result.kind === "loop"
-        ? result.command
-        : result.kind === "rule-print"
-          ? result.text
-          : undefined;
+      const targetPrinted = result.kind === "loop" ? result.command : undefined;
       if (targetPrinted) printed = [printed, targetPrinted].filter(Boolean).join("\n");
     } catch (error) {
       failures.push({ target, error: (error as Error).message });

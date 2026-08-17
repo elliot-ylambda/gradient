@@ -51,7 +51,7 @@ export async function sessionStart(projectDir: string, deps: SessionStartDeps = 
     const suggestion = topSurfaceableSuggestion(suggestions, manifest, dismissed);
     if (suggestion) {
       const minutes = suggestion.evidence.estMinutesSavedPerMonth!;
-      line = `gradient: ${oneLine(suggestion.title)} (≈${minutes}m/month) — run \`gradient scan\``;
+      line = `gradient: ${oneLine(suggestion.title)} (≈${minutes}m/month) — run \`gradient optimize\``;
     }
   } catch {
     // Invalid or unavailable cache/state produces no hook output.
@@ -65,7 +65,7 @@ export async function sessionStart(projectDir: string, deps: SessionStartDeps = 
     }
   }
   try {
-    (deps.spawnDetachedFn ?? spawnDetached)(["scan"], projectDir);
+    (deps.spawnDetachedFn ?? spawnDetached)(["optimize"], projectDir);
   } catch {
     // Fail open: the next session starts even when the background scan cannot.
   }

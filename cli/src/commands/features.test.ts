@@ -55,17 +55,17 @@ describe("setFeature: autopilot", () => {
   });
 });
 
-describe("setFeature: session-scan", () => {
+describe("setFeature: optimize", () => {
   it("round-trips the hook and the config flag together", async () => {
     const dir = await temp("grad-feat-scan-");
     const home = await temp("grad-feat-home-");
 
-    const on = await setFeature("session-scan", true, dir, { home });
+    const on = await setFeature("optimize", true, dir, { home });
     expect(on.on).toBe(true);
     expect(await hookInstalled(dir, "SessionStart", cmd => isGradientHookFor(cmd, "session-start"))).toBe(true);
     expect((await loadConfig(home)).scanOnSessionStart).toBe(true);
 
-    const off = await setFeature("session-scan", false, dir, { home });
+    const off = await setFeature("optimize", false, dir, { home });
     expect(off.on).toBe(false);
     expect(await hookInstalled(dir, "SessionStart", cmd => isGradientHookFor(cmd, "session-start"))).toBe(false);
     expect((await loadConfig(home)).scanOnSessionStart).toBe(false);
@@ -78,7 +78,7 @@ describe("setFeature: session-scan", () => {
     const home = await temp("grad-feat-home-");
     await installHook(dir, "SessionStart", "gradient scan --detach", {});
 
-    await setFeature("session-scan", true, dir, { home });
+    await setFeature("optimize", true, dir, { home });
 
     const settings = JSON.parse(await readSettings(dir));
     const commands = settings.hooks.SessionStart.flatMap((entry: { hooks: { command: string }[] }) =>

@@ -5,7 +5,13 @@ import { safeReadFile, safeWriteFile } from "./safeFs.js";
 
 const MANIFEST_MAX_BYTES = 1_000_000;
 const MANIFEST_MAX_ENTRIES = 1_000;
-const ARTIFACT_TYPES = new Set<ArtifactType>(["command", "loop", "hook", "skill", "rule", "playbook-entry"]);
+/** The one list of artifact types that validators check against. It was
+ *  duplicated in approvals.ts, which meant adding a type left the second copy
+ *  silently rejecting it — the same shape of bug as a hand-maintained verb list
+ *  that cannot catch its own omission. */
+export const ARTIFACT_TYPES: ReadonlySet<ArtifactType> = new Set<ArtifactType>([
+  "command", "loop", "hook", "skill", "rule", "playbook-entry", "block-rule",
+]);
 const ASSISTANTS = new Set<Assistant>(["claude-code", "codex"]);
 
 export function gradientDir(projectDir: string): string {
@@ -35,6 +41,9 @@ export function artifactHasMarker(
 function expectedRelativePath(type: ArtifactType, name: string, target: Assistant): string | null {
   if (target === "codex") {
     if (type === "skill") return `.agents/skills/${name}/SKILL.md`;
+    // Every codex block-rule shares one host file; the tag inside it, not the
+    // path, is what identifies an individual entry.
+    if (type === "block-rule") return "AGENTS.md";
     return null;
   }
   switch (type) {
@@ -42,6 +51,8 @@ function expectedRelativePath(type: ArtifactType, name: string, target: Assistan
     case "command": return `.claude/commands/${name}.md`;
     case "rule": return `.claude/rules/gradient-${name}.md`;
     case "playbook-entry": return "gradient.md";
+    // Claude Code gets its own rules file, so a block-rule never targets it.
+    case "block-rule":
     case "loop":
     case "hook": return null;
   }
@@ -55,6 +66,19 @@ export function expectedArtifactPath(projectDir: string, entry: ManifestEntry): 
   return rel === null ? "" : join(projectDir, rel);
 }
 
+/**
+ * A sanity bound on the hook command a manifest may carry.
+ *
+ * It was 200 when gradient installed `gradient checkpoint`, a name on PATH.
+ * gradient now ships as a plugin or a copied skill directory and installs
+ * `<node> <its own runner> <subcommand>` — two absolute paths, one of them
+ * under the user's home. 200 rejected those outright, and the failure surfaced
+ * as an artifact that silently would not apply. The bound is still a bound:
+ * POSIX PATH_MAX is 1024, so this refuses anything that could not be two real
+ * paths.
+ */
+const HOOK_COMMAND_CAP = 2_200;
+
 function validateEntry(projectDir: string, value: unknown, index: number): ManifestEntry {
   const entry = value as Record<string, unknown>;
   if (!entry || typeof entry !== "object") throw new Error(`manifest entry ${index} is not an object`);
@@ -67,7 +91,7 @@ function validateEntry(projectDir: string, value: unknown, index: number): Manif
   if (entry.target !== undefined && (typeof entry.target !== "string" || !ASSISTANTS.has(entry.target as Assistant))) {
     throw new Error(`manifest entry ${index} has an invalid target`);
   }
-  if (entry.target === "codex" && entry.type !== "skill" && entry.type !== "rule") {
+  if (entry.target === "codex" && entry.type !== "skill" && entry.type !== "rule" && entry.type !== "block-rule") {
     throw new Error(`manifest entry ${index} has an unsupported codex artifact type`);
   }
   if (typeof entry.path !== "string" || stripUnsafeControls(entry.path) !== entry.path) {
@@ -96,7 +120,8 @@ function validateEntry(projectDir: string, value: unknown, index: number): Manif
     if (
       entry.type !== "hook" || !hook || typeof hook !== "object" || Array.isArray(hook) ||
       typeof hook.event !== "string" || !/^[A-Za-z]{1,50}$/.test(hook.event) ||
-      typeof hook.command !== "string" || hook.command.trim().length === 0 || hook.command.length > 200 ||
+      typeof hook.command !== "string" || hook.command.trim().length === 0 ||
+      hook.command.length > HOOK_COMMAND_CAP ||
       /[\r\n]/.test(hook.command) || stripUnsafeControls(hook.command) !== hook.command ||
       !matcherIsValid
     ) {

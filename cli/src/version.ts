@@ -20,3 +20,16 @@ export const VERSION: string =
   typeof __GRADIENT_BUNDLED_VERSION__ !== "undefined"
     ? __GRADIENT_BUNDLED_VERSION__
     : (require("../package.json") as { version: string }).version;
+
+/**
+ * True only inside the single-file esbuild bundle — the plugin's
+ * bin/gradient.mjs, and the copy each installed skill directory carries.
+ *
+ * Anything that needs to locate gradient's own entry point has to know which
+ * build it is running in: in the tsc build this package is many files under
+ * dist/ and the entry is dist/bin.js, while in the bundle every module is
+ * inlined into one file that IS the entry. Guessing that from paths is how the
+ * hook resolver ended up concluding gradient was unreachable while executing
+ * from the very file it was looking for.
+ */
+export const BUNDLED: boolean = typeof __GRADIENT_BUNDLED_VERSION__ !== "undefined";

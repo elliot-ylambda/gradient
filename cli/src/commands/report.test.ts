@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildReport, REPORT_MAX_SUGGESTIONS } from "./report.js";
 import { renderReport } from "./report-render.js";
+import { displayCommand } from "../core/hookBinary.js";
 import { saveSuggestions } from "./apply.js";
 import type { InsightsReport } from "./insights.js";
 import type { Suggestion } from "../core/types.js";
@@ -101,6 +102,18 @@ describe("buildReport", () => {
 });
 
 describe("renderReport", () => {
+  /**
+   * The report writes advice as `gradient on continuity` because spelling the
+   * runner out on every line buries the numbers those lines exist to report.
+   * That is only honest if the report says, once, what `gradient` is — nothing
+   * puts it on PATH.
+   */
+  it("says what `gradient` is, since nothing else on the machine does", () => {
+    const out = renderReport(base).join("\n");
+    expect(out).toContain(`gradient = ${displayCommand()}`);
+    expect(displayCommand()).not.toBe("gradient");
+  });
+
   const base = {
     insights: emptyInsights({ recommendations: [{ metric: "m", line: "do the thing" }] }),
     adoption: [],

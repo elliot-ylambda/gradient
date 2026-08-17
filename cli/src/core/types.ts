@@ -1,21 +1,11 @@
 export type Role = "user" | "assistant";
 export type Confidence = "high" | "inferred" | "flagged";
-export type ArtifactType = "command" | "loop" | "hook" | "skill" | "rule" | "playbook-entry";
+/** `block-rule` is a rule that lives as one tagged line inside a file the user
+ *  also writes in — AGENTS.md, because Codex has no rules directory. It exists
+ *  as its own type so removal splices the line instead of unlinking the file. */
+export type ArtifactType =
+  | "command" | "loop" | "hook" | "skill" | "rule" | "playbook-entry" | "block-rule";
 export type Assistant = "claude-code" | "codex";
-
-/** One complete reading of an ambiguous pattern. */
-export interface ClarifyOption {
-  label: string;
-  body: string;
-}
-
-/** Judge-authored disambiguation for a flagged suggestion. `chosen` is set
- * only after the user resolves it during review. */
-export interface Clarify {
-  question: string;
-  options: ClarifyOption[];
-  chosen?: string;
-}
 
 /** Local-only temporal evidence per cluster (core/temporal.ts). */
 export interface TemporalFeatures {
@@ -98,7 +88,7 @@ export type SuggestionPayload =
   | { type: "command"; commandName: string; body: string; triggers?: string[]; mechanical?: boolean }
   | { type: "loop"; instruction: string; cadence?: string }
   | { type: "hook"; event: string; description: string; matcher?: string; subcommand?: string; command?: string }
-  | { type: "rule"; target: "project" | "user"; ruleName: string; text: string }
+  | { type: "rule"; target: "project"; ruleName: string; text: string }
   | { type: "project-playbook"; section: "rules" | "workflows"; text: string };
 
 /** Post-LLM (or post-degradation), ready to present/emit. */
@@ -121,7 +111,6 @@ export interface Suggestion {
     temporal?: TemporalFeatures;
   };
   confidence: Confidence;
-  clarify?: Clarify;
   examples?: string[];   // representative redacted prompts, for `explain`
   /** Redacted union of source candidates' memberSignatures (fallback [signature] when
    * empty). Optional: absent on pre-existing caches/fixtures written before this field
@@ -167,8 +156,6 @@ export interface Config {
   autopilotModel?: string;
   /** Extra regexes (source strings) classified as machine-injected during mining. */
   ignorePatterns?: string[];
-  /** Artifact format for command-type suggestions. Default "skill". */
-  emitTarget?: "skill" | "command";
   /** Assistants that receive approved skills. Defaults to ["claude-code"]. */
   targets?: Assistant[];
   /** Claude model frontmatter for mechanical skills. Empty disables it. Default "haiku". */
