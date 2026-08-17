@@ -10,10 +10,12 @@ import {
   boardRefresh,
   boardShow,
   DIGEST_COMMAND,
+  DIGEST_SUB,
   REFRESH_COMMAND,
+  REFRESH_SUB,
   setBoard,
 } from "./board.js";
-import { hookInstalled } from "../core/settings.js";
+import { hookInstalled, installHook } from "../core/settings.js";
 import { loadConfig } from "../config.js";
 import { boardStateDir } from "../core/board.js";
 import { isGradientHookFor } from "../core/hookBinary.js";
@@ -39,15 +41,47 @@ describe("setBoard", () => {
 
     const result = await setBoard(true, repo, { home });
     expect(result.on).toBe(true);
-    expect(await hookInstalled(repo, "SessionStart", cmd => isGradientHookFor(cmd, "board digest"))).toBe(true);
-    expect(await hookInstalled(repo, "UserPromptSubmit", cmd => isGradientHookFor(cmd, "board refresh"))).toBe(true);
+    expect(await hookInstalled(repo, "SessionStart", cmd => isGradientHookFor(cmd, DIGEST_SUB))).toBe(true);
+    expect(await hookInstalled(repo, "UserPromptSubmit", cmd => isGradientHookFor(cmd, REFRESH_SUB))).toBe(true);
     expect((await loadConfig(home)).boardProjects).toEqual([repo]);
 
     const off = await setBoard(false, repo, { home });
     expect(off.on).toBe(false);
-    expect(await hookInstalled(repo, "SessionStart", cmd => isGradientHookFor(cmd, "board digest"))).toBe(false);
+    expect(await hookInstalled(repo, "SessionStart", cmd => isGradientHookFor(cmd, DIGEST_SUB))).toBe(false);
     expect((await loadConfig(home)).boardProjects).toEqual([]);
     expect(existsSync(boardStateDir(repo, home))).toBe(false);
+  });
+
+  /**
+   * 0.6.0 through 0.8.3 wrote `board digest` and `board refresh`, which nothing
+   * dispatched. Those hooks are still in the settings files of everyone who
+   * turned the board on, and `off` is the only way out of them, so removal has
+   * to recognise the form gradient no longer writes.
+   */
+  it("removes the hooks an older gradient wrote, not only its own", async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-repo-")));
+    await initRepo(repo);
+    await installHook(repo, "SessionStart", "/usr/bin/node /old/gradient/bin/gradient.mjs board digest");
+    await installHook(repo, "UserPromptSubmit", "/usr/bin/node /old/gradient/bin/gradient.mjs board refresh");
+
+    await setBoard(false, repo, { home });
+    const anyLeft = async (event: string) =>
+      await hookInstalled(repo, event, cmd => /gradient/i.test(cmd));
+    expect(await anyLeft("SessionStart")).toBe(false);
+    expect(await anyLeft("UserPromptSubmit")).toBe(false);
+  });
+
+  // Turning it on again must not leave the stale pair beside the working one.
+  it("replaces an older gradient's hook instead of installing a second", async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-repo-")));
+    await initRepo(repo);
+    await installHook(repo, "SessionStart", "/usr/bin/node /old/gradient/bin/gradient.mjs board digest");
+
+    await setBoard(true, repo, { home });
+    expect(await hookInstalled(repo, "SessionStart", cmd => isGradientHookFor(cmd, "board digest"))).toBe(false);
+    expect(await hookInstalled(repo, "SessionStart", cmd => isGradientHookFor(cmd, DIGEST_SUB))).toBe(true);
   });
 
   it("refuses outside a git repository", async () => {

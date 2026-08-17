@@ -265,26 +265,49 @@ export function landedLine(subject: string): string {
   return redact(subject).slice(0, 100);
 }
 
+/**
+ * The default branch's display name, and the ref to actually read it from.
+ *
+ * "landed on main" means landed on the branch everyone shares, and the local
+ * ref is not that one: in a worktree checkout `main` is whatever it was when
+ * the worktree was cut, because nothing there ever pulls it. This board read
+ * a local `main` four merges stale and reported the two oldest of the day.
+ * Prefer the remote-tracking ref, which a fetch keeps current, and fall back
+ * to the local branch when there is no remote or it has never been fetched.
+ */
+async function resolveDefaultBranch(
+  boardRoot: string,
+): Promise<{ name: string; ref: string } | null> {
+  for (const name of ["main", "master"]) {
+    for (const ref of [`origin/${name}`, name]) {
+      if ((await git(["rev-parse", "--verify", "--quiet", ref], boardRoot)) !== null) {
+        return { name, ref };
+      }
+    }
+  }
+  return null;
+}
+
 export async function collectRepoState(
   boardRoot: string,
   sessionCwd: string,
 ): Promise<RepoState | null> {
-  const defaultBranch =
-    (await git(["rev-parse", "--verify", "--quiet", "main"], boardRoot)) !== null ? "main"
-      : (await git(["rev-parse", "--verify", "--quiet", "master"], boardRoot)) !== null ? "master"
-        : null;
-  if (!defaultBranch) return null;
-  const mainTip = (await git(["rev-parse", defaultBranch], boardRoot)) ?? "";
+  const resolved = await resolveDefaultBranch(boardRoot);
+  if (!resolved) return null;
+  const { name: defaultBranch, ref } = resolved;
+  const mainTip = (await git(["rev-parse", ref], boardRoot)) ?? "";
   const log = await git(
-    ["log", defaultBranch, "--first-parent", "--since=24.hours", "--pretty=format:%s"],
+    ["log", ref, "--first-parent", "--since=24.hours", "--pretty=format:%s"],
     boardRoot,
   );
   const landed = (log ? log.split("\n") : [])
     .filter(subject => subject.length > 0)
     .map(landedLine)
     .slice(0, LANDED_CAP);
+  // Measured against the same ref the landed list came from, so the two halves
+  // of the board can never disagree about where the branch is.
   const counts = await git(
-    ["rev-list", "--left-right", "--count", `${defaultBranch}...HEAD`],
+    ["rev-list", "--left-right", "--count", `${ref}...HEAD`],
     sessionCwd,
   );
   const parsed = counts ? counts.split(/\s+/).map(part => Number.parseInt(part, 10)) : [0, 0];

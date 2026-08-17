@@ -24,5 +24,6 @@ window, and `--html` to write a self-contained private `.gradient/insights.html`
 Neither makes a model call.
 
 If the command fails to start, this skill directory is incomplete — tell the
-user to re-copy skills/gradient-report from the gradient repository.
-Never look for a gradient anywhere else on the system.
+user to delete the installed gradient-report directory and install it again
+with `$skill-installer`, which aborts rather than overwrite a directory that
+already exists. Never look for a gradient anywhere else on the system.

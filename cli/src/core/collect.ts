@@ -2,6 +2,7 @@ import { lstat, opendir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { assertNoSymlinkPath, symlinkRefusalError } from "./safeFs.js";
+import { MAX_TRANSCRIPT_BYTES } from "./parse.js";
 
 export interface CollectOptions {
   scope: "project" | "all";
@@ -31,7 +32,6 @@ export function symlinkWarner(onWarn?: (message: string) => void): (error: unkno
 const TRANSCRIPT_DISCOVERY_CAP = 10_000;
 const TRANSCRIPT_FILE_CAP = 5_000;
 const TRANSCRIPT_TOTAL_BYTES_CAP = 512 * 1024 * 1024;
-const TRANSCRIPT_FILE_BYTES_CAP = 8_000_000;
 const TRANSCRIPT_TREE_DEPTH_CAP = 20;
 
 /** The history root itself is the user's own config — a dotfiles-managed
@@ -46,15 +46,25 @@ export async function canonicalRoot(path: string): Promise<string> {
 }
 
 export function encodeProjectDir(cwd: string): string {
-  // Claude's directory encoding replaces path separators. Cover both styles so
-  // a Windows cwd can never turn the joined transcript root into a path escape.
-  return cwd.replace(/[\\/]/g, "-").replace(/:/g, "-");
+  // Claude Code names a project's transcript directory by replacing every
+  // character outside [A-Za-z0-9] with a dash, not just the separators. The
+  // double dash in `-Users-u--clinch-worktrees-x` is an encoded dot: the run
+  // is `.../u/` + `.clinch/`. Replacing only separators therefore cost project
+  // scope every history under a dotted path — `~/.clinch`, `~/.config`, a
+  // worktree manager's dot directory, a repository named `site.com` — and it
+  // failed silently, because a missing directory and an empty one read the
+  // same. Measured against 305 real transcript directories on one machine,
+  // separators-only matched 53; this matches every one.
+  //
+  // It also subsumes the Windows cases the previous form spelled out (`\` and
+  // `:`), and leaves no `.` behind, so no encoded segment can read as `..`.
+  return cwd.replace(/[^A-Za-z0-9]/g, "-");
 }
 
-// Sessions started in Claude Code git worktrees transcribe into SIBLING directories named
-// <encoded>--claude-worktrees-<branch>, not into the project's own directory, so a
-// project-scoped scan that only reads the exact-match directory silently misses all
-// worktree sessions. Sweep those siblings too.
+// Sessions started in a git worktree under the project transcribe into SIBLING
+// directories named for the worktree's own path, not into the project's own
+// directory, so a project-scoped scan that only reads the exact-match directory
+// silently misses every worktree session. Sweep those siblings too.
 async function projectRoots(
   base: string,
   projectsRoot: string,
@@ -71,13 +81,18 @@ async function projectRoots(
     onRefused(error);
     return [exact];
   }
-  const worktreePrefix = `${encoded}--claude-worktrees-`;
+  // Both conventions are in use — `<repo>/.claude/worktrees/<branch>` encodes to
+  // `<encoded>--claude-worktrees-<branch>`, and a plain `<repo>/.worktrees/<branch>`
+  // to `<encoded>--worktrees-<branch>`. The double dash in each is the encoded
+  // dot. Anchoring on the full prefix keeps a sibling project whose name merely
+  // extends this one (`gradient` vs `gradient-web`) from being swept in.
+  const worktreePrefixes = [`${encoded}--claude-worktrees-`, `${encoded}--worktrees-`];
   const roots: string[] = [];
   let seen = 0;
   for await (const entry of directory) {
     seen += 1;
     if (seen > TRANSCRIPT_DISCOVERY_CAP) break;
-    if (entry.isDirectory() && (entry.name === encoded || entry.name.startsWith(worktreePrefix))) {
+    if (entry.isDirectory() && (entry.name === encoded || worktreePrefixes.some(prefix => entry.name.startsWith(prefix)))) {
       roots.push(join(projectsRoot, entry.name));
     }
   }
@@ -135,13 +150,22 @@ export async function collect(opts: CollectOptions): Promise<string[]> {
   }
   const files: string[] = [];
   for (const root of roots) await walk(projectsRoot, root, files, onRefused);
-  const candidates: Array<{ path: string; mtimeMs: number; size: number }> = [];
+  const candidates: Array<{ path: string; mtimeMs: number; bytes: number }> = [];
   for (const path of files) {
     try {
       const metadata = await lstat(path);
-      if (!metadata.isFile() || metadata.size > TRANSCRIPT_FILE_BYTES_CAP) continue;
+      if (!metadata.isFile()) continue;
       if (matchesSince(metadata.mtimeMs, opts.sinceDays, now)) {
-        candidates.push({ path, mtimeMs: metadata.mtimeMs, size: metadata.size });
+        // A long session carries the most signal and is exactly the transcript
+        // a per-file byte cap used to drop — silently, and for nothing: the
+        // reader already takes only the newest MAX_TRANSCRIPT_BYTES of any
+        // file. Budget by what will actually be read, so the total stays
+        // bounded without losing the file.
+        candidates.push({
+          path,
+          mtimeMs: metadata.mtimeMs,
+          bytes: Math.min(metadata.size, MAX_TRANSCRIPT_BYTES),
+        });
       }
     } catch {
       // The transcript disappeared or changed type during discovery.
@@ -151,9 +175,9 @@ export async function collect(opts: CollectOptions): Promise<string[]> {
   const kept: string[] = [];
   let totalBytes = 0;
   for (const candidate of candidates) {
-    if (kept.length >= TRANSCRIPT_FILE_CAP || totalBytes + candidate.size > TRANSCRIPT_TOTAL_BYTES_CAP) break;
+    if (kept.length >= TRANSCRIPT_FILE_CAP || totalBytes + candidate.bytes > TRANSCRIPT_TOTAL_BYTES_CAP) break;
     kept.push(candidate.path);
-    totalBytes += candidate.size;
+    totalBytes += candidate.bytes;
   }
   return kept;
 }

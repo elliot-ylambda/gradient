@@ -51,6 +51,11 @@ function installedHookCommands(settings, event) {
   return (settings?.hooks?.[event] ?? []).flatMap(entry => (entry.hooks ?? []).map(hook => hook.command ?? ""));
 }
 
+// Every feature `gradient on` accepts. Kept beside the harness rather than
+// imported so that dropping one from the CLI shows up here as a failing verb
+// instead of quietly shrinking the loop below.
+const FEATURE_NAMES = ["continuity", "autopilot", "board", "optimize"];
+
 function runsSubcommand(settings, event, subcommand) {
   return installedHookCommands(settings, event).some(command => command.trim().endsWith(` ${subcommand}`));
 }
@@ -342,7 +347,13 @@ async function main() {
     sandbox,
     output: options.output,
     home: join(sandbox, "gradient-home"),
-    project: join(sandbox, "project"),
+    // Under a dot directory on purpose. Claude Code dashes out every character
+    // outside [A-Za-z0-9] when it names a project's transcript directory, and
+    // a dot-free fixture path makes that rule indistinguishable from "replace
+    // the separators" — which is what gradient did, and why it found none of
+    // its own history under ~/.clinch. A gate has to be able to tell the two
+    // apart, so the fixture lives somewhere that tells them apart.
+    project: join(sandbox, ".worktrees", "checkout"),
     fakeBin: join(sandbox, "fake-bin"),
     // Where Claude Code puts a plugin it has installed from a marketplace.
     pluginRoot: join(sandbox, "gradient-home", ".claude", "plugins", "cache", "gradient", "gradient"),
@@ -553,7 +564,15 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       await writeFile(fakeGhPath, `#!${process.execPath}\nprocess.stdout.write("[]");\n`, { mode: 0o755 });
       await chmod(fakeGhPath, 0o755);
 
-      const encoded = state.project.replace(/[\\/]/g, "-").replace(/:/g, "-");
+      // Spelled out rather than imported from the CLI on purpose: this is the
+      // external fact gradient has to match — Claude Code's own naming — so
+      // importing gradient's encoder would only check it against itself.
+      const encoded = state.project.replace(/[^A-Za-z0-9]/g, "-");
+      const separatorsOnly = state.project.replace(/[\\/]/g, "-").replace(/:/g, "-");
+      assertion(
+        encoded !== separatorsOnly,
+        "the fixture project path distinguishes Claude Code's encoding from replacing separators alone",
+      );
       const claudeRoot = join(state.home, ".claude", "projects", encoded);
       const codexRoot = join(state.home, ".codex", "sessions", "2026", "07", "18");
       await Promise.all([mkdir(claudeRoot, { recursive: true }), mkdir(codexRoot, { recursive: true })]);
@@ -776,7 +795,19 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
     await scenario("mine", "Mine synthetic Claude Code and Codex histories with no model", "mining", async ({ assertion, equal }) => {
       const both = await runCli(["optimize"]);
       equal(both.exitCode, 0, "project optimize succeeds");
-      assertion(both.stdout.includes("Claude Code") && both.stdout.includes("Codex"), "optimize reports both transcript sources");
+      // Naming both products is not evidence either was read: the header
+      // prints "Claude Code 0 · Codex 0" just as happily. Discovery failing
+      // whole — a transcript directory gradient names differently from the way
+      // Claude Code names it — is invisible to any substring check, so assert
+      // the counts. Both layers, because they fail apart: files is discovery,
+      // prompts is parsing.
+      const found = /files: \d+ transcripts \(Claude Code (\d+) · Codex (\d+)\)/.exec(both.stdout);
+      const mined = /sources: Claude Code (\d+) prompt\(s\) · Codex (\d+) prompt\(s\)/.exec(both.stdout);
+      assertion(found && mined, "optimize reports per-source transcript and prompt counts");
+      assertion(Number(found[1]) > 0 && Number(found[2]) > 0,
+        "optimize discovers the transcripts written for both products", found[0]);
+      assertion(Number(mined[1]) > 0 && Number(mined[2]) > 0,
+        "prompts from both products reach the miner", mined[0]);
       assertion(both.stdout.includes("restatement filter"),
         "an artifact that would only repeat its own prompt is refused, and says so");
       const cached = await readJson(await suggestionsPath());
@@ -1072,8 +1103,8 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const settingsPath = join(state.project, ".claude", "settings.local.json");
       const settingsOn = await readJson(settingsPath);
       assertion(
-        runsSubcommand(settingsOn, "SessionStart", "board digest") &&
-        runsSubcommand(settingsOn, "UserPromptSubmit", "board refresh"),
+        runsSubcommand(settingsOn, "SessionStart", "hook board-digest") &&
+        runsSubcommand(settingsOn, "UserPromptSubmit", "hook board-refresh"),
         "board installs both project hooks",
       );
 
@@ -1123,8 +1154,8 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       equal(disabledConfig.boardProjects, [], "board disable revokes repository consent");
       const settingsOff = await readJson(settingsPath);
       assertion(
-        !runsSubcommand(settingsOff, "SessionStart", "board digest") &&
-        !runsSubcommand(settingsOff, "UserPromptSubmit", "board refresh"),
+        !runsSubcommand(settingsOff, "SessionStart", "hook board-digest") &&
+        !runsSubcommand(settingsOff, "UserPromptSubmit", "hook board-refresh"),
         "board disable removes only its hooks",
       );
       assertion(!(await pathExists(boardDir)), "board disable removes private board state");
@@ -1181,6 +1212,53 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const settingsOff = await readJson(join(state.project, ".claude", "settings.local.json"));
       assertion(!runsSubcommand(settingsOff, "Stop", "respond"), "autopilot consent and hook are removed together");
     }, ["board"]);
+
+    await scenario("hook-commands", "Run the exact command line every feature writes into settings", "runtime", async ({ assertion, equal }) => {
+      // A feature is not on until the line it wrote actually runs. `on board`
+      // installed a SessionStart and a UserPromptSubmit hook naming a verb the
+      // CLI never dispatched: both exited 2 and printed the whole help text
+      // into the session they were meant to help — every session, every prompt.
+      // Nothing caught it, because the assertions here checked that settings
+      // contained the string the writer wrote, which is true of a wrong string
+      // too. So read the file back and run what is in it.
+      const settingsPath = join(state.project, ".claude", "settings.local.json");
+      const listHooks = settings => Object.keys(settings?.hooks ?? {})
+        .flatMap(event => installedHookCommands(settings, event).map(hookCommand => `${event}\t${hookCommand}`));
+      // Diffed against a snapshot rather than filtered by name: earlier
+      // scenarios leave generated artifacts behind (a post-edit `npm run lint`
+      // among them), and this scenario is about what `on` writes, not about
+      // every hook that happens to be in the file.
+      const before = new Set(listHooks(await readJson(settingsPath)));
+      try {
+        for (const feature of FEATURE_NAMES) {
+          equal((await runCli(["on", feature])).exitCode, 0, `${feature} enables`);
+        }
+        const added = listHooks(await readJson(settingsPath)).filter(entry => !before.has(entry));
+        assertion(added.length >= FEATURE_NAMES.length, "enabling every feature installs hooks",
+          `${added.length} hook(s)`);
+        for (const entry of added) {
+          const [event, hookCommand] = entry.split("\t");
+          // Through a shell, with no gradient on PATH: that is how the product
+          // runs it, and the runner word may itself be a shell expression.
+          const ran = await command(`${event}: ${hookCommand}`, "/bin/sh", ["-c", hookCommand], {
+            cwd: state.project,
+            env: state.productEnv,
+            input: JSON.stringify({ session_id: "dogfood-hooks", cwd: state.project }),
+          });
+          assertion(ran.exitCode === 0, `the ${event} hook gradient installed exits zero`,
+            `${hookCommand} → ${ran.exitCode}`);
+          assertion(!/unknown command|^Usage:/m.test(`${ran.stdout}${ran.stderr}`),
+            `the ${event} hook names a verb the CLI dispatches`, hookCommand);
+        }
+      } finally {
+        // In `finally` because a failure here must not leave a feature on for
+        // every scenario that follows — the first draft did, and the cascade
+        // read as a second, unrelated bug.
+        for (const feature of FEATURE_NAMES) await runCli(["off", feature]);
+      }
+      const remaining = listHooks(await readJson(settingsPath)).filter(entry => !before.has(entry));
+      equal(remaining, [], "turning every feature off leaves behind nothing it added");
+    }, ["autopilot"]);
 
     await scenario("hook-contracts", "Verify notification and malformed hook inputs fail open", "runtime", async ({ assertion, equal }) => {
       const notify = await runCli(["notify"], { input: JSON.stringify({ hook_event_name: "Notification" }) });

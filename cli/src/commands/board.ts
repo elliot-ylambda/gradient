@@ -13,10 +13,25 @@ import {
 import { safeRemoveTree } from "../core/safeFs.js";
 import { gradientHookCommand, isGradientHookFor } from "../core/hookBinary.js";
 
-export const DIGEST_SUB = "board digest";
-export const REFRESH_SUB = "board refresh";
+// The CLI dispatches its hook entry points under `hook <target>`, so that a
+// settings file can say plainly that these are not commands to type. These two
+// were written as `board digest` and `board refresh`, which nothing dispatched:
+// enabling the board installed a SessionStart and a UserPromptSubmit hook that
+// exited 2 and printed the entire help text into the session they were meant to
+// help, every session and every prompt.
+export const DIGEST_SUB = "hook board-digest";
+export const REFRESH_SUB = "hook board-refresh";
 export const DIGEST_COMMAND = `gradient ${DIGEST_SUB}`;
 export const REFRESH_COMMAND = `gradient ${REFRESH_SUB}`;
+
+// Machines that ran an affected version still carry those hooks, and `off` is
+// the only way out of them, so removal has to recognise both forms. The two
+// cannot be confused for each other: the matcher compares whole trailing words,
+// and `hook board-digest` does not end with ` board digest`.
+const isDigestHook = (command: string): boolean =>
+  isGradientHookFor(command, DIGEST_SUB) || isGradientHookFor(command, "board digest");
+const isRefreshHook = (command: string): boolean =>
+  isGradientHookFor(command, REFRESH_SUB) || isGradientHookFor(command, "board refresh");
 
 async function consentedRoot(projectDir: string, home?: string): Promise<string | null> {
   const root = await resolveBoardRoot(projectDir);
@@ -37,9 +52,9 @@ export async function setBoard(
   if (on) {
     try {
       await installHook(projectDir, "SessionStart", gradientHookCommand(DIGEST_SUB),
-        { replacing: [cmd => isGradientHookFor(cmd, DIGEST_SUB)] });
+        { replacing: [isDigestHook] });
       const path = await installHook(projectDir, "UserPromptSubmit", gradientHookCommand(REFRESH_SUB),
-        { replacing: [cmd => isGradientHookFor(cmd, REFRESH_SUB)] });
+        { replacing: [isRefreshHook] });
       projects.add(root);
       config.boardProjects = [...projects].sort();
       await saveConfig(config, opts.home);
@@ -48,8 +63,8 @@ export async function setBoard(
       projects.delete(root);
       config.boardProjects = [...projects].sort();
       await saveConfig(config, opts.home).catch(() => undefined);
-      await removeHook(projectDir, "SessionStart", cmd => isGradientHookFor(cmd, DIGEST_SUB)).catch(() => undefined);
-      await removeHook(projectDir, "UserPromptSubmit", cmd => isGradientHookFor(cmd, REFRESH_SUB)).catch(() => undefined);
+      await removeHook(projectDir, "SessionStart", isDigestHook).catch(() => undefined);
+      await removeHook(projectDir, "UserPromptSubmit", isRefreshHook).catch(() => undefined);
       throw error;
     }
   }
@@ -60,8 +75,8 @@ export async function setBoard(
   await saveConfig(config, opts.home);
   const userHome = opts.home ?? homedir();
   await safeRemoveTree(userHome, boardStateDir(root, userHome)).catch(() => undefined);
-  await removeHook(projectDir, "SessionStart", cmd => isGradientHookFor(cmd, DIGEST_SUB));
-  const path = await removeHook(projectDir, "UserPromptSubmit", cmd => isGradientHookFor(cmd, REFRESH_SUB));
+  await removeHook(projectDir, "SessionStart", isDigestHook);
+  const path = await removeHook(projectDir, "UserPromptSubmit", isRefreshHook);
   return { on: false, settingsPath: path };
 }
 
