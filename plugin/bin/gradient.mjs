@@ -767,7 +767,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.8.2" : require2("../package.json").version;
+    VERSION = true ? "0.8.3" : require2("../package.json").version;
     BUNDLED = true;
   }
 });
@@ -19557,7 +19557,13 @@ function extractRefs(text) {
   };
   let rest = text;
   for (const match of text.matchAll(/`([^`]+)`/g)) {
-    push(match[1]);
+    const span = match[1];
+    push(span);
+    if (/\s/.test(span)) {
+      for (const token of span.split(/\s+/)) {
+        if (isPathShaped(token)) push(token);
+      }
+    }
     rest = rest.replace(match[0], " ");
   }
   for (const token of rest.split(/\s+/)) {
@@ -19593,7 +19599,8 @@ async function exists(path5) {
   }
 }
 async function isConcretePath(ref, projectDir) {
-  if (/\.[A-Za-z0-9]{1,8}$/.test(ref)) return true;
+  const extension = /\.([A-Za-z0-9]{1,8})$/.exec(ref)?.[1];
+  if (extension !== void 0 && /[A-Za-z]/.test(extension)) return true;
   const root = ref.split("/")[0];
   return root.length > 0 && await exists(join25(projectDir, root));
 }

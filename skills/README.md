@@ -10,15 +10,16 @@ into the right place works in either.
 is installed for Codex, which has no plugin marketplace. Each is self-contained —
 a `SKILL.md` plus the single-file runner it invokes — so a copy is a complete
 install, with no package manager, no PATH entry, and nothing global. Use Codex's
-built-in installer:
+built-in installer — the same one the official `openai/skills` catalog uses:
 
 ```
 $skill-installer install gradient-optimize, gradient-report and gradient-features from elliot-ylambda/gradient
 ```
 
-That writes to `~/.codex/skills`. Codex also reads `~/.agents/skills`, and each
-skill resolves its runner in **either** — a skill that hardcoded one of them
-would be silently broken for everyone who used the other.
+That writes to `$CODEX_HOME/skills`. Codex also reads `~/.agents/skills`, and
+each skill resolves its runner in **either** — one that hardcoded a single root
+would be silently broken for everyone who used the other, which is exactly how
+this shipped broken once.
 
 Claude Code users install the same three skills as a plugin instead — see the
 [root README](../README.md).
