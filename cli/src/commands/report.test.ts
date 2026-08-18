@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildReport, REPORT_MAX_SUGGESTIONS } from "./report.js";
+import { buildReport, featureStatus, REPORT_MAX_SUGGESTIONS } from "./report.js";
 import { renderReport } from "./report-render.js";
 import { displayCommand } from "../core/hookBinary.js";
 import { saveSuggestions } from "./apply.js";
+import { FEATURES } from "./features.js";
 import type { InsightsReport } from "./insights.js";
 import type { Suggestion } from "../core/types.js";
 
@@ -161,5 +162,29 @@ describe("renderReport", () => {
       }],
     }).join("\n");
     expect(out).not.toContain("[2J");
+  });
+});
+
+describe("the feature rows", () => {
+  /**
+   * The report is where people read which features are on, so every name it
+   * prints has to be a name `gradient on|off` accepts. The fourth row said
+   * `session-scan` — the config's word for the behaviour, not a feature — so
+   * the report told users about a switch and then answered
+   * `unknown feature: session-scan` when they reached for it.
+   *
+   * Written against the whole list rather than the one bad row: the two lists
+   * are maintained in different files, and nothing else holds them together.
+   */
+  it("print only names that gradient on|off accepts", async () => {
+    const rows = await featureStatus(process.cwd(), {}, undefined);
+    expect(rows.length).toBe(FEATURES.length);
+    for (const row of rows) {
+      expect(FEATURES, `report row \`${row.name}\` is not a feature`).toContain(row.name);
+    }
+    // ...and every feature has a row, so none can be silently unreportable.
+    for (const feature of FEATURES) {
+      expect(rows.map(row => row.name)).toContain(feature);
+    }
   });
 });

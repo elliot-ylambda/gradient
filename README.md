@@ -87,7 +87,7 @@ rm -rf ~/.codex/skills/gradient-{optimize,report,features}
 |---|---|
 | `gradient` | The report. What your habits cost, what is installed and whether it is used, what other sessions are doing. Read-only. |
 | `gradient optimize` | Find what recurs and what has gone stale, then propose the changes. |
-| `gradient remove <name>` | Uninstall a generated artifact. |
+| `gradient remove <name>` | Uninstall a generated artifact — one carrying gradient's own marker, never a file you wrote. |
 | `gradient on\|off <feature>` | `continuity` · `autopilot` · `board` · `optimize` |
 
 Nothing puts a `gradient` on your PATH, so `gradient` above is shorthand for the
@@ -113,11 +113,15 @@ gradient optimize --auto               # headless; additive, reversible changes 
 |---|---|
 | `drift` | The two assistants' configurations disagree — usually the missing `@AGENTS.md` import |
 | `stale` | An instruction names a path, script, or task the repository no longer has |
-| `skill-health` | A skill will not load, will not be selected, or costs context for nothing |
+| `skill-health` | A skill will not load, will not be selected, carries frontmatter outside the spec, or costs context for nothing |
 | `dead-letter` | A written instruction you keep retyping anyway |
 | `workflow` | A repeated habit worth turning into a skill, rule, or hook |
 | `practice` | Conformance to published guidance — file length, path-scoped rules |
 | `memory` | Read-only observations about auto memory. gradient never edits it |
+
+Not every finding carries a change. A portability problem or an unused artifact
+gradient did not generate is reported and explained, and `optimize` says so
+rather than offering an `--apply` that would refuse.
 
 `stale` is the one that keeps a CLAUDE.md true as the code moves out from under
 it. `dead-letter` is the one neither assistant can tell you: you are paying an
