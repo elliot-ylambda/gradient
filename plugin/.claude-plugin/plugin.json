@@ -1,7 +1,7 @@
 {
   "name": "gradient",
   "description": "Read how you actually work — from your own Claude Code and Codex history and the configuration they load — and keep your setup honest: stale instructions, skills that will not load, habits worth automating. Local, offline, reversible; nothing runs without you.",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "author": {
     "name": "ylambda"
   },

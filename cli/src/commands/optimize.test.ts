@@ -6,6 +6,7 @@ import { applyOrder, autoEligible, optimize, optimizeJson } from "./optimize.js"
 import { loadResult } from "../core/run.js";
 import type { Finding } from "../core/findings.js";
 import type { Suggestion } from "../core/types.js";
+import { FEATURES } from "./features.js";
 
 async function tree(files: Record<string, string>): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "grad-opt-"));
@@ -257,5 +258,24 @@ describe("the checkup page", () => {
     const dir = await tree({ "CLAUDE.md": "- see scripts/gone.sh\n" });
     const result = await optimize(dir, { target: "both", home }, { suggestions: [] });
     expect(JSON.parse(optimizeJson(result)).pagePath).toBe(result.pagePath);
+  });
+});
+
+describe("the feature state on the result", () => {
+  /**
+   * Most people reach `optimize` through the skill, which runs `--json` and
+   * never sees the terminal. Putting the switches only in the terminal block
+   * would have pointed them out to the smaller half of the audience.
+   */
+  it("travels with the findings, so --json carries it too", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const dir = await tree({ "CLAUDE.md": "- see scripts/gone.sh\n" });
+    const result = await optimize(dir, { target: "both", home }, { suggestions: [] });
+    expect(result.features?.map(feature => feature.name)).toEqual([...FEATURES]);
+    // A row with no purpose is a switch nobody can evaluate.
+    for (const feature of result.features ?? []) {
+      expect(feature.purpose, `${feature.name} has no purpose`).not.toBe("");
+    }
+    expect(JSON.parse(optimizeJson(result)).features).toEqual(result.features);
   });
 });

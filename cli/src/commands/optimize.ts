@@ -20,6 +20,8 @@ import {
   type RunResult,
 } from "../core/run.js";
 import { addDismissal, isDismissed, loadDismissed } from "../core/dismiss.js";
+import { FEATURE_PURPOSE, type FeatureName } from "./features.js";
+import { featureStatus } from "./report.js";
 import { adoptionFromEvents } from "../core/adoption.js";
 import { loadConfig, resolveCheapModel, resolveTargets } from "../config.js";
 import { resolveScanScope } from "../core/scope.js";
@@ -69,6 +71,11 @@ export interface OptimizeResult {
   skipped: RunResult["skipped"];
   /** The checkup page for this run; a path to open. Always written. */
   pagePath?: string;
+  /** What is running in the background, and what each one that is not would
+   *  do. Carried on the result so the terminal and `--json` agree: most people
+   *  reach optimize through the skill, which reads JSON and never sees the
+   *  terminal block. */
+  features?: { name: string; on: boolean; purpose: string }[];
 }
 
 export interface OptimizeDeps extends ScanDeps {
@@ -280,6 +287,16 @@ export async function optimize(
   // One run per invocation, shared by the page and by anything applied. Writing
   // the page in its own run would give the reader a run id that `--undo` does
   // not name, and would burn two of the ten retained runs per apply.
+  // Read once and shared by both return paths. Best-effort: a config that will
+  // not load must not stop the findings from being reported.
+  const features = await featureStatus(projectDir, config, home)
+    .then(rows => rows.map(row => ({
+      name: row.name,
+      on: row.on,
+      purpose: FEATURE_PURPOSE[row.name as FeatureName] ?? "",
+    })))
+    .catch(() => undefined);
+
   const writePage = async (run: Run): Promise<string> => {
     const path = join(run.dir, "report.html");
     await safeWriteFile(home, path, renderPage({
@@ -297,7 +314,7 @@ export async function optimize(
     const run = await beginRun({ home, ...(opts.now !== undefined ? { now: new Date(opts.now) } : {}) });
     const pagePath = await writePage(run);
     await pruneRuns({ home });
-    return { targets, findings, applied: [], skipped: unmatched, pagePath };
+    return { targets, findings, applied: [], skipped: unmatched, pagePath, ...(features ? { features } : {}) };
   }
 
   return withLock(async () => {
@@ -330,7 +347,7 @@ export async function optimize(
 
     await saveResult(run, { runId: run.id, startedAt: run.startedAt, applied, skipped, wrote });
     await pruneRuns({ home });
-    return { targets, findings, runId: run.id, applied, skipped, pagePath };
+    return { targets, findings, runId: run.id, applied, skipped, pagePath, ...(features ? { features } : {}) };
   }, { home, ...(opts.now !== undefined ? { now: opts.now } : {}) });
 }
 
@@ -350,6 +367,7 @@ export function optimizeJson(result: OptimizeResult): string {
     // The page is written on every run, so the machine-readable output has to
     // say where — an agent handed --json cannot otherwise point the user at it.
     ...(result.pagePath ? { pagePath: result.pagePath } : {}),
+    ...(result.features ? { features: result.features } : {}),
     findings: result.findings.map(finding => ({
       id: finding.id,
       family: finding.family,

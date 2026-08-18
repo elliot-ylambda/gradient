@@ -1,16 +1,15 @@
 import { parseArgs } from "node:util";
-import { loadConfig } from "./config.js";
 import { displayCommand } from "./core/hookBinary.js";
 import { remove } from "./commands/remove.js";
 import { checkpoint } from "./commands/checkpoint.js";
 import { respond, type StopHookInput } from "./commands/respond.js";
-import { FEATURES, FEATURE_PURPOSE, isFeatureName, setFeature, type FeatureName } from "./commands/features.js";
-import { optimize, optimizeJson, undo } from "./commands/optimize.js";
+import { FEATURES, isFeatureName, setFeature } from "./commands/features.js";
+import { optimize, optimizeJson, undo, type OptimizeResult } from "./commands/optimize.js";
 import { banner, c, severityChip } from "./core/ui.js";
 import { boardDigest, boardRefresh } from "./commands/board.js";
 import { recap } from "./commands/recap.js";
 import { notify } from "./commands/notify.js";
-import { buildReport, featureStatus } from "./commands/report.js";
+import { buildReport } from "./commands/report.js";
 import { renderReport } from "./commands/report-render.js";
 import { sessionStart } from "./commands/sessionStart.js";
 import { scheduleSnippet, sessionEnd } from "./commands/sessionEnd.js";
@@ -179,7 +178,7 @@ async function runOptimize(
   }
 
   renderFindings(result.findings, log);
-  await renderFeatures(projectDir, home, log);
+  renderFeatures(result.features, log);
   if (result.pagePath) {
     log(`\n${c.dim("checkup page:")} ${c.violet(`file://${terminalSafeLine(result.pagePath)}`)}`);
   }
@@ -203,28 +202,19 @@ async function runOptimize(
  * the person deciding what to automate, so the state belongs here too, and an
  * `off` row is useless without saying what turning it on buys.
  */
-async function renderFeatures(projectDir: string, home: string | undefined, log: LogFn): Promise<void> {
-  let rows;
-  try {
-    const config = await loadConfig(home);
-    rows = await featureStatus(projectDir, config, home);
-  } catch {
-    // Never let a config read stop the findings from being reported.
-    return;
-  }
+function renderFeatures(features: OptimizeResult["features"], log: LogFn): void {
+  if (!features || features.length === 0) return;
   log(`\n${c.bold("features")}`);
-  const width = Math.max(...rows.map(row => row.name.length));
-  for (const row of rows) {
-    // Only an off row needs selling; an on row's detail already says what it does.
-    // Padding is applied only where something follows it, so an `on` row does
-    // not end in trailing whitespace.
-    const purpose = row.on ? "" : `  ${c.dim(`— ${FEATURE_PURPOSE[row.name as FeatureName]}`)}`;
-    const label = row.on ? row.detail ?? "on" : "off";
-    const state = row.on ? c.ok(label) : c.muted(label.padEnd(3));
-    log(`  ${row.name.padEnd(width)}  ${state}${purpose}`);
+  const width = Math.max(...features.map(feature => feature.name.length));
+  for (const feature of features) {
+    // Only an off row needs selling; an on row is already doing its job.
+    // Padding goes only where something follows, so no row ends in whitespace.
+    const purpose = feature.on ? "" : `  ${c.dim(`— ${feature.purpose}`)}`;
+    const state = feature.on ? c.ok("on") : c.muted("off");
+    log(`  ${feature.name.padEnd(width)}  ${state}${purpose}`);
   }
-  if (rows.some(row => !row.on)) {
-    log(`  ${c.dim(`turn one on with`)} ${c.violet(`${displayCommand()} on <feature>`)}`);
+  if (features.some(feature => !feature.on)) {
+    log(`  ${c.dim("turn one on with")} ${c.violet(`${displayCommand()} on <feature>`)}`);
   }
 }
 
