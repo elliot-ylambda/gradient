@@ -767,7 +767,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.9.0" : require2("../package.json").version;
+    VERSION = true ? "0.9.1" : require2("../package.json").version;
     BUNDLED = true;
   }
 });
@@ -20408,6 +20408,242 @@ var init_adoption = __esm({
   }
 });
 
+// src/commands/insights.ts
+function addMetrics(total, next) {
+  for (const key of Object.keys(total)) total[key] += next[key];
+}
+async function insights(opts, deps = {}) {
+  const config = deps.config ?? await loadConfig(opts.home);
+  const targets = resolveTargets(config);
+  const collectFn = deps.collectFn ?? collect;
+  const collectCodexFn = deps.collectCodexFn ?? collectCodex;
+  const parseFn = deps.parseFn ?? parseTranscriptFile;
+  const parseToolEventsFn = deps.parseToolEventsFn ?? (deps.parseFn ? void 0 : parseToolEventsFile);
+  const parseCodexFn = deps.parseCodexFn ?? parseCodexFile;
+  const days = config.userScopeDays ?? DEFAULT_USER_SCOPE_DAYS;
+  const scope = opts.user ? { scope: "all", sinceDays: days, home: opts.home } : { scope: "project", projectPath: opts.projectDir, home: opts.home };
+  const label = opts.user ? `user scope \xB7 last ${days}d` : "project scope \xB7 all history";
+  const claudeFiles = targets.includes("claude-code") ? await collectFn(scope) : [];
+  const codexFiles = targets.includes("codex") ? await collectCodexFn(scope) : [];
+  const files = [];
+  for (let index = 0; files.length < INSIGHTS_MAX_FILES && (index < claudeFiles.length || index < codexFiles.length); index++) {
+    if (index < claudeFiles.length && files.length < INSIGHTS_MAX_FILES) {
+      files.push({ path: claudeFiles[index], assistant: "claude-code" });
+    }
+    if (index < codexFiles.length && files.length < INSIGHTS_MAX_FILES) {
+      files.push({ path: codexFiles[index], assistant: "codex" });
+    }
+  }
+  const ignore = compileIgnorePatterns(config.ignorePatterns);
+  const freshTurns = replayFilter(turnIdentity);
+  const freshEvents = replayFilter(commandEventIdentity);
+  const freshTools = replayFilter(toolEventIdentity);
+  const metrics = computeMetrics([], [], ignore);
+  const analysisTurns = [];
+  let toolEvents = [];
+  let toolEventsDropped = 0;
+  const events = [];
+  let processedTurns = 0;
+  let analysisComplete = true;
+  let capped = claudeFiles.length + codexFiles.length > files.length;
+  const cutoff = opts.user ? (opts.now ?? Date.now()) - days * 864e5 : void 0;
+  const inCutoff = (ts) => {
+    if (cutoff === void 0) return true;
+    const timestamp = Date.parse(ts);
+    return Number.isFinite(timestamp) && timestamp >= cutoff;
+  };
+  const pushAnalysis = (turns) => {
+    if (!analysisComplete) return;
+    const remaining = INSIGHTS_MAX_ANALYSIS_TURNS - analysisTurns.length;
+    if (turns.length <= remaining) analysisTurns.push(...turns);
+    else {
+      analysisTurns.push(...turns.slice(0, Math.max(0, remaining)));
+      analysisComplete = false;
+      capped = true;
+    }
+  };
+  for (const file of files) {
+    if (processedTurns >= INSIGHTS_MAX_TURNS) {
+      capped = true;
+      break;
+    }
+    const remaining = INSIGHTS_MAX_TURNS - processedTurns;
+    if (file.assistant === "codex") {
+      const raw2 = await parseCodexFn(file.path);
+      const scopedTurns2 = freshTurns(raw2.filter((turn) => inCutoff(turn.ts)));
+      const parsedTurns2 = scopedTurns2.slice(0, remaining);
+      if (scopedTurns2.length > parsedTurns2.length) capped = true;
+      processedTurns += parsedTurns2.length;
+      addMetrics(metrics, computeMetrics(parsedTurns2, [], ignore));
+      pushAnalysis(parsedTurns2);
+      continue;
+    }
+    const parsedClaude = await parseFn(file.path);
+    const raw = Array.isArray(parsedClaude) ? { turns: parsedClaude, events: [] } : parsedClaude;
+    const scopedTurns = freshTurns(raw.turns.filter((turn) => inCutoff(turn.ts)));
+    const scopedEvents = freshEvents(raw.events.filter((event) => inCutoff(event.ts)));
+    const parsedTurns = scopedTurns.slice(0, remaining);
+    const parsedEvents = scopedEvents.slice(0, Math.max(0, remaining - parsedTurns.length));
+    if (scopedTurns.length > parsedTurns.length || scopedEvents.length > parsedEvents.length) capped = true;
+    processedTurns += parsedTurns.length + parsedEvents.length;
+    events.push(...parsedEvents);
+    addMetrics(metrics, computeMetrics(parsedTurns, parsedEvents, ignore));
+    pushAnalysis(parsedTurns);
+    if (config.mineToolEvents !== false && parseToolEventsFn) {
+      const parsedTools = await parseToolEventsFn(file.path);
+      const scopedTools = freshTools(parsedTools.events.filter((event) => inCutoff(event.ts)));
+      toolEventsDropped += parsedTools.dropped;
+      toolEvents.push(...scopedTools);
+      if (toolEvents.length > INSIGHTS_MAX_TOOL_EVENTS) {
+        const cappedTools = capByRecency(
+          toolEvents,
+          INSIGHTS_MAX_TOOL_EVENTS,
+          INSIGHTS_MAX_TOOL_EVENTS
+        );
+        toolEventsDropped += cappedTools.dropped;
+        toolEvents = cappedTools.kept;
+      }
+    }
+  }
+  const costs = buildCostRows(analysisTurns, ignore);
+  const toolActivity = {
+    failureLoops: failureLoops(toolEvents).length,
+    postEditRituals: rituals(toolEvents).length,
+    permissionPrompts: toolEvents.filter((event) => event.permissionDenied).length
+  };
+  if (toolEventsDropped > 0) capped = true;
+  const avoided = await sumAutopilotAvoided(opts.home);
+  let adoption = [];
+  if (!opts.user && analysisComplete && !capped) {
+    try {
+      adoption = await adoptionFromEvents(opts.projectDir, events, { home: opts.home, now: opts.now });
+    } catch {
+    }
+  }
+  const unusedArtifacts = adoption.filter((artifact) => artifact.suggestRemoval).map((artifact) => artifact.name);
+  const recommendations = buildRecommendations(metrics, {
+    autopilotMode: config.autopilotProjects?.[projectKey(opts.projectDir)],
+    avoided,
+    unusedArtifacts,
+    permissionPrompts: toolActivity.permissionPrompts
+  });
+  if (toolActivity.postEditRituals > 0) recommendations.unshift({
+    metric: "post-edit-rituals",
+    line: `${toolActivity.postEditRituals} post-edit ritual(s) detected \u2014 run gradient optimize`
+  });
+  if (toolActivity.failureLoops > 0) recommendations.unshift({
+    metric: "failure-loops",
+    line: `${toolActivity.failureLoops} recurring in-session command failure loop(s) \u2014 run gradient optimize`
+  });
+  return {
+    label,
+    metrics,
+    costs,
+    avoided,
+    capped,
+    toolActivity,
+    adoption,
+    recommendations
+  };
+}
+var INSIGHTS_MAX_FILES, INSIGHTS_MAX_TURNS, INSIGHTS_MAX_ANALYSIS_TURNS, INSIGHTS_MAX_TOOL_EVENTS;
+var init_insights2 = __esm({
+  "src/commands/insights.ts"() {
+    "use strict";
+    init_collect();
+    init_collect_codex();
+    init_parse();
+    init_parse_codex();
+    init_filter();
+    init_insights();
+    init_scope();
+    init_config();
+    init_adoption();
+    init_toolmine();
+    init_cap();
+    init_replay();
+    INSIGHTS_MAX_FILES = 2e3;
+    INSIGHTS_MAX_TURNS = 1e5;
+    INSIGHTS_MAX_ANALYSIS_TURNS = 1e4;
+    INSIGHTS_MAX_TOOL_EVENTS = 2e4;
+  }
+});
+
+// src/commands/report.ts
+async function buildReport(projectDir, deps = {}) {
+  const report = await (deps.insightsFn ?? insights)({
+    projectDir,
+    home: deps.home,
+    ...deps.now !== void 0 ? { now: deps.now } : {}
+  });
+  const [manifest, dismissed, suggestions, config] = await Promise.all([
+    loadManifest(projectDir).catch(() => []),
+    loadDismissed(projectDir).catch(() => []),
+    (deps.loadSuggestionsFn ?? loadSuggestions)(projectDir, { home: deps.home }).catch(() => []),
+    loadConfig(deps.home).catch(() => ({}))
+  ]);
+  const applied = new Set(manifest.map((entry) => entry.suggestionId));
+  const pending = suggestions.filter((suggestion) => !applied.has(suggestion.id) && !isDismissed(suggestion, dismissed)).sort((left, right) => Number(isMeasured(right)) - Number(isMeasured(left)) || right.evidence.count - left.evidence.count || left.name.localeCompare(right.name)).slice(0, REPORT_MAX_SUGGESTIONS);
+  return {
+    insights: report,
+    adoption: report.adoption,
+    pending,
+    features: await featureStatus(projectDir, config, deps.home),
+    board: await (deps.boardShowFn ?? boardShow)(projectDir, {
+      home: deps.home,
+      ...deps.selfSessionId ? { selfSessionId: deps.selfSessionId } : {}
+    }).catch(() => null),
+    autopilot: await autopilotDetail(projectDir, deps.home)
+  };
+}
+async function autopilotDetail(projectDir, home) {
+  try {
+    const status = await autopilotStatus(projectDir, { home });
+    return status.mode === "off" && status.effectiveMode === "off" ? null : status;
+  } catch {
+    return null;
+  }
+}
+async function featureStatus(projectDir, config, home) {
+  const continuity = await continuityStatus(projectDir, { home }).catch(() => ({ checkpoint: false, recap: false }));
+  const mode = config.autopilotProjects?.[projectKey(projectDir)];
+  return [
+    {
+      name: "continuity",
+      on: continuity.checkpoint || continuity.recap,
+      ...continuity.checkpoint !== continuity.recap ? { detail: `${continuity.checkpoint ? "checkpoint" : "recap"} only` } : {}
+    },
+    {
+      name: "autopilot",
+      on: mode === "nudge" || mode === "full",
+      ...mode && mode !== "off" ? { detail: mode } : {}
+    },
+    { name: "board", on: (config.boardProjects ?? []).length > 0 },
+    // Named for the verb that toggles it. This row said "session-scan", which
+    // is the config's name for the behaviour and not a feature any command
+    // accepts: `gradient on session-scan` answers "unknown feature". The
+    // report is where people read the state, so it has to print the word they
+    // can act on.
+    { name: "optimize", on: config.scanOnSessionStart === true }
+  ];
+}
+var REPORT_MAX_SUGGESTIONS;
+var init_report = __esm({
+  "src/commands/report.ts"() {
+    "use strict";
+    init_dismiss();
+    init_manifest();
+    init_config();
+    init_insights2();
+    init_apply2();
+    init_board2();
+    init_continuity();
+    init_autopilot();
+    init_classify();
+    REPORT_MAX_SUGGESTIONS = 3;
+  }
+});
+
 // src/core/targets.ts
 import { createInterface as createInterface2 } from "node:readline/promises";
 function targetsFor(choice) {
@@ -20665,167 +20901,6 @@ footer{
   }
 });
 
-// src/commands/insights.ts
-function addMetrics(total, next) {
-  for (const key of Object.keys(total)) total[key] += next[key];
-}
-async function insights(opts, deps = {}) {
-  const config = deps.config ?? await loadConfig(opts.home);
-  const targets = resolveTargets(config);
-  const collectFn = deps.collectFn ?? collect;
-  const collectCodexFn = deps.collectCodexFn ?? collectCodex;
-  const parseFn = deps.parseFn ?? parseTranscriptFile;
-  const parseToolEventsFn = deps.parseToolEventsFn ?? (deps.parseFn ? void 0 : parseToolEventsFile);
-  const parseCodexFn = deps.parseCodexFn ?? parseCodexFile;
-  const days = config.userScopeDays ?? DEFAULT_USER_SCOPE_DAYS;
-  const scope = opts.user ? { scope: "all", sinceDays: days, home: opts.home } : { scope: "project", projectPath: opts.projectDir, home: opts.home };
-  const label = opts.user ? `user scope \xB7 last ${days}d` : "project scope \xB7 all history";
-  const claudeFiles = targets.includes("claude-code") ? await collectFn(scope) : [];
-  const codexFiles = targets.includes("codex") ? await collectCodexFn(scope) : [];
-  const files = [];
-  for (let index = 0; files.length < INSIGHTS_MAX_FILES && (index < claudeFiles.length || index < codexFiles.length); index++) {
-    if (index < claudeFiles.length && files.length < INSIGHTS_MAX_FILES) {
-      files.push({ path: claudeFiles[index], assistant: "claude-code" });
-    }
-    if (index < codexFiles.length && files.length < INSIGHTS_MAX_FILES) {
-      files.push({ path: codexFiles[index], assistant: "codex" });
-    }
-  }
-  const ignore = compileIgnorePatterns(config.ignorePatterns);
-  const freshTurns = replayFilter(turnIdentity);
-  const freshEvents = replayFilter(commandEventIdentity);
-  const freshTools = replayFilter(toolEventIdentity);
-  const metrics = computeMetrics([], [], ignore);
-  const analysisTurns = [];
-  let toolEvents = [];
-  let toolEventsDropped = 0;
-  const events = [];
-  let processedTurns = 0;
-  let analysisComplete = true;
-  let capped = claudeFiles.length + codexFiles.length > files.length;
-  const cutoff = opts.user ? (opts.now ?? Date.now()) - days * 864e5 : void 0;
-  const inCutoff = (ts) => {
-    if (cutoff === void 0) return true;
-    const timestamp = Date.parse(ts);
-    return Number.isFinite(timestamp) && timestamp >= cutoff;
-  };
-  const pushAnalysis = (turns) => {
-    if (!analysisComplete) return;
-    const remaining = INSIGHTS_MAX_ANALYSIS_TURNS - analysisTurns.length;
-    if (turns.length <= remaining) analysisTurns.push(...turns);
-    else {
-      analysisTurns.push(...turns.slice(0, Math.max(0, remaining)));
-      analysisComplete = false;
-      capped = true;
-    }
-  };
-  for (const file of files) {
-    if (processedTurns >= INSIGHTS_MAX_TURNS) {
-      capped = true;
-      break;
-    }
-    const remaining = INSIGHTS_MAX_TURNS - processedTurns;
-    if (file.assistant === "codex") {
-      const raw2 = await parseCodexFn(file.path);
-      const scopedTurns2 = freshTurns(raw2.filter((turn) => inCutoff(turn.ts)));
-      const parsedTurns2 = scopedTurns2.slice(0, remaining);
-      if (scopedTurns2.length > parsedTurns2.length) capped = true;
-      processedTurns += parsedTurns2.length;
-      addMetrics(metrics, computeMetrics(parsedTurns2, [], ignore));
-      pushAnalysis(parsedTurns2);
-      continue;
-    }
-    const parsedClaude = await parseFn(file.path);
-    const raw = Array.isArray(parsedClaude) ? { turns: parsedClaude, events: [] } : parsedClaude;
-    const scopedTurns = freshTurns(raw.turns.filter((turn) => inCutoff(turn.ts)));
-    const scopedEvents = freshEvents(raw.events.filter((event) => inCutoff(event.ts)));
-    const parsedTurns = scopedTurns.slice(0, remaining);
-    const parsedEvents = scopedEvents.slice(0, Math.max(0, remaining - parsedTurns.length));
-    if (scopedTurns.length > parsedTurns.length || scopedEvents.length > parsedEvents.length) capped = true;
-    processedTurns += parsedTurns.length + parsedEvents.length;
-    events.push(...parsedEvents);
-    addMetrics(metrics, computeMetrics(parsedTurns, parsedEvents, ignore));
-    pushAnalysis(parsedTurns);
-    if (config.mineToolEvents !== false && parseToolEventsFn) {
-      const parsedTools = await parseToolEventsFn(file.path);
-      const scopedTools = freshTools(parsedTools.events.filter((event) => inCutoff(event.ts)));
-      toolEventsDropped += parsedTools.dropped;
-      toolEvents.push(...scopedTools);
-      if (toolEvents.length > INSIGHTS_MAX_TOOL_EVENTS) {
-        const cappedTools = capByRecency(
-          toolEvents,
-          INSIGHTS_MAX_TOOL_EVENTS,
-          INSIGHTS_MAX_TOOL_EVENTS
-        );
-        toolEventsDropped += cappedTools.dropped;
-        toolEvents = cappedTools.kept;
-      }
-    }
-  }
-  const costs = buildCostRows(analysisTurns, ignore);
-  const toolActivity = {
-    failureLoops: failureLoops(toolEvents).length,
-    postEditRituals: rituals(toolEvents).length,
-    permissionPrompts: toolEvents.filter((event) => event.permissionDenied).length
-  };
-  if (toolEventsDropped > 0) capped = true;
-  const avoided = await sumAutopilotAvoided(opts.home);
-  let adoption = [];
-  if (!opts.user && analysisComplete && !capped) {
-    try {
-      adoption = await adoptionFromEvents(opts.projectDir, events, { home: opts.home, now: opts.now });
-    } catch {
-    }
-  }
-  const unusedArtifacts = adoption.filter((artifact) => artifact.suggestRemoval).map((artifact) => artifact.name);
-  const recommendations = buildRecommendations(metrics, {
-    autopilotMode: config.autopilotProjects?.[projectKey(opts.projectDir)],
-    avoided,
-    unusedArtifacts,
-    permissionPrompts: toolActivity.permissionPrompts
-  });
-  if (toolActivity.postEditRituals > 0) recommendations.unshift({
-    metric: "post-edit-rituals",
-    line: `${toolActivity.postEditRituals} post-edit ritual(s) detected \u2014 run gradient optimize`
-  });
-  if (toolActivity.failureLoops > 0) recommendations.unshift({
-    metric: "failure-loops",
-    line: `${toolActivity.failureLoops} recurring in-session command failure loop(s) \u2014 run gradient optimize`
-  });
-  return {
-    label,
-    metrics,
-    costs,
-    avoided,
-    capped,
-    toolActivity,
-    adoption,
-    recommendations
-  };
-}
-var INSIGHTS_MAX_FILES, INSIGHTS_MAX_TURNS, INSIGHTS_MAX_ANALYSIS_TURNS, INSIGHTS_MAX_TOOL_EVENTS;
-var init_insights2 = __esm({
-  "src/commands/insights.ts"() {
-    "use strict";
-    init_collect();
-    init_collect_codex();
-    init_parse();
-    init_parse_codex();
-    init_filter();
-    init_insights();
-    init_scope();
-    init_config();
-    init_adoption();
-    init_toolmine();
-    init_cap();
-    init_replay();
-    INSIGHTS_MAX_FILES = 2e3;
-    INSIGHTS_MAX_TURNS = 1e5;
-    INSIGHTS_MAX_ANALYSIS_TURNS = 1e4;
-    INSIGHTS_MAX_TOOL_EVENTS = 2e4;
-  }
-});
-
 // src/commands/optimize.ts
 import { homedir as homedir16 } from "node:os";
 import { join as join27 } from "node:path";
@@ -20927,6 +21002,11 @@ async function optimize(projectDir, opts = {}, deps = {}) {
   const matches = (finding) => requested.includes(finding.id) || finding.suggestion !== void 0 && (requested.includes(finding.suggestion.id) || requested.includes(finding.suggestion.name));
   const wanted = opts.auto ? findings.filter((finding) => autoEligible(finding).ok) : findings.filter(matches);
   const unmatched = requested.filter((id) => !findings.some((finding) => finding.id === id || finding.suggestion !== void 0 && (finding.suggestion.id === id || finding.suggestion.name === id))).map((id) => ({ id, reason: "no current finding has this id; it may have been fixed already \u2014 rerun to see the list" }));
+  const features = await featureStatus(projectDir, config, home).then((rows) => rows.map((row) => ({
+    name: row.name,
+    on: row.on,
+    purpose: FEATURE_PURPOSE[row.name] ?? ""
+  }))).catch(() => void 0);
   const writePage = async (run) => {
     const path5 = join27(run.dir, "report.html");
     await safeWriteFile(home, path5, renderPage({
@@ -20943,7 +21023,7 @@ async function optimize(projectDir, opts = {}, deps = {}) {
     const run = await beginRun({ home, ...opts.now !== void 0 ? { now: new Date(opts.now) } : {} });
     const pagePath = await writePage(run);
     await pruneRuns({ home });
-    return { targets, findings, applied: [], skipped: unmatched, pagePath };
+    return { targets, findings, applied: [], skipped: unmatched, pagePath, ...features ? { features } : {} };
   }
   return withLock(async () => {
     const run = await beginRun({ home, ...opts.now !== void 0 ? { now: new Date(opts.now) } : {} });
@@ -20970,7 +21050,7 @@ async function optimize(projectDir, opts = {}, deps = {}) {
     if (applied.length > 0) await saveSuggestions(projectDir, await loadSuggestions(projectDir, { home }), home);
     await saveResult(run, { runId: run.id, startedAt: run.startedAt, applied, skipped, wrote });
     await pruneRuns({ home });
-    return { targets, findings, runId: run.id, applied, skipped, pagePath };
+    return { targets, findings, runId: run.id, applied, skipped, pagePath, ...features ? { features } : {} };
   }, { home, ...opts.now !== void 0 ? { now: opts.now } : {} });
 }
 async function undo(runId, opts = {}) {
@@ -20983,6 +21063,7 @@ function optimizeJson(result) {
     // The page is written on every run, so the machine-readable output has to
     // say where — an agent handed --json cannot otherwise point the user at it.
     ...result.pagePath ? { pagePath: result.pagePath } : {},
+    ...result.features ? { features: result.features } : {},
     findings: result.findings.map((finding) => ({
       id: finding.id,
       family: finding.family,
@@ -21027,6 +21108,8 @@ var init_optimize = __esm({
     init_apply_change();
     init_run();
     init_dismiss();
+    init_features();
+    init_report();
     init_adoption();
     init_config();
     init_scope();
@@ -21129,81 +21212,6 @@ var init_recap = __esm({
     init_checkpoint();
     RECAP_MAX_CHARS = 8e3;
     RECAP_MAX_BYTES = 32e3;
-  }
-});
-
-// src/commands/report.ts
-async function buildReport(projectDir, deps = {}) {
-  const report = await (deps.insightsFn ?? insights)({
-    projectDir,
-    home: deps.home,
-    ...deps.now !== void 0 ? { now: deps.now } : {}
-  });
-  const [manifest, dismissed, suggestions, config] = await Promise.all([
-    loadManifest(projectDir).catch(() => []),
-    loadDismissed(projectDir).catch(() => []),
-    (deps.loadSuggestionsFn ?? loadSuggestions)(projectDir, { home: deps.home }).catch(() => []),
-    loadConfig(deps.home).catch(() => ({}))
-  ]);
-  const applied = new Set(manifest.map((entry) => entry.suggestionId));
-  const pending = suggestions.filter((suggestion) => !applied.has(suggestion.id) && !isDismissed(suggestion, dismissed)).sort((left, right) => Number(isMeasured(right)) - Number(isMeasured(left)) || right.evidence.count - left.evidence.count || left.name.localeCompare(right.name)).slice(0, REPORT_MAX_SUGGESTIONS);
-  return {
-    insights: report,
-    adoption: report.adoption,
-    pending,
-    features: await featureStatus(projectDir, config, deps.home),
-    board: await (deps.boardShowFn ?? boardShow)(projectDir, {
-      home: deps.home,
-      ...deps.selfSessionId ? { selfSessionId: deps.selfSessionId } : {}
-    }).catch(() => null),
-    autopilot: await autopilotDetail(projectDir, deps.home)
-  };
-}
-async function autopilotDetail(projectDir, home) {
-  try {
-    const status = await autopilotStatus(projectDir, { home });
-    return status.mode === "off" && status.effectiveMode === "off" ? null : status;
-  } catch {
-    return null;
-  }
-}
-async function featureStatus(projectDir, config, home) {
-  const continuity = await continuityStatus(projectDir, { home }).catch(() => ({ checkpoint: false, recap: false }));
-  const mode = config.autopilotProjects?.[projectKey(projectDir)];
-  return [
-    {
-      name: "continuity",
-      on: continuity.checkpoint || continuity.recap,
-      ...continuity.checkpoint !== continuity.recap ? { detail: `${continuity.checkpoint ? "checkpoint" : "recap"} only` } : {}
-    },
-    {
-      name: "autopilot",
-      on: mode === "nudge" || mode === "full",
-      ...mode && mode !== "off" ? { detail: mode } : {}
-    },
-    { name: "board", on: (config.boardProjects ?? []).length > 0 },
-    // Named for the verb that toggles it. This row said "session-scan", which
-    // is the config's name for the behaviour and not a feature any command
-    // accepts: `gradient on session-scan` answers "unknown feature". The
-    // report is where people read the state, so it has to print the word they
-    // can act on.
-    { name: "optimize", on: config.scanOnSessionStart === true }
-  ];
-}
-var REPORT_MAX_SUGGESTIONS;
-var init_report = __esm({
-  "src/commands/report.ts"() {
-    "use strict";
-    init_dismiss();
-    init_manifest();
-    init_config();
-    init_insights2();
-    init_apply2();
-    init_board2();
-    init_continuity();
-    init_autopilot();
-    init_classify();
-    REPORT_MAX_SUGGESTIONS = 3;
   }
 });
 
@@ -21494,7 +21502,7 @@ async function runOptimize(projectDir, flags, home, log) {
     return 0;
   }
   renderFindings(result.findings, log);
-  await renderFeatures(projectDir, home, log);
+  renderFeatures(result.features, log);
   if (result.pagePath) {
     log(`
 ${c.dim("checkup page:")} ${c.violet(`file://${terminalSafeLine(result.pagePath)}`)}`);
@@ -21511,25 +21519,18 @@ ${c.ok("applied")} ${terminalSafeLine(entry.title)}`);
 ${c.dim("undo:")} ${c.violet(`${displayCommand()} optimize --undo ${result.runId}`)}`);
   return 0;
 }
-async function renderFeatures(projectDir, home, log) {
-  let rows;
-  try {
-    const config = await loadConfig(home);
-    rows = await featureStatus(projectDir, config, home);
-  } catch {
-    return;
-  }
+function renderFeatures(features, log) {
+  if (!features || features.length === 0) return;
   log(`
 ${c.bold("features")}`);
-  const width = Math.max(...rows.map((row) => row.name.length));
-  for (const row of rows) {
-    const purpose = row.on ? "" : `  ${c.dim(`\u2014 ${FEATURE_PURPOSE[row.name]}`)}`;
-    const label = row.on ? row.detail ?? "on" : "off";
-    const state = row.on ? c.ok(label) : c.muted(label.padEnd(3));
-    log(`  ${row.name.padEnd(width)}  ${state}${purpose}`);
+  const width = Math.max(...features.map((feature) => feature.name.length));
+  for (const feature of features) {
+    const purpose = feature.on ? "" : `  ${c.dim(`\u2014 ${feature.purpose}`)}`;
+    const state = feature.on ? c.ok("on") : c.muted("off");
+    log(`  ${feature.name.padEnd(width)}  ${state}${purpose}`);
   }
-  if (rows.some((row) => !row.on)) {
-    log(`  ${c.dim(`turn one on with`)} ${c.violet(`${displayCommand()} on <feature>`)}`);
+  if (features.some((feature) => !feature.on)) {
+    log(`  ${c.dim("turn one on with")} ${c.violet(`${displayCommand()} on <feature>`)}`);
   }
 }
 async function boardHook(action, projectDir, io, log, readStdin) {
@@ -21684,7 +21685,6 @@ var HOOK_TARGETS, help;
 var init_cli = __esm({
   "src/cli.ts"() {
     "use strict";
-    init_config();
     init_hookBinary();
     init_remove();
     init_checkpoint();

@@ -9,7 +9,7 @@ import { notify } from "./commands/notify.js";
 import { optimize, undo } from "./commands/optimize.js";
 import { sessionStart } from "./commands/sessionStart.js";
 import { boardDigest, boardRefresh } from "./commands/board.js";
-import { FEATURES, FEATURE_PURPOSE, setFeature } from "./commands/features.js";
+import { FEATURES, setFeature } from "./commands/features.js";
 import type { Finding } from "./core/findings.js";
 
 const FINDING: Finding = {
@@ -29,6 +29,10 @@ vi.mock("./commands/optimize.js", async importOriginal => ({
   ...(await importOriginal<typeof import("./commands/optimize.js")>()),
   optimize: vi.fn(async () => ({
     targets: ["claude-code"], findings: [FINDING], applied: [], skipped: [], installedSkill: [],
+    features: [
+      { name: "continuity", on: true, purpose: "checkpoint before compaction, recap on resume" },
+      { name: "board", on: false, purpose: "cross-session digest on start and on prompt" },
+    ],
   })),
   undo: vi.fn(async () => ({ restored: ["/repo/CLAUDE.md"], conflicted: [] })),
 }));
@@ -327,17 +331,17 @@ describe("the features block in optimize", () => {
    * a different command. The person acting on findings is the person deciding
    * what to automate.
    */
-  it("names every feature, and says what each off one would do", async () => {
+  it("names each feature, and sells only the ones that are off", async () => {
     const home = await mkdtemp(join(tmpdir(), "gradient-feat-"));
-    const dir = await mkdtemp(join(tmpdir(), "gradient-proj-"));
     const lines: string[] = [];
-    await main(["optimize", "--target", "both"], { log: l => lines.push(l), home, cwd: dir });
+    await main(["optimize", "--target", "both"], { log: l => lines.push(l), home });
     const out = lines.join("\n");
-    for (const feature of FEATURES) {
-      expect(out, `\`${feature}\` missing from the features block`).toContain(feature);
-    }
-    // An `off` row with no purpose is a switch nobody can evaluate.
-    expect(out).toContain(FEATURE_PURPOSE.board);
+    expect(out).toContain("continuity");
+    expect(out).toContain("board");
+    // An `off` row with no purpose is a switch nobody can evaluate...
+    expect(out).toContain("cross-session digest on start and on prompt");
+    // ...and an `on` row is already doing its job, so it needs no pitch.
+    expect(out).not.toContain("checkpoint before compaction, recap on resume");
     expect(out).toContain("on <feature>");
   });
 });

@@ -99,7 +99,7 @@ in `~/.config/gradient/config.json` to disable tool-event extraction entirely.
 
 ```bash
 gradient optimize --json    # the full finding set, for an agent to drive
-gradient optimize --page    # a self-contained local page you click through
+gradient optimize           # every run also writes a self-contained local page
 ```
 
 The page is a `file://` document with no server, no port, and no external

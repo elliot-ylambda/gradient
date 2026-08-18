@@ -28,7 +28,17 @@ no API key. It computes what is checkable. You bring judgment and a connection.
    ritual and because the user spent an afternoon on one hard feature.
 
 4. Let the user choose. **Never apply without an explicit choice in this
-   conversation.**
+   conversation.** Every run writes a self-contained checkup page and returns
+   its path as `pagePath`; offer it when the list is long or the user would
+   rather click through than read ids — they accept and deny there and get a
+   single `--apply` line back.
+
+   The findings are about files. `features` in the same output is what runs in
+   the background — `continuity`, `autopilot`, `board`, `optimize` — with each
+   one's purpose and whether it is on. If a finding keeps recurring because
+   nothing is automating it, say which switch would, and let the user decide:
+   they install hooks that run on their own afterwards, so they are never
+   turned on for someone.
 
 5. Apply exactly what they approved, and record what they rejected:
 

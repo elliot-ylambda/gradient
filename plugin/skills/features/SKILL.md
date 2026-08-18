@@ -21,8 +21,9 @@ what it does, then run the exact toggle the user chose — never choose for them
   (at most once a day), and a `SessionStart` hook surfaces the highest-severity
   pending finding at the next one.
 
-With no feature named, run the bare report and read its `features:` line rather
-than guessing at state:
+With no feature named, read the current state rather than guessing at it. Both
+the report and `optimize` name every feature, and say what each one that is off
+would do:
 
     node "${CLAUDE_PLUGIN_ROOT}/bin/gradient.mjs"
 

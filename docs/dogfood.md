@@ -124,7 +124,7 @@ only to check something the skill does not surface.
 - [ ] Apply one project rule, one hook, and one `gradient.md` entry. Confirm the
       expected files/settings, then `remove` each and verify adjacent manual
       content survives.
-- [ ] Run `optimize --page`; open the local checkup page, choose changes, and
+- [ ] Run `optimize`; open the checkup page it writes, choose changes, and
       confirm the command it hands you runs verbatim.
 - [ ] Turn `continuity` on, trigger a real compaction, resume, and confirm the
       redacted checkpoint is helpful and clearly labeled untrusted.
