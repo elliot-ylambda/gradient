@@ -25,7 +25,13 @@ export interface InsightsMetrics {
 export interface ToolActivityMetrics {
   failureLoops: number;
   postEditRituals: number;
+  /** Tool calls the permission layer refused. Not failures — the command never
+   *  ran — but repeated approval prompts are their own friction. */
+  permissionPrompts: number;
 }
+
+/** Below this, an approval prompt is a normal part of working, not a pattern. */
+export const PERMISSION_PROMPT_MIN = 5;
 
 export function computeMetrics(turns: Turn[], events: CommandEvent[] = [], ignore: RegExp[] = []): InsightsMetrics {
   const metrics: InsightsMetrics = {
@@ -192,6 +198,7 @@ export function buildRecommendations(
     autopilotMode: AutopilotMode | undefined;
     avoided: number;
     unusedArtifacts: string[];
+    permissionPrompts: number;
   },
 ): Recommendation[] {
   const recommendations: Recommendation[] = [];
@@ -234,10 +241,17 @@ export function buildRecommendations(
   for (const name of context.unusedArtifacts) {
     recommendations.push({ metric: "adoption", line: `unused 30d+: gradient remove ${name}` });
   }
-  recommendations.push({
-    metric: "permissions",
-    line: "permission friction? Claude Code's built-in /fewer-permission-prompts mines an allowlist",
-  });
+  // Printed only when the transcripts show it. Unconditional advice is noise
+  // dressed as a finding: it appeared under every report gradient has ever
+  // produced, including for users with no permission friction at all, and a
+  // recommendation that is always true teaches the reader to skip the section.
+  if (context.permissionPrompts >= PERMISSION_PROMPT_MIN) {
+    recommendations.push({
+      metric: "permissions",
+      line: `${context.permissionPrompts} approval prompt(s) interrupted a tool call — ` +
+        "Claude Code's built-in /fewer-permission-prompts mines an allowlist",
+    });
+  }
   return recommendations;
 }
 

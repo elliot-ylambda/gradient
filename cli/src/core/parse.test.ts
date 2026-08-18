@@ -244,6 +244,47 @@ const toolResult = (id: string, isError: boolean, content: unknown, sessionId = 
   });
 
 describe("parseToolEventLines", () => {
+  /**
+   * The permission layer answers in the same channel as the command and sets
+   * `is_error: true`, so a refused call is byte-for-byte shaped like a command
+   * that ran and failed. It did not run. Counting these produced a "prevent
+   * recurring failure: git status" finding for a user whose git status works —
+   * the only thing recurring was the approval prompt, and no hook can prevent
+   * one. On one machine's history 373 of the apparent Bash failures were this.
+   */
+  it.each([
+    "This Bash command contains multiple operations. The following parts require approval:",
+    "Claude requested permissions to use Bash, but you haven't granted it yet.",
+    "The user doesn't want to take this action right now.",
+    "The user doesn't want to proceed with this tool use.",
+  ])("does not call a refused command a failure: %s", text => {
+    const { events } = parseToolEventLines([
+      toolUse("t1", "Bash", { command: "git status" }),
+      toolResult("t1", true, text),
+    ]);
+    expect(events).toEqual([{
+      ts: "2026-07-01T00:00:00Z",
+      sessionId: "s1",
+      kind: "bash",
+      command: "git status",
+      isError: false,
+      permissionDenied: true,
+    }]);
+    // The gate text is not an error message, so it must not become an error
+    // head that `optimize` then quotes back as the failure to prevent.
+    expect(events[0].errorHead).toBeUndefined();
+  });
+
+  it("still calls a command that genuinely failed a failure", () => {
+    const { events } = parseToolEventLines([
+      toolUse("t1", "Bash", { command: "git status" }),
+      toolResult("t1", true, "fatal: not a git repository"),
+    ]);
+    expect(events[0].isError).toBe(true);
+    expect(events[0].permissionDenied).toBeUndefined();
+    expect(events[0].errorHead).toBe("fatal: not a git repository");
+  });
+
   it("pairs bash tool_use with its result and keeps a redacted error head", () => {
     const { events } = parseToolEventLines([
       toolUse("t1", "Bash", { command: "npm test" }),

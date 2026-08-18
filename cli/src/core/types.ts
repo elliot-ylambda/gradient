@@ -55,6 +55,9 @@ export interface ToolEvent {
   kind: "bash" | "edit";
   command?: string;
   isError?: boolean;
+  /** The permission layer refused the call, so the command never ran. Distinct
+   *  from `isError`: there is no failure to diagnose, only an approval prompt. */
+  permissionDenied?: boolean;
   errorHead?: string;
   file?: string;
 }

@@ -30,6 +30,12 @@ describe("insights", () => {
       { ts: "2026-07-01T00:01:00Z", sessionId: "f1", kind: "bash", command: "npm test", isError: true },
       { ts: "2026-07-02T00:00:00Z", sessionId: "f2", kind: "bash", command: "npm test", isError: true },
     ];
+    // A refused call is not a failing command: it never ran, so it must not
+    // join the loop that `optimize` then offers to prevent with a hook.
+    failures.push(
+      { ts: "2026-07-03T00:00:00Z", sessionId: "f3", kind: "bash", command: "npm test", permissionDenied: true },
+      { ts: "2026-07-03T00:01:00Z", sessionId: "f3", kind: "bash", command: "npm test", permissionDenied: true },
+    );
     const rituals: ToolEvent[] = [];
     for (let index = 0; index < 15; index++) {
       const sessionId = `r${index % 3}`;
@@ -46,7 +52,9 @@ describe("insights", () => {
         parseToolEventsFn: async () => ({ events: [...failures, ...rituals], dropped: 0 }),
       },
     );
-    expect(report.toolActivity).toEqual({ failureLoops: 1, postEditRituals: 1 });
+    // The two refused calls are counted, and counted apart: one real failure
+    // loop, two approval prompts, and no third loop invented from the refusals.
+    expect(report.toolActivity).toEqual({ failureLoops: 1, postEditRituals: 1, permissionPrompts: 2 });
     expect(report.recommendations.map(item => item.line).join("\n")).toContain("run gradient optimize");
   });
 
@@ -66,7 +74,10 @@ describe("insights", () => {
       { collectFn: async () => [], parseFn: async () => ({ turns: [], events: [] }) },
     );
     expect(report.metrics.prompts).toBe(0);
-    expect(report.recommendations.length).toBeGreaterThan(0);
+    // Nothing happened, so there is nothing to recommend. This used to assert
+    // `> 0`, which passed only because one recommendation was pushed
+    // unconditionally — the test was measuring the noise, not the report.
+    expect(report.recommendations).toEqual([]);
   });
 
   it("widens user scope with the seven-day default window", async () => {

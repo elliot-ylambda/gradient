@@ -180,6 +180,7 @@ export async function insights(
   const toolActivity: ToolActivityMetrics = {
     failureLoops: mineFailureLoops(toolEvents).length,
     postEditRituals: mineRituals(toolEvents).length,
+    permissionPrompts: toolEvents.filter(event => event.permissionDenied).length,
   };
   if (toolEventsDropped > 0) capped = true;
   const avoided = await sumAutopilotAvoided(opts.home);
@@ -197,6 +198,7 @@ export async function insights(
     autopilotMode: config.autopilotProjects?.[projectKey(opts.projectDir)],
     avoided,
     unusedArtifacts,
+    permissionPrompts: toolActivity.permissionPrompts,
   });
   if (toolActivity.postEditRituals > 0) recommendations.unshift({
     metric: "post-edit-rituals",
