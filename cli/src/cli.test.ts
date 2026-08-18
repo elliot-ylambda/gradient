@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { displayCommand } from "./core/hookBinary.js";
-import { parseCliArgs, main } from "./cli.js";
+import { parseCliArgs, main, renderFindings } from "./cli.js";
 import { recap } from "./commands/recap.js";
 import { notify } from "./commands/notify.js";
 import { optimize, undo } from "./commands/optimize.js";
@@ -270,5 +270,49 @@ describe("hook targets", () => {
     const lines: string[] = [];
     expect(await main(["hook", "board-digest"], { log: line => lines.push(line), readStdin: async () => ({}) })).toBe(0);
     expect(lines).toEqual([]);
+  });
+});
+
+describe("the apply line", () => {
+  const finding = (id: string, changes: Finding["changes"]): Finding => ({
+    id,
+    family: "skill-health",
+    severity: "medium",
+    title: `finding ${id}`,
+    detail: "",
+    evidence: "",
+    targets: ["claude-code"],
+    deterministic: true,
+    commandBearing: false,
+    changes,
+  });
+  const change = [{ op: "delete-file" as const, path: "/tmp/x", assistant: "claude-code" as const }];
+
+  /**
+   * `findings.slice(0, 3)` took the first three regardless of whether they
+   * applied to anything. Report-only findings carry `changes: []` by design,
+   * so gradient printed a headline command in which every id was a no-op —
+   * the user copies the line gradient wrote and gets three skips.
+   */
+  it("names only ids that apply to something", () => {
+    const lines: string[] = [];
+    renderFindings(
+      [finding("aaa", []), finding("bbb", change), finding("ccc", [])],
+      line => lines.push(line),
+    );
+    const apply = lines.find(line => line.includes("--apply"))!;
+    expect(apply).toContain("bbb");
+    expect(apply).not.toContain("aaa");
+    expect(apply).not.toContain("ccc");
+  });
+
+  it("offers no command at all when nothing can be applied", () => {
+    const lines: string[] = [];
+    renderFindings([finding("aaa", []), finding("bbb", [])], line => lines.push(line));
+    const all = lines.join("\n");
+    expect(all).not.toContain("--apply");
+    expect(all).toContain("nothing here applies automatically");
+    // The report is still useful, so the json hand-off must survive.
+    expect(all).toContain("optimize --json");
   });
 });

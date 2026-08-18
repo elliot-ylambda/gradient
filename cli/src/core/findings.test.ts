@@ -164,6 +164,33 @@ describe("buildFindings", () => {
     expect(unused?.changes[0]).toMatchObject({ op: "delete-file", path: join(dir, ".claude/skills/ship-it/SKILL.md") });
   });
 
+  /**
+   * apply-change deletes only a file carrying gradient's marker. The manifest
+   * is not that marker: it recorded artifacts before the marker existed, so
+   * gradient listed a file as its own, told the user "gradient generated it
+   * and can generate it again", printed the id in its own apply line, and then
+   * refused the command it had just written —
+   *   skipped a1e09056d0b8: refusing to delete a file gradient did not generate
+   * The observation stays; only the impossible change goes.
+   */
+  it("does not offer to delete an artifact whose file carries no gradient marker", async () => {
+    const dir = await tree({
+      ".claude/skills/hand-made/SKILL.md": "---\nname: hand-made\ndescription: Written by a person\n---\nBody\n",
+    });
+    const adoption: AdoptionRow[] = [{
+      name: "hand-made", type: "skill", createdAt: "2026-01-01",
+      uses: 0, realizedMinutesSaved: 0, suggestRemoval: true,
+    }];
+    const found = buildFindings(await inputFor(dir, await tree({}), { adoption }));
+    const unused = found.find(f => f.title.includes("never been invoked"))!;
+    // Still reported — it is still unused and still costing context.
+    expect(unused).toBeDefined();
+    // ...but with no change gradient would refuse to carry out.
+    expect(unused.changes).toEqual([]);
+    expect(unused.detail).toContain("will not delete it for you");
+    expect(unused.detail).toContain("rm ");
+  });
+
   // The one thing neither assistant can tell you about your own instructions.
   it("reports an instruction the user keeps retyping instead of proposing a duplicate skill", async () => {
     const dir = await tree({ "CLAUDE.md": "- push and open a pr when the work is done\n" });

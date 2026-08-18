@@ -103,7 +103,7 @@ function terminalSafeLine(value: unknown): string {
 type LogFn = (s: string) => void;
 
 /** Findings grouped by family, in the order the ranking already put them. */
-function renderFindings(findings: Finding[], log: LogFn): void {
+export function renderFindings(findings: Finding[], log: LogFn): void {
   if (findings.length === 0) {
     log(`\n${c.ok("nothing to change")} ${c.dim("— your setup matches how you actually work")}`);
     return;
@@ -117,8 +117,18 @@ function renderFindings(findings: Finding[], log: LogFn): void {
     log(`  ${severityChip(finding.severity)} ${c.dim(finding.id)}  ${terminalSafeLine(finding.title)}`);
     log(`      ${c.muted(terminalSafeLine(finding.evidence))}`);
   }
-  const ids = findings.slice(0, 3).map(finding => finding.id).join(",");
-  log(`\n${c.dim("apply:")} ${c.violet(`${displayCommand()} optimize --apply ${ids}`)}`);
+  // Only ids that carry a change apply to anything. Taking the first three
+  // findings regardless printed a headline command in which every id was a
+  // no-op — a report-only finding has `changes: []` by design, and a deletion
+  // gradient will refuse has one too. The user copies the line gradient wrote
+  // and gets three skips.
+  const appliable = findings.filter(finding => finding.changes.length > 0);
+  const ids = appliable.slice(0, 3).map(finding => finding.id).join(",");
+  if (ids) {
+    log(`\n${c.dim("apply:")} ${c.violet(`${displayCommand()} optimize --apply ${ids}`)}`);
+  } else {
+    log(`\n${c.dim("nothing here applies automatically — each finding says what to change")}`);
+  }
   log(`${c.dim("or hand the whole list to your assistant:")} ${c.violet(`${displayCommand()} optimize --json`)}`);
 }
 

@@ -767,7 +767,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.8.5" : require2("../package.json").version;
+    VERSION = true ? "0.8.6" : require2("../package.json").version;
     BUNDLED = true;
   }
 });
@@ -19798,12 +19798,21 @@ function unusedFindings(input) {
       family: "skill-health",
       severity: "medium",
       title: `${row.name} has never been invoked`,
-      detail: "Its description is loaded into every session whether or not it is used. Removing it is reversible; gradient generated it and can generate it again.",
+      detail: skill?.gradientOwned ? "Its description is loaded into every session whether or not it is used. Removing it is reversible; gradient generated it and can generate it again." : `Its description is loaded into every session whether or not it is used. It carries no gradient marker, so gradient will not delete it for you \u2014 remove it yourself with \`rm ${skill?.path ?? row.name}\`.`,
       evidence: `installed ${row.createdAt} \xB7 0 uses`,
       targets: [skill?.assistant ?? "claude-code"],
       deterministic: true,
       commandBearing: false,
-      changes: skill ? [{ op: "delete-file", path: skill.path, assistant: skill.assistant }] : []
+      // Offer the deletion only when apply-change will actually perform it.
+      // `gradientOwned` is the same marker test the delete guard uses, so
+      // consulting it here is what keeps the two from disagreeing. The
+      // manifest alone is not enough: it recorded these artifacts before the
+      // marker existed, so gradient listed a file as its own, told the user
+      // "gradient generated it and can generate it again", printed the id in
+      // its own apply line — and then refused the command it had just
+      // written. The observation is still true and worth reporting; only the
+      // automatic change is impossible.
+      changes: skill?.gradientOwned ? [{ op: "delete-file", path: skill.path, assistant: skill.assistant }] : []
     };
   });
 }
@@ -21363,7 +21372,8 @@ var init_sessionEnd = __esm({
 var cli_exports = {};
 __export(cli_exports, {
   main: () => main,
-  parseCliArgs: () => parseCliArgs
+  parseCliArgs: () => parseCliArgs,
+  renderFindings: () => renderFindings
 });
 import { parseArgs } from "node:util";
 function parseCliArgs(argv) {
@@ -21420,9 +21430,15 @@ ${c.bold(family)}`);
     log(`  ${severityChip(finding.severity)} ${c.dim(finding.id)}  ${terminalSafeLine(finding.title)}`);
     log(`      ${c.muted(terminalSafeLine(finding.evidence))}`);
   }
-  const ids = findings.slice(0, 3).map((finding) => finding.id).join(",");
-  log(`
+  const appliable = findings.filter((finding) => finding.changes.length > 0);
+  const ids = appliable.slice(0, 3).map((finding) => finding.id).join(",");
+  if (ids) {
+    log(`
 ${c.dim("apply:")} ${c.violet(`${displayCommand()} optimize --apply ${ids}`)}`);
+  } else {
+    log(`
+${c.dim("nothing here applies automatically \u2014 each finding says what to change")}`);
+  }
   log(`${c.dim("or hand the whole list to your assistant:")} ${c.violet(`${displayCommand()} optimize --json`)}`);
 }
 async function runOptimize(projectDir, flags, home, log) {
