@@ -98,7 +98,7 @@ async function autopilotDetail(projectDir: string, home?: string): Promise<Autop
   }
 }
 
-async function featureStatus(
+export async function featureStatus(
   projectDir: string,
   config: { autopilotProjects?: Record<string, string>; boardProjects?: string[]; scanOnSessionStart?: boolean },
   home?: string,
@@ -119,6 +119,11 @@ async function featureStatus(
       ...(mode && mode !== "off" ? { detail: mode } : {}),
     },
     { name: "board", on: (config.boardProjects ?? []).length > 0 },
-    { name: "session-scan", on: config.scanOnSessionStart === true },
+    // Named for the verb that toggles it. This row said "session-scan", which
+    // is the config's name for the behaviour and not a feature any command
+    // accepts: `gradient on session-scan` answers "unknown feature". The
+    // report is where people read the state, so it has to print the word they
+    // can act on.
+    { name: "optimize", on: config.scanOnSessionStart === true },
   ];
 }

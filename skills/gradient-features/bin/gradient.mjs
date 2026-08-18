@@ -767,7 +767,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.8.6" : require2("../package.json").version;
+    VERSION = true ? "0.8.7" : require2("../package.json").version;
     BUNDLED = true;
   }
 });
@@ -21171,7 +21171,12 @@ async function featureStatus(projectDir, config, home) {
       ...mode && mode !== "off" ? { detail: mode } : {}
     },
     { name: "board", on: (config.boardProjects ?? []).length > 0 },
-    { name: "session-scan", on: config.scanOnSessionStart === true }
+    // Named for the verb that toggles it. This row said "session-scan", which
+    // is the config's name for the behaviour and not a feature any command
+    // accepts: `gradient on session-scan` answers "unknown feature". The
+    // report is where people read the state, so it has to print the word they
+    // can act on.
+    { name: "optimize", on: config.scanOnSessionStart === true }
   ];
 }
 var REPORT_MAX_SUGGESTIONS;
