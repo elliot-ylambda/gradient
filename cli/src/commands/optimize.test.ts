@@ -219,3 +219,43 @@ describe("optimizeJson", () => {
     expect(JSON.stringify(parsed)).not.toContain("sourceSignatures");
   });
 });
+
+describe("the checkup page", () => {
+  /**
+   * It was written only for `--page`, a flag you had to already know about.
+   * The findings are a ranked list of ids and evidence; the page is where that
+   * list is actually reviewable, so it is written on every run.
+   */
+  it("is written without being asked for", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const dir = await tree({ "CLAUDE.md": "- see scripts/gone.sh\n" });
+    const result = await optimize(dir, { target: "both", home }, { suggestions: [] });
+    expect(result.pagePath).toBeDefined();
+    const html = await readFile(result.pagePath!, "utf8");
+    expect(html).toContain("<html");
+    // A page nobody can act from is just a file: it carries the run's findings.
+    expect(html).toContain("gone.sh");
+  });
+
+  /**
+   * `--apply` opens its own run. Writing the page in a *separate* run gave the
+   * reader a run id that `--undo` does not name, and burned two of the ten
+   * retained runs per invocation.
+   */
+  it("shares one run with whatever was applied, so --undo names the page's run", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const dir = await tree({ "CLAUDE.md": "- see scripts/gone.sh\n" });
+    const survey = await optimize(dir, { target: "both", home }, { suggestions: [] });
+    const id = survey.findings[0]!.id;
+    const applied = await optimize(dir, { target: "both", home, apply: [id] }, { suggestions: [] });
+    expect(applied.runId).toBeDefined();
+    expect(applied.pagePath).toContain(applied.runId!);
+  });
+
+  it("names the page in --json, so an agent can point at it", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const dir = await tree({ "CLAUDE.md": "- see scripts/gone.sh\n" });
+    const result = await optimize(dir, { target: "both", home }, { suggestions: [] });
+    expect(JSON.parse(optimizeJson(result)).pagePath).toBe(result.pagePath);
+  });
+});

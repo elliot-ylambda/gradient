@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { displayCommand } from "./core/hookBinary.js";
 import { parseCliArgs, main, renderFindings } from "./cli.js";
 import { recap } from "./commands/recap.js";
@@ -6,7 +9,7 @@ import { notify } from "./commands/notify.js";
 import { optimize, undo } from "./commands/optimize.js";
 import { sessionStart } from "./commands/sessionStart.js";
 import { boardDigest, boardRefresh } from "./commands/board.js";
-import { setFeature } from "./commands/features.js";
+import { FEATURES, FEATURE_PURPOSE, setFeature } from "./commands/features.js";
 import type { Finding } from "./core/findings.js";
 
 const FINDING: Finding = {
@@ -314,5 +317,27 @@ describe("the apply line", () => {
     expect(all).toContain("nothing here applies automatically");
     // The report is still useful, so the json hand-off must survive.
     expect(all).toContain("optimize --json");
+  });
+});
+
+describe("the features block in optimize", () => {
+  /**
+   * `optimize` proposes file changes and said nothing about the four switches
+   * that change how the assistant behaves — those lived only in `gradient`,
+   * a different command. The person acting on findings is the person deciding
+   * what to automate.
+   */
+  it("names every feature, and says what each off one would do", async () => {
+    const home = await mkdtemp(join(tmpdir(), "gradient-feat-"));
+    const dir = await mkdtemp(join(tmpdir(), "gradient-proj-"));
+    const lines: string[] = [];
+    await main(["optimize", "--target", "both"], { log: l => lines.push(l), home, cwd: dir });
+    const out = lines.join("\n");
+    for (const feature of FEATURES) {
+      expect(out, `\`${feature}\` missing from the features block`).toContain(feature);
+    }
+    // An `off` row with no purpose is a switch nobody can evaluate.
+    expect(out).toContain(FEATURE_PURPOSE.board);
+    expect(out).toContain("on <feature>");
   });
 });

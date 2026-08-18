@@ -767,7 +767,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.8.7" : require2("../package.json").version;
+    VERSION = true ? "0.9.0" : require2("../package.json").version;
     BUNDLED = true;
   }
 });
@@ -16959,7 +16959,7 @@ async function setFeature(name, on, projectDir, opts = {}) {
   switch (name) {
     case "continuity": {
       const result = await setContinuity(on, projectDir, opts);
-      return { on: result.on, settingsPath: result.settingsPath, detail: "checkpoint before compaction, recap on resume" };
+      return { on: result.on, settingsPath: result.settingsPath, detail: FEATURE_PURPOSE.continuity };
     }
     case "autopilot": {
       const result = await setAutopilotMode(on ? "nudge" : "off", projectDir, opts);
@@ -16967,7 +16967,7 @@ async function setFeature(name, on, projectDir, opts = {}) {
     }
     case "board": {
       const result = await setBoard(on, projectDir, opts);
-      return { on: result.on, settingsPath: result.settingsPath, detail: "cross-session digest on start and on prompt" };
+      return { on: result.on, settingsPath: result.settingsPath, detail: FEATURE_PURPOSE.board };
     }
     case "optimize":
       return setOptimize(on, projectDir, opts.home);
@@ -16995,7 +16995,7 @@ async function setOptimize(on, projectDir, home) {
     return {
       on: true,
       settingsPath: settingsPath3,
-      detail: "re-check after a session ends (at most daily), surface it at the next start"
+      detail: FEATURE_PURPOSE.optimize
     };
   }
   config.scanOnSessionStart = false;
@@ -17004,7 +17004,7 @@ async function setOptimize(on, projectDir, home) {
   const settingsPath2 = await removeHook(projectDir, "SessionStart", (cmd) => isGradientHookFor(cmd, SESSION_START_SUB));
   return { on: false, settingsPath: settingsPath2 };
 }
-var FEATURES, SESSION_START_SUB, SESSION_END_SUB;
+var FEATURES, FEATURE_PURPOSE, SESSION_START_SUB, SESSION_END_SUB;
 var init_features = __esm({
   "src/commands/features.ts"() {
     "use strict";
@@ -17015,6 +17015,12 @@ var init_features = __esm({
     init_board2();
     init_continuity();
     FEATURES = ["continuity", "autopilot", "board", "optimize"];
+    FEATURE_PURPOSE = {
+      continuity: "checkpoint before compaction, recap on resume",
+      autopilot: "draft a reply when a session stalls waiting on you",
+      board: "cross-session digest on start and on prompt",
+      optimize: "re-check after a session ends (at most daily), surface it at the next start"
+    };
     SESSION_START_SUB = "session-start";
     SESSION_END_SUB = "session-end";
   }
@@ -20921,11 +20927,9 @@ async function optimize(projectDir, opts = {}, deps = {}) {
   const matches = (finding) => requested.includes(finding.id) || finding.suggestion !== void 0 && (requested.includes(finding.suggestion.id) || requested.includes(finding.suggestion.name));
   const wanted = opts.auto ? findings.filter((finding) => autoEligible(finding).ok) : findings.filter(matches);
   const unmatched = requested.filter((id) => !findings.some((finding) => finding.id === id || finding.suggestion !== void 0 && (finding.suggestion.id === id || finding.suggestion.name === id))).map((id) => ({ id, reason: "no current finding has this id; it may have been fixed already \u2014 rerun to see the list" }));
-  let pagePath;
-  if (opts.page) {
-    const run = await beginRun({ home, ...opts.now !== void 0 ? { now: new Date(opts.now) } : {} });
-    pagePath = join27(run.dir, "report.html");
-    await safeWriteFile(home, pagePath, renderPage({
+  const writePage = async (run) => {
+    const path5 = join27(run.dir, "report.html");
+    await safeWriteFile(home, path5, renderPage({
       runId: run.id,
       projectDir,
       targets,
@@ -20933,13 +20937,17 @@ async function optimize(projectDir, opts = {}, deps = {}) {
       ...await pageMetrics(projectDir, home),
       contextCost: { skills: surface.skills.length, chars: surface.contextChars }
     }), { mode: 384 });
-    await pruneRuns({ home });
-  }
+    return path5;
+  };
   if (wanted.length === 0) {
-    return { targets, findings, applied: [], skipped: unmatched, ...pagePath ? { pagePath } : {} };
+    const run = await beginRun({ home, ...opts.now !== void 0 ? { now: new Date(opts.now) } : {} });
+    const pagePath = await writePage(run);
+    await pruneRuns({ home });
+    return { targets, findings, applied: [], skipped: unmatched, pagePath };
   }
   return withLock(async () => {
     const run = await beginRun({ home, ...opts.now !== void 0 ? { now: new Date(opts.now) } : {} });
+    const pagePath = await writePage(run);
     const applied = [];
     const skipped = [...unmatched];
     const wrote = {};
@@ -20962,7 +20970,7 @@ async function optimize(projectDir, opts = {}, deps = {}) {
     if (applied.length > 0) await saveSuggestions(projectDir, await loadSuggestions(projectDir, { home }), home);
     await saveResult(run, { runId: run.id, startedAt: run.startedAt, applied, skipped, wrote });
     await pruneRuns({ home });
-    return { targets, findings, runId: run.id, applied, skipped, ...pagePath ? { pagePath } : {} };
+    return { targets, findings, runId: run.id, applied, skipped, pagePath };
   }, { home, ...opts.now !== void 0 ? { now: opts.now } : {} });
 }
 async function undo(runId, opts = {}) {
@@ -20972,6 +20980,9 @@ function optimizeJson(result) {
   return JSON.stringify({
     targets: result.targets,
     ...result.runId ? { runId: result.runId } : {},
+    // The page is written on every run, so the machine-readable output has to
+    // say where — an agent handed --json cannot otherwise point the user at it.
+    ...result.pagePath ? { pagePath: result.pagePath } : {},
     findings: result.findings.map((finding) => ({
       id: finding.id,
       family: finding.family,
@@ -21483,6 +21494,7 @@ async function runOptimize(projectDir, flags, home, log) {
     return 0;
   }
   renderFindings(result.findings, log);
+  await renderFeatures(projectDir, home, log);
   if (result.pagePath) {
     log(`
 ${c.dim("checkup page:")} ${c.violet(`file://${terminalSafeLine(result.pagePath)}`)}`);
@@ -21498,6 +21510,27 @@ ${c.ok("applied")} ${terminalSafeLine(entry.title)}`);
   if (result.runId) log(`
 ${c.dim("undo:")} ${c.violet(`${displayCommand()} optimize --undo ${result.runId}`)}`);
   return 0;
+}
+async function renderFeatures(projectDir, home, log) {
+  let rows;
+  try {
+    const config = await loadConfig(home);
+    rows = await featureStatus(projectDir, config, home);
+  } catch {
+    return;
+  }
+  log(`
+${c.bold("features")}`);
+  const width = Math.max(...rows.map((row) => row.name.length));
+  for (const row of rows) {
+    const purpose = row.on ? "" : `  ${c.dim(`\u2014 ${FEATURE_PURPOSE[row.name]}`)}`;
+    const label = row.on ? row.detail ?? "on" : "off";
+    const state = row.on ? c.ok(label) : c.muted(label.padEnd(3));
+    log(`  ${row.name.padEnd(width)}  ${state}${purpose}`);
+  }
+  if (rows.some((row) => !row.on)) {
+    log(`  ${c.dim(`turn one on with`)} ${c.violet(`${displayCommand()} on <feature>`)}`);
+  }
 }
 async function boardHook(action, projectDir, io, log, readStdin) {
   try {
@@ -21651,6 +21684,7 @@ var HOOK_TARGETS, help;
 var init_cli = __esm({
   "src/cli.ts"() {
     "use strict";
+    init_config();
     init_hookBinary();
     init_remove();
     init_checkpoint();
@@ -21692,7 +21726,8 @@ Usage:
                                 Claude Code and Codex, then propose the changes
     [--target claude-code|codex|both]   which assistants to optimize for
     [--apply <id>...] [--deny <id>...] [--auto] [--undo <runId>]
-    [--json] [--page]                   findings for an agent, or a local page
+    [--json]                            findings for an agent, as JSON
+                                        (every run also writes a local page)
     [--print-schedule]                  a scheduling snippet for this platform
     [--user] [--all] [--since 7d] [--limit N] [--max-prompts N]
   gradient remove <name>        uninstall a generated artifact

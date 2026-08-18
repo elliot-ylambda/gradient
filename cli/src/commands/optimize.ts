@@ -52,7 +52,9 @@ export interface OptimizeOptions {
   auto?: boolean;
   /** Ids to remember as denied, so they stop coming back. */
   deny?: string[];
-  /** Write the checkup page for this run and return its path. */
+  /** Accepted for compatibility and no longer needed: the page is written on
+   *  every run. Scheduled commands and older docs still pass it, and the
+   *  parser rejects flags it does not know, so removing it would break them. */
   page?: boolean;
   home?: string;
   now?: number;
@@ -65,7 +67,7 @@ export interface OptimizeResult {
   runId?: string;
   applied: RunResult["applied"];
   skipped: RunResult["skipped"];
-  /** Written when --page was asked for; a file:// path to open. */
+  /** The checkup page for this run; a path to open. Always written. */
   pagePath?: string;
 }
 
@@ -270,11 +272,17 @@ export async function optimize(
 
   // The page describes a run, so a read-only run gets a run directory too —
   // its own id is what the user quotes back and what --undo would name.
-  let pagePath: string | undefined;
-  if (opts.page) {
-    const run = await beginRun({ home, ...(opts.now !== undefined ? { now: new Date(opts.now) } : {}) });
-    pagePath = join(run.dir, "report.html");
-    await safeWriteFile(home, pagePath, renderPage({
+  //
+  // Written on every run, not only when asked. The findings are a ranked list
+  // with ids and evidence; the page is where that list is actually reviewable,
+  // and a flag you have to know about is a flag most people never pass. Runs
+  // are pruned to the newest ten, so this costs one bounded file per run.
+  // One run per invocation, shared by the page and by anything applied. Writing
+  // the page in its own run would give the reader a run id that `--undo` does
+  // not name, and would burn two of the ten retained runs per apply.
+  const writePage = async (run: Run): Promise<string> => {
+    const path = join(run.dir, "report.html");
+    await safeWriteFile(home, path, renderPage({
       runId: run.id,
       projectDir,
       targets,
@@ -282,15 +290,19 @@ export async function optimize(
       ...(await pageMetrics(projectDir, home)),
       contextCost: { skills: surface.skills.length, chars: surface.contextChars },
     }), { mode: 0o600 });
-    await pruneRuns({ home });
-  }
+    return path;
+  };
 
   if (wanted.length === 0) {
-    return { targets, findings, applied: [], skipped: unmatched, ...(pagePath ? { pagePath } : {}) };
+    const run = await beginRun({ home, ...(opts.now !== undefined ? { now: new Date(opts.now) } : {}) });
+    const pagePath = await writePage(run);
+    await pruneRuns({ home });
+    return { targets, findings, applied: [], skipped: unmatched, pagePath };
   }
 
   return withLock(async () => {
     const run = await beginRun({ home, ...(opts.now !== undefined ? { now: new Date(opts.now) } : {}) });
+    const pagePath = await writePage(run);
     const applied: RunResult["applied"] = [];
     const skipped: RunResult["skipped"] = [...unmatched];
     const wrote: Record<string, string> = {};
@@ -318,7 +330,7 @@ export async function optimize(
 
     await saveResult(run, { runId: run.id, startedAt: run.startedAt, applied, skipped, wrote });
     await pruneRuns({ home });
-    return { targets, findings, runId: run.id, applied, skipped, ...(pagePath ? { pagePath } : {}) };
+    return { targets, findings, runId: run.id, applied, skipped, pagePath };
   }, { home, ...(opts.now !== undefined ? { now: opts.now } : {}) });
 }
 
@@ -335,6 +347,9 @@ export function optimizeJson(result: OptimizeResult): string {
   return JSON.stringify({
     targets: result.targets,
     ...(result.runId ? { runId: result.runId } : {}),
+    // The page is written on every run, so the machine-readable output has to
+    // say where — an agent handed --json cannot otherwise point the user at it.
+    ...(result.pagePath ? { pagePath: result.pagePath } : {}),
     findings: result.findings.map(finding => ({
       id: finding.id,
       family: finding.family,
