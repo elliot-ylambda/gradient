@@ -190,23 +190,52 @@ function skillProblemFinding(
   // Code tolerates extra keys, so calling a non-standard key "broken" would be
   // a confident false alarm — the dogfood run flagged a working skill that way.
   const blocking = skill.problems.some(problem => problem.kind === "unreadable-frontmatter");
-  const detail = skill.problems.map(problem => {
+  // ...and saying an extra key makes a skill "unlikely to be selected" is the
+  // same false alarm moved into the headline, which is the only line most
+  // readers see. Selection is decided by the description; portability is a
+  // separate defect with separate consequences, so it gets its own sentence.
+  const affectsSelection = skill.problems.some(problem =>
+    problem.kind === "no-description" ||
+    problem.kind === "description-over-cap" ||
+    problem.kind === "duplicate-description");
+
+  // Grouped before rendering: one sentence per *kind*, not per key. Two extra
+  // keys used to repeat the same 30-word explanation twice.
+  const keysOfKind = (kind: "non-standard-key" | "non-portable-key"): string[] =>
+    skill.problems.flatMap(problem => (problem.kind === kind ? [problem.key] : []));
+  const list = (keys: string[]): string => keys.map(key => `\`${key}\``).join(" and ");
+  const nonStandard = keysOfKind("non-standard-key");
+  const nonPortable = keysOfKind("non-portable-key");
+
+  const sentences: string[] = [];
+  if (nonStandard.length > 0) {
+    sentences.push(
+      `${list(nonStandard)} ${nonStandard.length > 1 ? "are" : "is"} outside the Agent Skills spec's ` +
+      `six fields, so this skill cannot be uploaded to claude.ai, used through the Skills API, or ` +
+      `packaged. Claude Code itself ignores ${nonStandard.length > 1 ? "them" : "it"}.`);
+  }
+  if (nonPortable.length > 0) {
+    sentences.push(
+      `${list(nonPortable)} ${nonPortable.length > 1 ? "are" : "is"} a Claude Code extension, so this ` +
+      `skill does nothing under Codex.`);
+  }
+  for (const problem of skill.problems) {
     switch (problem.kind) {
-      case "non-standard-key":
-        return `\`${problem.key}\` is outside the Agent Skills spec's six fields, so this skill cannot be ` +
-          "uploaded to claude.ai, used through the Skills API, or packaged. Claude Code itself ignores it.";
-      case "non-portable-key":
-        return `\`${problem.key}\` is a Claude Code extension, so this skill does nothing under Codex.`;
       case "unreadable-frontmatter":
-        return `Its frontmatter cannot be read (${problem.detail}), so nothing loads it.`;
+        sentences.push(`Its frontmatter cannot be read (${problem.detail}), so nothing loads it.`);
+        break;
       case "no-description":
-        return "It has no description, so selection falls back to the first paragraph of the body.";
+        sentences.push("It has no description, so selection falls back to the first paragraph of the body.");
+        break;
       case "description-over-cap":
-        return `Its description is ${problem.chars} characters; everything past 1,536 is truncated out of the listing.`;
+        sentences.push(`Its description is ${problem.chars} characters; everything past 1,536 is truncated out of the listing.`);
+        break;
       case "duplicate-description":
-        return `Its description is barely distinguishable from \`${problem.other}\`, so the model picks between them arbitrarily.`;
+        sentences.push(`Its description is barely distinguishable from \`${problem.other}\`, so the model picks between them arbitrarily.`);
+        break;
     }
-  }).join(" ");
+  }
+  const detail = sentences.join(" ");
 
   return {
     id: findingId("skill-health", skill.name, [skill.path]),
@@ -214,9 +243,18 @@ function skillProblemFinding(
     severity: blocking ? "high" : "medium",
     title: blocking
       ? `The ${skill.name} skill will not load (${skill.assistant})`
-      : `The ${skill.name} skill is unlikely to be selected (${skill.assistant})`,
+      : affectsSelection
+        ? `The ${skill.name} skill is unlikely to be selected (${skill.assistant})`
+        : `The ${skill.name} skill carries frontmatter outside the spec (${skill.assistant})`,
     detail,
-    evidence: `${displayPath(skill.path, input.projectDir)} · ${skill.descriptionChars} description chars`,
+    // Cite the number the finding is actually about. A portability problem
+    // evidenced by "212 description chars" points at a healthy figure and
+    // invites the reader to fix the wrong thing.
+    evidence: `${displayPath(skill.path, input.projectDir)} · ${
+      affectsSelection || blocking
+        ? `${skill.descriptionChars} description chars`
+        : `${[...nonStandard, ...nonPortable].join(", ")}`
+    }`,
     targets: [skill.assistant],
     deterministic: true,
     commandBearing: false,

@@ -105,6 +105,7 @@ describe("buildRecommendations", () => {
       autopilotMode: undefined,
       avoided: 0,
       unusedArtifacts: ["dead"],
+      permissionPrompts: 12,
     });
     const all = recommendations.map(recommendation => recommendation.line).join("\n");
     expect(all).toContain("gradient on autopilot");
@@ -112,6 +113,24 @@ describe("buildRecommendations", () => {
     expect(all).toContain("gradient remove dead");
     expect(all).toContain("defaultModel");
     expect(all).toContain("fewer-permission-prompts");
+    expect(all).toContain("12 approval prompt(s)");
+  });
+
+  /**
+   * The line used to be pushed unconditionally, so it appeared under every
+   * report gradient ever produced. Advice that is always present is not a
+   * finding — it trains the reader to skip the section that also carries the
+   * real ones.
+   */
+  it("stays silent about permissions when the transcripts show no friction", () => {
+    const quiet = buildRecommendations(metrics, {
+      autopilotMode: undefined,
+      avoided: 0,
+      unusedArtifacts: [],
+      permissionPrompts: 0,
+    });
+    expect(quiet.map(r => r.line).join("\n")).not.toContain("fewer-permission-prompts");
+    expect(quiet.some(r => r.metric === "permissions")).toBe(false);
   });
 
   it("reports avoided nudges when autopilot is on", () => {

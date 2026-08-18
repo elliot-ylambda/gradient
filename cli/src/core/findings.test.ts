@@ -120,6 +120,26 @@ describe("buildFindings", () => {
     const [portability] = buildFindings(await inputFor(nonStandard, home));
     expect(portability.severity).toBe("medium");
     expect(portability.detail).toContain("Agent Skills spec");
+    // The severity was already right; the headline was not. An extra key does
+    // not affect selection at all, and "unlikely to be selected" is the same
+    // false alarm the severity was lowered to avoid — moved into the one line
+    // most readers actually read.
+    expect(portability.title).not.toContain("unlikely to be selected");
+    expect(portability.title).toContain("frontmatter outside the spec");
+    // Evidence must cite the thing the finding is about. Reporting a healthy
+    // description length as the evidence for a key problem points the reader
+    // at the wrong number to fix.
+    expect(portability.evidence).toContain("version");
+    expect(portability.evidence).not.toContain("description chars");
+
+    // Two offending keys, one explanation. The per-problem map repeated the
+    // whole 30-word sentence once per key.
+    const twoKeys = await tree({
+      ".claude/skills/d/SKILL.md": "---\nname: d\ndescription: d\nversion: 1.0.0\nrequires: x\n---\nBody\n",
+    });
+    const [grouped] = buildFindings(await inputFor(twoKeys, home));
+    expect(grouped.detail).toContain("`version` and `requires` are outside");
+    expect(grouped.detail.match(/Agent Skills spec/g)).toHaveLength(1);
 
     const vague = await tree({
       ".claude/skills/b/SKILL.md": `---\nname: b\ndescription: ${"y".repeat(2000)}\n---\nBody\n`,
@@ -127,6 +147,8 @@ describe("buildFindings", () => {
     const [soft] = buildFindings(await inputFor(vague, home));
     expect(soft.severity).toBe("medium");
     expect(soft.title).toContain("unlikely to be selected");
+    // A description problem is the case where the char count IS the evidence.
+    expect(soft.evidence).toContain("description chars");
   });
 
   it("proposes deleting a generated skill nothing has ever invoked", async () => {

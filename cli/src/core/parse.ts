@@ -221,6 +221,23 @@ export async function parseAssistantFollowedUserFile(path: string): Promise<Turn
 const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 const PER_SESSION_EVENT_CAP = 400;
 const ERROR_HEAD_MAX = 120;
+
+/**
+ * A tool result the permission layer produced, not the command.
+ *
+ * Claude Code marks a refused or unapproved call `is_error: true`, which reads
+ * exactly like a command that ran and failed — but the command never ran, so
+ * there is no failure to diagnose and nothing a hook could prevent. Counting
+ * these as failures put a "prevent recurring failure: git status" finding in
+ * front of a user whose git status works: the only recurring thing was the
+ * approval prompt. Measured over one machine's history, 331 of 1,954 apparent
+ * Bash failures (17%) were this.
+ *
+ * Kept as its own signal rather than discarded: repeated approval prompts are
+ * worth reporting, just not as broken commands.
+ */
+const PERMISSION_DENIED_RE =
+  /\b(?:requires? approval|contains multiple operations|permission to use|haven't granted it|user doesn't want to (?:take|proceed)|tool use was rejected|operation was rejected)\b/i;
 const TOOL_COMMAND_MAX = 1_000;
 
 function firstLine(value: unknown): string {
@@ -308,11 +325,16 @@ export function parseToolEventLines(lines: string[]): { events: ToolEvent[]; dro
         const event = pending.get(key);
         if (!event) continue;
         pending.delete(key);
-        const isError = block.is_error === true;
+        const flagged = block.is_error === true;
+        // The permission layer speaks in the same channel as the command, so
+        // the text is the only thing separating "refused" from "ran and failed".
+        const permissionDenied = flagged && PERMISSION_DENIED_RE.test(firstLine(block.content));
+        const isError = flagged && !permissionDenied;
         const errorHead = isError ? redact(firstLine(block.content)).slice(0, ERROR_HEAD_MAX) : "";
         push({
           ...event,
           isError,
+          ...(permissionDenied ? { permissionDenied: true } : {}),
           ...(errorHead ? { errorHead } : {}),
         });
       }

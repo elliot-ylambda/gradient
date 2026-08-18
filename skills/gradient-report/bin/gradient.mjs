@@ -767,7 +767,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.8.4" : require2("../package.json").version;
+    VERSION = true ? "0.8.5" : require2("../package.json").version;
     BUNDLED = true;
   }
 });
@@ -2556,11 +2556,14 @@ function parseToolEventLines(lines) {
         const event = pending.get(key);
         if (!event) continue;
         pending.delete(key);
-        const isError = block.is_error === true;
+        const flagged = block.is_error === true;
+        const permissionDenied = flagged && PERMISSION_DENIED_RE.test(firstLine(block.content));
+        const isError = flagged && !permissionDenied;
         const errorHead = isError ? redact(firstLine(block.content)).slice(0, ERROR_HEAD_MAX) : "";
         push({
           ...event,
           isError,
+          ...permissionDenied ? { permissionDenied: true } : {},
           ...errorHead ? { errorHead } : {}
         });
       }
@@ -2618,7 +2621,7 @@ function parseDialogueLines(lines) {
 async function parseDialogueFile(path5) {
   return parseDialogueLines((await readTranscriptTail(path5)).split(/\r?\n/));
 }
-var MAX_TRANSCRIPT_BYTES, MAX_PARSED_TURNS_PER_FILE, MAX_TURN_TEXT_CHARS, MAX_DIALOGUE_TEXT_CHARS, MAX_USAGE_TOKENS, COMMAND_TAG_RE, COMMAND_ENVELOPE_RE, EDIT_TOOLS, PER_SESSION_EVENT_CAP, ERROR_HEAD_MAX, TOOL_COMMAND_MAX;
+var MAX_TRANSCRIPT_BYTES, MAX_PARSED_TURNS_PER_FILE, MAX_TURN_TEXT_CHARS, MAX_DIALOGUE_TEXT_CHARS, MAX_USAGE_TOKENS, COMMAND_TAG_RE, COMMAND_ENVELOPE_RE, EDIT_TOOLS, PER_SESSION_EVENT_CAP, ERROR_HEAD_MAX, PERMISSION_DENIED_RE, TOOL_COMMAND_MAX;
 var init_parse = __esm({
   "src/core/parse.ts"() {
     "use strict";
@@ -2634,6 +2637,7 @@ var init_parse = __esm({
     EDIT_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "NotebookEdit"]);
     PER_SESSION_EVENT_CAP = 400;
     ERROR_HEAD_MAX = 120;
+    PERMISSION_DENIED_RE = /\b(?:requires? approval|contains multiple operations|permission to use|haven't granted it|user doesn't want to (?:take|proceed)|tool use was rejected|operation was rejected)\b/i;
     TOOL_COMMAND_MAX = 1e3;
   }
 });
@@ -18551,16 +18555,18 @@ function buildRecommendations(metrics, context) {
   for (const name of context.unusedArtifacts) {
     recommendations.push({ metric: "adoption", line: `unused 30d+: gradient remove ${name}` });
   }
-  recommendations.push({
-    metric: "permissions",
-    line: "permission friction? Claude Code's built-in /fewer-permission-prompts mines an allowlist"
-  });
+  if (context.permissionPrompts >= PERMISSION_PROMPT_MIN) {
+    recommendations.push({
+      metric: "permissions",
+      line: `${context.permissionPrompts} approval prompt(s) interrupted a tool call \u2014 Claude Code's built-in /fewer-permission-prompts mines an allowlist`
+    });
+  }
   return recommendations;
 }
 function escapeHtml(text) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
-var NUDGE_RE;
+var NUDGE_RE, PERMISSION_PROMPT_MIN;
 var init_insights = __esm({
   "src/core/insights.ts"() {
     "use strict";
@@ -18569,6 +18575,7 @@ var init_insights = __esm({
     init_state();
     init_command();
     NUDGE_RE = /^(continue( (from )?where you left off)?|go on|keep going|carry on|resume|next|what'?s next|proceed|yes|y|ok|okay|do it|go|sure|yep|good|great|perfect|lgtm|looks good( to me)?|approved?|ship it|sounds good)[.!?,]*$/i;
+    PERMISSION_PROMPT_MIN = 5;
   }
 });
 
@@ -19732,29 +19739,49 @@ function staleFindings(input) {
 function skillProblemFinding(skill, input) {
   if (skill.problems.length === 0) return null;
   const blocking = skill.problems.some((problem) => problem.kind === "unreadable-frontmatter");
-  const detail = skill.problems.map((problem) => {
+  const affectsSelection = skill.problems.some((problem) => problem.kind === "no-description" || problem.kind === "description-over-cap" || problem.kind === "duplicate-description");
+  const keysOfKind = (kind) => skill.problems.flatMap((problem) => problem.kind === kind ? [problem.key] : []);
+  const list3 = (keys) => keys.map((key) => `\`${key}\``).join(" and ");
+  const nonStandard = keysOfKind("non-standard-key");
+  const nonPortable = keysOfKind("non-portable-key");
+  const sentences = [];
+  if (nonStandard.length > 0) {
+    sentences.push(
+      `${list3(nonStandard)} ${nonStandard.length > 1 ? "are" : "is"} outside the Agent Skills spec's six fields, so this skill cannot be uploaded to claude.ai, used through the Skills API, or packaged. Claude Code itself ignores ${nonStandard.length > 1 ? "them" : "it"}.`
+    );
+  }
+  if (nonPortable.length > 0) {
+    sentences.push(
+      `${list3(nonPortable)} ${nonPortable.length > 1 ? "are" : "is"} a Claude Code extension, so this skill does nothing under Codex.`
+    );
+  }
+  for (const problem of skill.problems) {
     switch (problem.kind) {
-      case "non-standard-key":
-        return `\`${problem.key}\` is outside the Agent Skills spec's six fields, so this skill cannot be uploaded to claude.ai, used through the Skills API, or packaged. Claude Code itself ignores it.`;
-      case "non-portable-key":
-        return `\`${problem.key}\` is a Claude Code extension, so this skill does nothing under Codex.`;
       case "unreadable-frontmatter":
-        return `Its frontmatter cannot be read (${problem.detail}), so nothing loads it.`;
+        sentences.push(`Its frontmatter cannot be read (${problem.detail}), so nothing loads it.`);
+        break;
       case "no-description":
-        return "It has no description, so selection falls back to the first paragraph of the body.";
+        sentences.push("It has no description, so selection falls back to the first paragraph of the body.");
+        break;
       case "description-over-cap":
-        return `Its description is ${problem.chars} characters; everything past 1,536 is truncated out of the listing.`;
+        sentences.push(`Its description is ${problem.chars} characters; everything past 1,536 is truncated out of the listing.`);
+        break;
       case "duplicate-description":
-        return `Its description is barely distinguishable from \`${problem.other}\`, so the model picks between them arbitrarily.`;
+        sentences.push(`Its description is barely distinguishable from \`${problem.other}\`, so the model picks between them arbitrarily.`);
+        break;
     }
-  }).join(" ");
+  }
+  const detail = sentences.join(" ");
   return {
     id: findingId("skill-health", skill.name, [skill.path]),
     family: "skill-health",
     severity: blocking ? "high" : "medium",
-    title: blocking ? `The ${skill.name} skill will not load (${skill.assistant})` : `The ${skill.name} skill is unlikely to be selected (${skill.assistant})`,
+    title: blocking ? `The ${skill.name} skill will not load (${skill.assistant})` : affectsSelection ? `The ${skill.name} skill is unlikely to be selected (${skill.assistant})` : `The ${skill.name} skill carries frontmatter outside the spec (${skill.assistant})`,
     detail,
-    evidence: `${displayPath(skill.path, input.projectDir)} \xB7 ${skill.descriptionChars} description chars`,
+    // Cite the number the finding is actually about. A portability problem
+    // evidenced by "212 description chars" points at a healthy figure and
+    // invites the reader to fix the wrong thing.
+    evidence: `${displayPath(skill.path, input.projectDir)} \xB7 ${affectsSelection || blocking ? `${skill.descriptionChars} description chars` : `${[...nonStandard, ...nonPortable].join(", ")}`}`,
     targets: [skill.assistant],
     deterministic: true,
     commandBearing: false,
@@ -20723,7 +20750,8 @@ async function insights(opts, deps = {}) {
   const costs = buildCostRows(analysisTurns, ignore);
   const toolActivity = {
     failureLoops: failureLoops(toolEvents).length,
-    postEditRituals: rituals(toolEvents).length
+    postEditRituals: rituals(toolEvents).length,
+    permissionPrompts: toolEvents.filter((event) => event.permissionDenied).length
   };
   if (toolEventsDropped > 0) capped = true;
   const avoided = await sumAutopilotAvoided(opts.home);
@@ -20738,7 +20766,8 @@ async function insights(opts, deps = {}) {
   const recommendations = buildRecommendations(metrics, {
     autopilotMode: config.autopilotProjects?.[projectKey(opts.projectDir)],
     avoided,
-    unusedArtifacts
+    unusedArtifacts,
+    permissionPrompts: toolActivity.permissionPrompts
   });
   if (toolActivity.postEditRituals > 0) recommendations.unshift({
     metric: "post-edit-rituals",
