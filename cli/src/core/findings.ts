@@ -274,14 +274,26 @@ function unusedFindings(input: FindingsInput): Finding[] {
         family: "skill-health" as const,
         severity: "medium" as const,
         title: `${row.name} has never been invoked`,
-        detail:
-          "Its description is loaded into every session whether or not it is used. " +
-          "Removing it is reversible; gradient generated it and can generate it again.",
+        detail: skill?.gradientOwned
+          ? "Its description is loaded into every session whether or not it is used. " +
+            "Removing it is reversible; gradient generated it and can generate it again."
+          : "Its description is loaded into every session whether or not it is used. " +
+            "It carries no gradient marker, so gradient will not delete it for you — " +
+            `remove it yourself with \`rm ${skill?.path ?? row.name}\`.`,
         evidence: `installed ${row.createdAt} · 0 uses`,
         targets: [skill?.assistant ?? "claude-code"],
         deterministic: true,
         commandBearing: false,
-        changes: skill
+        // Offer the deletion only when apply-change will actually perform it.
+        // `gradientOwned` is the same marker test the delete guard uses, so
+        // consulting it here is what keeps the two from disagreeing. The
+        // manifest alone is not enough: it recorded these artifacts before the
+        // marker existed, so gradient listed a file as its own, told the user
+        // "gradient generated it and can generate it again", printed the id in
+        // its own apply line — and then refused the command it had just
+        // written. The observation is still true and worth reporting; only the
+        // automatic change is impossible.
+        changes: skill?.gradientOwned
           ? [{ op: "delete-file" as const, path: skill.path, assistant: skill.assistant }]
           : [],
       };
