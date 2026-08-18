@@ -19,6 +19,21 @@ export function isFeatureName(value: string): value is FeatureName {
   return (FEATURES as readonly string[]).includes(value);
 }
 
+/**
+ * What each feature does, in the words the toggle already used.
+ *
+ * These sentences existed only inside `setFeature`, so they were reachable
+ * exactly once — at the moment you turned something on, which is after you
+ * needed to know what it was. Anything that wants to *describe* a feature
+ * rather than change it reads them here.
+ */
+export const FEATURE_PURPOSE: Record<FeatureName, string> = {
+  continuity: "checkpoint before compaction, recap on resume",
+  autopilot: "draft a reply when a session stalls waiting on you",
+  board: "cross-session digest on start and on prompt",
+  optimize: "re-check after a session ends (at most daily), surface it at the next start",
+};
+
 export interface FeatureResult {
   on: boolean;
   settingsPath: string;
@@ -35,7 +50,7 @@ export async function setFeature(
   switch (name) {
     case "continuity": {
       const result = await setContinuity(on, projectDir, opts);
-      return { on: result.on, settingsPath: result.settingsPath, detail: "checkpoint before compaction, recap on resume" };
+      return { on: result.on, settingsPath: result.settingsPath, detail: FEATURE_PURPOSE.continuity };
     }
     case "autopilot": {
       // `nudge` is the only mode reachable by consent: `full` exists in the
@@ -46,7 +61,7 @@ export async function setFeature(
     }
     case "board": {
       const result = await setBoard(on, projectDir, opts);
-      return { on: result.on, settingsPath: result.settingsPath, detail: "cross-session digest on start and on prompt" };
+      return { on: result.on, settingsPath: result.settingsPath, detail: FEATURE_PURPOSE.board };
     }
     case "optimize":
       return setOptimize(on, projectDir, opts.home);
@@ -84,7 +99,7 @@ async function setOptimize(
     return {
       on: true,
       settingsPath,
-      detail: "re-check after a session ends (at most daily), surface it at the next start",
+      detail: FEATURE_PURPOSE.optimize,
     };
   }
 

@@ -86,7 +86,7 @@ rm -rf ~/.codex/skills/gradient-{optimize,report,features}
 | | |
 |---|---|
 | `gradient` | The report. What your habits cost, what is installed and whether it is used, what other sessions are doing. Read-only. |
-| `gradient optimize` | Find what recurs and what has gone stale, then propose the changes. |
+| `gradient optimize` | Find what recurs and what has gone stale, then propose the changes. Every run writes a checkup page you can click through, and prints where. |
 | `gradient remove <name>` | Uninstall a generated artifact — one carrying gradient's own marker, never a file you wrote. |
 | `gradient on\|off <feature>` | `continuity` · `autopilot` · `board` · `optimize` |
 
@@ -99,9 +99,8 @@ by naming the runner they resolved, and `optimize` prints its own next command
 fully resolved — copy either and it runs:
 
 ```bash
-gradient optimize                      # propose
+gradient optimize                      # propose — and write the checkup page
 gradient optimize --json               # hand the findings to your assistant
-gradient optimize --page               # a local checkup page you click through
 gradient optimize --apply a1b2,c3d4    # apply exactly these
 gradient optimize --undo <runId>       # put it all back
 gradient optimize --auto               # headless; additive, reversible changes only

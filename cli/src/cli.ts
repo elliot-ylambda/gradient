@@ -1,15 +1,16 @@
 import { parseArgs } from "node:util";
+import { loadConfig } from "./config.js";
 import { displayCommand } from "./core/hookBinary.js";
 import { remove } from "./commands/remove.js";
 import { checkpoint } from "./commands/checkpoint.js";
 import { respond, type StopHookInput } from "./commands/respond.js";
-import { FEATURES, isFeatureName, setFeature } from "./commands/features.js";
+import { FEATURES, FEATURE_PURPOSE, isFeatureName, setFeature, type FeatureName } from "./commands/features.js";
 import { optimize, optimizeJson, undo } from "./commands/optimize.js";
 import { banner, c, severityChip } from "./core/ui.js";
 import { boardDigest, boardRefresh } from "./commands/board.js";
 import { recap } from "./commands/recap.js";
 import { notify } from "./commands/notify.js";
-import { buildReport } from "./commands/report.js";
+import { buildReport, featureStatus } from "./commands/report.js";
 import { renderReport } from "./commands/report-render.js";
 import { sessionStart } from "./commands/sessionStart.js";
 import { scheduleSnippet, sessionEnd } from "./commands/sessionEnd.js";
@@ -42,7 +43,8 @@ Usage:
                                 Claude Code and Codex, then propose the changes
     [--target claude-code|codex|both]   which assistants to optimize for
     [--apply <id>...] [--deny <id>...] [--auto] [--undo <runId>]
-    [--json] [--page]                   findings for an agent, or a local page
+    [--json]                            findings for an agent, as JSON
+                                        (every run also writes a local page)
     [--print-schedule]                  a scheduling snippet for this platform
     [--user] [--all] [--since 7d] [--limit N] [--max-prompts N]
   gradient remove <name>        uninstall a generated artifact
@@ -177,6 +179,7 @@ async function runOptimize(
   }
 
   renderFindings(result.findings, log);
+  await renderFeatures(projectDir, home, log);
   if (result.pagePath) {
     log(`\n${c.dim("checkup page:")} ${c.violet(`file://${terminalSafeLine(result.pagePath)}`)}`);
   }
@@ -189,6 +192,40 @@ async function runOptimize(
   }
   if (result.runId) log(`\n${c.dim("undo:")} ${c.violet(`${displayCommand()} optimize --undo ${result.runId}`)}`);
   return 0;
+}
+
+/**
+ * What is running in the background, and what each one that is not would do.
+ *
+ * `optimize` proposes changes to files and then said nothing about the four
+ * switches that change how the assistant behaves — they appeared only in the
+ * report, which is a different command. Someone acting on findings is exactly
+ * the person deciding what to automate, so the state belongs here too, and an
+ * `off` row is useless without saying what turning it on buys.
+ */
+async function renderFeatures(projectDir: string, home: string | undefined, log: LogFn): Promise<void> {
+  let rows;
+  try {
+    const config = await loadConfig(home);
+    rows = await featureStatus(projectDir, config, home);
+  } catch {
+    // Never let a config read stop the findings from being reported.
+    return;
+  }
+  log(`\n${c.bold("features")}`);
+  const width = Math.max(...rows.map(row => row.name.length));
+  for (const row of rows) {
+    // Only an off row needs selling; an on row's detail already says what it does.
+    // Padding is applied only where something follows it, so an `on` row does
+    // not end in trailing whitespace.
+    const purpose = row.on ? "" : `  ${c.dim(`— ${FEATURE_PURPOSE[row.name as FeatureName]}`)}`;
+    const label = row.on ? row.detail ?? "on" : "off";
+    const state = row.on ? c.ok(label) : c.muted(label.padEnd(3));
+    log(`  ${row.name.padEnd(width)}  ${state}${purpose}`);
+  }
+  if (rows.some(row => !row.on)) {
+    log(`  ${c.dim(`turn one on with`)} ${c.violet(`${displayCommand()} on <feature>`)}`);
+  }
 }
 
 /** Board hook targets: fail open, and keep stdout empty unless there is a
