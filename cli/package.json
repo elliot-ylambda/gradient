@@ -30,7 +30,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.112.3"
+    "@anthropic-ai/sdk": "^0.117.1"
   },
   "devDependencies": {
     "esbuild": "0.28.1",
