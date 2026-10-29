@@ -21,7 +21,7 @@ import {
 import { homedir, platform, release, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SKILLS, codexName, forCodex } from "./skill-render.mjs";
+import { SKILLS, codexName, forCodex, CODEX_SKILL_DIR_PLACEHOLDER } from "./skill-render.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const cliDir = resolve(scriptDir, "..");
@@ -742,11 +742,7 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         ...SKILLS.map(name => ({
           label: `codex ${codexName(name)}`,
           body: join(state.home, ".codex", "skills", codexName(name), "SKILL.md"),
-          // The copied skill resolves its runner under the home it was
-          // installed into, so HOME here is that home. The harness isolates
-          // gradient's state with GRADIENT_HOME and leaves HOME real, which for
-          // this one proof would point at the developer's own machine.
-          env: { ...state.productEnv, HOME: state.home },
+          env: state.productEnv,
         })),
         ...SKILLS.map(name => ({
           label: `plugin ${name}`,
@@ -758,10 +754,14 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         const body = await readFile(shape.body, "utf8");
         const runner = /(node "[^"]*gradient\.mjs[^"]*")/.exec(body);
         assertion(runner !== null, `${shape.label} names a concrete command to run`);
+        // Bind only the documented placeholder to this activated SKILL.md.
+        // This is not a search for a convenient installed runner.
+        const resolvedRunner = runner[1].replace(`"${CODEX_SKILL_DIR_PLACEHOLDER}/bin/gradient.mjs"`,
+          shellArg(join(dirname(shape.body), "bin", "gradient.mjs")));
         const proof = await command(
-          `${runner[1]} --version`,
+          `${resolvedRunner} --version`,
           "/bin/sh",
-          ["-c", `${runner[1]} --version`],
+          ["-c", `${resolvedRunner} --version`],
           { cwd: state.project, env: shape.env },
         );
         equal(proof.exitCode, 0, `${shape.label}'s own command runs with no gradient on PATH`);
@@ -769,20 +769,21 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
         assertion(!/npx|npm /.test(body), `${shape.label} tells no one to reach for a package manager`);
       }
 
-      // The same command has to find a hand copy too. Codex reads both roots,
-      // and a skill that resolves in only the one it happened to be installed
-      // into is the same silent break, one directory over.
-      const handCopy = join(state.sandbox, "hand-copy-home");
-      await cp(join(repoRoot, "skills", codexName("report")),
-        join(handCopy, ".agents", "skills", codexName("report")), { recursive: true });
-      const body = await readFile(join(handCopy, ".agents", "skills", codexName("report"), "SKILL.md"), "utf8");
-      const runner = /(node "[^"]*gradient\.mjs[^"]*")/.exec(body)[1];
+      // Nonstandard installer destination, including shell-sensitive characters:
+      // the same instructions must bind to this file, not a default home copy.
+      const handCopy = join(state.sandbox, "custom skills $literal 'quote'", codexName("report"));
+      await cp(join(repoRoot, "skills", codexName("report")), handCopy, { recursive: true });
+      const skillFile = join(handCopy, "SKILL.md");
+      const body = await readFile(skillFile, "utf8");
+      const runner = /(node "[^\"]*gradient\.mjs[^\"]*")/.exec(body)[1]
+        .replace(`"${CODEX_SKILL_DIR_PLACEHOLDER}/bin/gradient.mjs"`, shellArg(join(dirname(skillFile), "bin", "gradient.mjs")));
       const elsewhere = await command(
         `${runner} --version`, "/bin/sh", ["-c", `${runner} --version`],
-        { cwd: state.project, env: { ...state.productEnv, HOME: handCopy } },
+        { cwd: state.project, env: state.productEnv },
       );
+      equal(elsewhere.exitCode, 0, "the activated custom skill command runs");
       equal(elsewhere.stdout.trim(), state.package.version,
-        "the same command resolves a hand copy under ~/.agents/skills");
+        "the same command runs the activated copy in a nonstandard directory");
 
       // Non-interactive with no configuration must never guess.
       await updateConfig({ targets: undefined });
@@ -834,7 +835,7 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       for (const finding of parsed.findings) {
         assertion(typeof finding.id === "string" && finding.id.length > 0, "every finding has an id to apply by");
         assertion(typeof finding.evidence === "string", "every finding carries a quotable evidence line");
-        assertion(typeof finding.autoEligible === "boolean", "every finding says whether --auto may take it");
+        assertion(typeof finding.actionable === "boolean", "every finding says whether it has a fix to apply");
       }
       const report = await runCli([]);
       equal(report.exitCode, 0, "the report succeeds alongside pending findings");
@@ -865,16 +866,16 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       // Absolute node too, not just the absolute runner: the first version of
       // this assertion checked only the runner path and passed on a snippet
       // that said `node ~/...`, which launchd's PATH cannot resolve.
-      assertion(schedule.stdout.includes(`${process.execPath} ${state.cliBin} optimize --auto`),
+      assertion(schedule.stdout.includes(`${process.execPath} ${state.cliBin} optimize`),
         "the snippet names an absolute node and this install's own runner");
+      assertion(!schedule.stdout.includes("--auto"), "the schedule only proposes a checkup");
       assertion(!/[^/]\bnode ~/.test(schedule.stdout),
         "the snippet leaves nothing for a scheduler's minimal PATH to resolve");
     }, ["mine"]);
 
     await scenario("bridge", "Bridge AGENTS.md into CLAUDE.md, then undo it", "artifacts", async ({ assertion, equal }) => {
-      // Claude Code reads CLAUDE.md and never AGENTS.md. This is the change
-      // that makes one setup serve both assistants, so it is the one the
-      // packaged binary has to get right end to end.
+      // An existing CLAUDE.md takes precedence over AGENTS.md in the default
+      // Claude mode. This fixture therefore needs an explicit shared import.
       const claudeMd = join(state.project, "CLAUDE.md");
       const agentsMd = join(state.project, "AGENTS.md");
       const original = "# Project\n\n- Keep this hand-written line exactly as it is.\n";
@@ -951,8 +952,12 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       await seedSuggestions(suggestions);
       // Applying by name: the report lists pending suggestions by name, and
       // --apply does not re-mine, so the seeded cache is what it reads.
-      const applied = await runCli(["optimize", "--apply", suggestions.map(suggestion => suggestion.name).join(",")]);
-      equal(applied.exitCode, 0, "full artifact matrix applies through the installed CLI");
+      const observations = new Set(["dogfood-loop", "dogfood-compact"]);
+      const refusedObservations = await runCli(["optimize", "--apply", [...observations].join(",")]);
+      equal(refusedObservations.exitCode, 1, "native workflow observations refuse automatic application");
+      assertion(!refusedObservations.stdout.includes("\napplied "), "observations are not counted as successful repairs");
+      const applied = await runCli(["optimize", "--apply", suggestions.filter(suggestion => !observations.has(suggestion.name)).map(suggestion => suggestion.name).join(",")]);
+      equal(applied.exitCode, 0, "supported artifact matrix applies through the installed CLI");
       assertion(applied.stdout.includes("applied"), "the run reports what it applied");
 
       for (const path of [
@@ -967,7 +972,8 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const playbook = await readFile(join(state.project, "gradient.md"), "utf8");
       assertion(playbook.includes("<!-- gradient:dogfoodplaybook -->"), "project playbook entry is tagged line-surgically");
       const settings = await readJson(join(state.project, ".claude", "settings.local.json"));
-      for (const event of ["PreCompact", "SessionStart", "Notification", "PostToolUse"]) {
+      assertion(!settings.hooks.PreCompact, "the memory observation did not install a hook");
+      for (const event of ["SessionStart", "Notification", "PostToolUse"]) {
         assertion(Array.isArray(settings.hooks[event]), `${event} hook is installed by approval`);
       }
       // A rule reaches Codex as one tagged line under gradient's own heading in
@@ -1011,7 +1017,6 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const proposed = JSON.parse((await runCli(["optimize", "--json"])).stdout);
       const stale = proposed.findings.find(finding => finding.family === "stale");
       assertion(Boolean(stale), "the stale reference is reported");
-      equal(stale.autoEligible, false, "a prose edit is never eligible for --auto");
 
       const auto = await runCli(["optimize", "--auto"]);
       equal(auto.exitCode, 0, "--auto succeeds");
@@ -1030,7 +1035,7 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
     await scenario("insights", "Render the composed report from real state", "reporting", async ({ assertion, equal }) => {
       const report = await runCli([]);
       equal(report.exitCode, 0, "the bare report succeeds");
-      assertion(report.stdout.includes("installed") && report.stdout.includes("use(s)"),
+      assertion(report.stdout.includes("installed") && report.stdout.includes("recorded explicit invocation"),
         "the report composes the adoption evidence that `stats` used to print separately");
       assertion(report.stdout.includes("features:"), "the report states which background features are on");
       assertion(report.stdout.includes("prompts"), "the report summarizes measured behavior");
@@ -1286,13 +1291,13 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       const cachePath = await suggestionsPath();
       await writeFile(cachePath, "{broken", { mode: 0o600 });
       const corruptCache = await runCli(["optimize", "--json", "--apply", "anything"]);
-      equal(corruptCache.exitCode, 0, "corrupt suggestion cache degrades safely");
+      equal(corruptCache.exitCode, 1, "corrupt suggestion cache refuses the requested apply");
       equal(JSON.parse(corruptCache.stdout).findings.filter(f => f.family === "workflow"), [],
         "corrupt cache exposes no mined workflow");
 
       await writeFile(cachePath, `[${" ".repeat(5_000_100)}]`, { mode: 0o600 });
       const oversized = await runCli(["optimize", "--json", "--apply", "anything"]);
-      equal(oversized.exitCode, 0, "oversized suggestion cache degrades safely");
+      equal(oversized.exitCode, 1, "oversized suggestion cache refuses the requested apply");
       equal(JSON.parse(oversized.stdout).findings.filter(f => f.family === "workflow"), [],
         "oversized cache exposes no mined workflow");
 
@@ -1303,7 +1308,7 @@ process.stdout.write(basename(process.argv[1]) === "claude" ? JSON.stringify({ r
       await rm(cachePath, { force: true });
       await symlink(outside, cachePath);
       const linked = await runCli(["optimize", "--json", "--apply", "symlink-escape"]);
-      equal(linked.exitCode, 0, "symlinked suggestion cache is refused without crashing");
+      equal(linked.exitCode, 1, "symlinked suggestion cache refuses the requested apply");
       assertion(!linked.stdout.includes("symlink-escape") || !linked.stdout.includes("must never load"),
         "symlink target content is not loaded");
       await rm(cachePath, { force: true });

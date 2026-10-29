@@ -347,7 +347,7 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   const gated = dayGated.filter(candidate =>
     !!candidate.cadence || !isNudgeText(candidate.signature));
   if (gated.length < dayGated.length) {
-    log(`nudge filter → ${dayGated.length - gated.length} approval phrase(s) dropped; see gradient on autopilot`);
+    log(`nudge filter → ${dayGated.length - gated.length} approval phrase(s) dropped; repeated approvals are not workflow instructions`);
   }
   log(`mining → ${gated.length} candidate patterns; proposing from the top ${window}`);
 

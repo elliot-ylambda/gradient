@@ -1,236 +1,170 @@
 <div align="center">
-
 <img src="assets/logo.svg" width="72" height="72" alt="">
 
 # gradient
 
-**One command that reads how you actually work and keeps your Claude Code and Codex setup honest.**
+**A local setup checkup for Claude Code and Codex.**
 
-`gradient optimize` mines your own local transcripts *and* reads the configuration
-your assistants actually load, then proposes one ranked list of changes: skills to
-create, retire, or repair; instructions the repository has outgrown; the one-line
-bridge that makes a single setup serve both assistants. It only ever suggests —
-nothing is written without you approving it, and every write is reversible.
+Find stale instructions, inspect installed skills, and review recurring habits.
+See the evidence, choose a fix, and undo it if you change your mind.
 
-[gradient.md](https://gradient.md) · open source · MIT
-
+[gradient.md](https://gradient.md) · [How it compares with native tools](docs/native-tools.md) · MIT
 </div>
 
----
+## One useful loop
 
-## Why
+Your agent instructions can keep naming a script long after the script is gone.
+A skill can live in a different directory from the one you expected. Two
+assistants can load different instructions in the same repository.
 
-A dogfooding run over real history — 2,800+ transcripts, ~5k typed prompts —
-found the same things everyone has:
+Gradient checks local files and bounded session history, then separates **fixes
+it can apply** from **observations that need your judgment**. Each finding names
+its evidence. No model, network call, or API key is needed for the checkup.
 
-- `continue` / `what's next?` typed **hundreds** of times → a loop nobody set up
-- `/compact` run **143×** → a `PreCompact` checkpoint you keep forgetting
-- a CLAUDE.md line naming a script that was deleted three weeks ago
-- 32 installed skills spending **9,191 characters of context in every session**,
-  several of which nothing has ever invoked
+1. Ask your assistant: **“Use Gradient to check this project's setup.”**
+2. Review the findings and proposed changes in the conversation or local page.
+3. Choose the fixes. Rerun to verify them, or undo the run.
 
-None of that is visible from inside a session. All of it is visible from the
-outside, across sessions — which is the one thing neither assistant can do for
-you, and the only thing gradient claims.
+An illustrative case: `CLAUDE.md` still says to run `scripts/old-check.sh`.
+Gradient shows the missing path and the exact instruction line. You decide
+whether to remove that stale instruction or have your assistant update it to the
+current command. Gradient does not invent the replacement.
 
 ## Install
 
-Each product's own installer, and nothing else — no package manager, no PATH
-entry, nothing global. The only requirement is Node.
+Requires **Node.js 20 or later**. Installing adds skills and their bundled runner;
+it enables no background features and creates no `gradient` command on PATH.
 
-**Claude Code** — the plugin, from this repository as a marketplace:
+**Claude Code** — run in a session:
 
-```
+```text
 /plugin marketplace add elliot-ylambda/gradient
 /plugin install gradient@gradient
 ```
 
-Same thing from a terminal, if you prefer: `claude plugin marketplace add
-elliot-ylambda/gradient` then `claude plugin install gradient@gradient`.
+**Codex** — ask its built-in installer:
 
-**Codex** — the skills, through the built-in installer:
-
-```
+```text
 $skill-installer install gradient-optimize, gradient-report and gradient-features from elliot-ylambda/gradient
 ```
 
-Either way you get the same three skills, and the same runner byte for byte:
-
-| | Claude Code | Codex |
+| Action | Claude Code | Codex |
 |---|---|---|
-| `optimize` | `/gradient:optimize` | `$gradient-optimize` |
-| the report | `/gradient:report` | `$gradient-report` |
-| `on`/`off` | `/gradient:features` | `$gradient-features` |
+| Check the setup | `/gradient:optimize` | `$gradient-optimize` |
+| Read the activity report | `/gradient:report` | `$gradient-report` |
+| Manage optional Claude hooks | `/gradient:features` | `$gradient-features` |
 
-Claude Code namespaces a plugin's skills for you; the Codex copies carry the
-`gradient-` prefix themselves, because skills there share one flat namespace and
-a skill called `optimize` would be a landgrab.
+Each skill uses its own bundled runner, including custom install locations.
+Codex can run the checkup and report; Gradient's optional hook installer currently
+targets Claude Code. Codex has native hooks, but Gradient does not install them.
 
-Each skill directory is self-contained — a `SKILL.md` plus the single-file
-runner it invokes — so there is nothing else to fetch and nothing beyond Node to
-keep current. Installing runs nothing on its own; every automation stays opt-in.
+To update Claude Code: `claude plugin update gradient@gradient`, then restart.
+For Codex, remove only the three installed Gradient skill directories and rerun
+the installer; it refuses to overwrite existing directories. Use their actual
+installation paths, especially with a custom `CODEX_HOME` or `--dest`.
 
-**Updating** is one step in Claude Code and two in Codex, because the two
-installers differ. `claude plugin update gradient@gradient`, then restart —
-hooks resolve the newest installed version when they fire, so one that was
-turned on before the update keeps working. Codex's `$skill-installer` aborts
-rather than overwrite a directory that already exists, so remove the three
-first and then run the install line again:
+## Check, choose, verify
 
-```bash
-rm -rf ~/.codex/skills/gradient-{optimize,report,features}
+The skills run commands for you. For manual use, replace `/path/to/gradient.mjs`
+with the runner in your installed skill's `bin` directory, or the plugin's `bin`.
+`help` prints the resolved invocation.
+
+```sh
+node /path/to/gradient.mjs optimize --target both
+node /path/to/gradient.mjs optimize --json
+node /path/to/gradient.mjs optimize --apply <id>,<id> --deny <id>
+node /path/to/gradient.mjs optimize
+node /path/to/gradient.mjs optimize --undo <runId>
 ```
 
-## The four verbs
+The first run remembers which assistants to inspect. Project scope is the
+default; `--user` or `--all` explicitly includes cross-project history.
 
-| | |
+- **Apply** is offered only when Gradient has a concrete change. Informational
+  findings require review, and cannot claim a successful repair.
+- **Deny** remembers any finding while its evidence is unchanged.
+- **Undo** restores generated artifacts and associated state. If a later edit
+  conflicts, the run is left intact and the conflict is reported. The latest ten applied
+  runs are retained independently of read-only reports.
+- **Remove** explicitly uninstalls one Gradient-owned artifact:
+  `node /path/to/gradient.mjs remove <name>`.
+- **Automatic mode** and periodic checks only propose changes. The legacy
+  `--auto` flag is kept for existing schedules and no longer applies repairs.
+
+## What the evidence means
+
+| Check | What you can verify |
 |---|---|
-| `gradient` | The report. What your habits cost, what is installed and whether it is used, what other sessions are doing. Read-only. |
-| `gradient optimize` | Find what recurs and what has gone stale, then propose the changes. Every run writes a checkup page you can click through, and prints where. |
-| `gradient remove <name>` | Uninstall a generated artifact — one carrying gradient's own marker, never a file you wrote. |
-| `gradient on\|off <feature>` | `continuity` · `autopilot` · `board` · `optimize` |
+| Stale references | An instruction names a missing file, package script, or Make target |
+| Instruction loading | Which inspected files apply to which assistant, including precedence and explicit imports |
+| Skill health | Installed locations, descriptions, and compatibility observations |
+| Repeated behavior | Counts from observed events or clearly labeled interpretations of repeated prompts |
 
-Nothing puts a `gradient` on your PATH, so `gradient` above is shorthand for the
-runner the installed skill names — `${CLAUDE_PLUGIN_ROOT}/bin/gradient.mjs` in
-the plugin, `~/.codex/skills/gradient-optimize/bin/gradient.mjs` in Codex. The
-skills already know it; ask your assistant to optimize your setup and it runs
-these for you. If you want to drive it yourself, `help` and the report both open
-by naming the runner they resolved, and `optimize` prints its own next command
-fully resolved — copy either and it runs:
+Claude Code can now read `AGENTS.md` directly in supported configurations.
+Gradient proposes an import only when the inspected configuration needs one.
 
-```bash
-gradient optimize                      # propose — and write the checkup page
-gradient optimize --json               # hand the findings to your assistant
-gradient optimize --apply a1b2,c3d4    # apply exactly these
-gradient optimize --undo <runId>       # put it all back
-gradient optimize --auto               # headless; additive, reversible changes only
-```
+A bounded history scan cannot establish that a skill has **never** been used.
+Description lengths are inventory measurements, not tokens or money saved.
+Skill and memory advice uses a documented baseline; the skill checks current
+published guidance before turning that advice into a recommendation. Some
+managed, remote, or unsupported configuration surfaces may remain outside the
+scan; an empty result is not a certification of the whole setup.
 
-## What it finds
+## Use native tools where they fit
 
-| family | what it means |
-|---|---|
-| `drift` | The two assistants' configurations disagree — usually the missing `@AGENTS.md` import |
-| `stale` | An instruction names a path, script, or task the repository no longer has |
-| `skill-health` | A skill will not load, will not be selected, carries frontmatter outside the spec, or costs context for nothing |
-| `dead-letter` | A written instruction you keep retyping anyway |
-| `workflow` | A repeated habit worth turning into a skill, rule, or hook |
-| `practice` | Conformance to published guidance — file length, path-scoped rules |
-| `memory` | Read-only observations about auto memory. gradient never edits it |
+Claude Code already provides `/insights`, `/doctor`, `/skill-doctor`, and skill
+evaluation. Codex has skill creation, memories, scheduled tasks, and hooks.
+Use their native tools for general review, compaction, memory, and automation.
+Gradient focuses on concrete, locally checkable evidence across both setups and
+reviewed fixes. It does not claim unique access to session history or measured
+productivity gains. See the [dated comparison and primary sources](docs/native-tools.md).
 
-Not every finding carries a change. A portability problem or an unused artifact
-gradient did not generate is reported and explained, and `optimize` says so
-rather than offering an `--apply` that would refuse.
+## Optional background features
 
-`stale` is the one that keeps a CLAUDE.md true as the code moves out from under
-it. `dead-letter` is the one neither assistant can tell you: you are paying an
-instruction's context cost *and* typing it anyway, which means it is not holding.
+These are secondary, opt-in **Claude Code hooks**, configured per repository:
 
-## One setup, both assistants
+- `optimize`: propose a fresh checkup after a session, at most daily, and show the
+  top pending finding at the next start.
+- `board`: summarize other observed sessions in the repository.
+- `continuity`: save a bounded checkpoint and read it back on resume.
+- `autopilot`: a bounded model judge may send a fixed continuation nudge.
 
-Claude Code reads `CLAUDE.md` and never `AGENTS.md`. If your repository has both
-Claude and Codex users, gradient proposes the documented one-line fix first:
+Use `node /path/to/gradient.mjs on|off <feature>`. Codex-only activation is refused
+with an explanation. Existing global optimize consent requires re-enabling for
+the intended project. Native memory, scheduling, and continuation should be your
+first choice when they meet the need.
 
-```markdown
-@AGENTS.md
+`optimize --print-schedule` prints a platform-specific command; Gradient installs
+no daemon or timer. You own installing and removing any external schedule.
 
-## Claude Code
-Everything below is Claude-specific.
-```
+## Data and safety
 
-Once bridged, one file serves both, and every later rule is written once instead
-of twice. Where a rule has to be written per-assistant, gradient puts it where
-each product actually loads it: `.claude/rules/gradient-*.md` for Claude Code
-(auto-loaded at launch), and a single tagged line under its own `## gradient`
-heading in `AGENTS.md` for Codex, which has no rules directory.
+The checkup stays local and deterministic. History collection is bounded and
+redacted; inferred habits are evidence for review, never standing permission.
+Continuity saves a local checkpoint and feeds it into the existing Claude
+session. Autopilot calls a separate model judge through the configured backend
+and may incur usage charges. Board and reports use local session and Git data;
+they do not fetch GitHub context.
 
-## The split that makes it safe
+Changes use exact preconditions, snapshots, and an advisory lock. Writes refuse
+symlinked paths. Gradient never modifies assistant-managed auto memory and never
+deletes a file it did not generate. A later user edit is preserved during undo.
 
-> **The CLI is local, offline, and deterministic. The skill brings the model and the network.**
-
-The CLI makes **no network calls, ever**, and calls no model. It computes only
-what is checkable: a path that does not exist, a frontmatter key outside the
-spec, a description past the listing cap, an artifact unused for thirty days, a
-phrase you typed nine times that your CLAUDE.md already contains. That is what
-lets it run in a hook, on a schedule, and with no API key.
-
-The skills — the same three `SKILL.md` files in both Claude Code and Codex —
-bring what the CLI cannot: judgment for rewriting prose, and a connection for
-checking that today's published guidance is still what gradient thinks it is.
-
-The same line decides what `--auto` may do unattended: deterministic, additive,
-reversible, gradient-owned changes only. It never edits prose a person wrote.
-
-## Run it on a schedule
-
-```bash
-gradient on optimize                 # re-check after a session ends, at most daily
-gradient optimize --print-schedule   # a cron/launchd/schtasks snippet for your platform
-```
-
-The snippet resolves the runner itself, so a scheduled run needs no PATH entry
-either — a cron or launchd job gets a minimal environment and no shell profile,
-which is where a command that needs one fails silently.
-
-gradient installs no daemon and owns no timer. `--print-schedule` prints the
-snippet; installing it stays your decision, and so does removing it.
-
-## Data and trust boundaries
-
-- **The CLI never makes a network call.** Mining, inspection, findings, and
-  application are entirely local. No API key is stored or required.
-- `optimize` reads user-authored turns from enabled local Claude Code and Codex
-  transcripts (excluding Codex subagent rollouts), pairs bounded Bash calls with
-  their results, and records file-edit events locally to detect recurring
-  failures and post-edit rituals. It extracts no successful output; at most a
-  redacted 120-character first error line can join a candidate. Traversal, file
-  sizes, total bytes, candidate counts, caches, settings, and logs are all
-  bounded, and every drop is reported.
-- **Text mined from transcripts becomes instructions an agent obeys**, so every
-  proposed instruction line is redacted, length-capped, stripped of URLs and
-  code blocks, and screened against a shell/credential/network lexicon. Any line
-  carrying a command invocation is barred from `--auto` in every family.
-- Artifact bodies, titles, triggers, rule text, and hook commands are
-  reconstructed locally from your own history; nothing is copied through a model.
-- Every write to a file gradient does not own is snapshotted first and
-  reversible with `--undo`. Each edit carries the exact text it expects to find
-  and is refused if the file has moved on; creates never overwrite, and gradient
-  deletes only a file carrying its own marker. Concurrent sessions take an
-  advisory lock. Symlinked ancestors and final targets are refused.
-- gradient **never** writes to or deletes from Claude Code's auto-memory
-  directory, and never deletes a file it did not generate.
-- Autopilot and continuity are opt-in per project and do send session content to
-  a model. Read their sections before enabling either.
-
-See [SECURITY.md](SECURITY.md) for supported versions and vulnerability reports.
-
-## Repository layout
-
-| Dir | What it is |
-|-----|------------|
-| [`cli/`](cli/) | The CLI's TypeScript source. Not published anywhere; it is built into the runner both shipping shapes carry. See [`cli/README.md`](cli/README.md). |
-| [`plugin/`](plugin/) | The Claude Code plugin — the runner plus the three authored skills. |
-| [`skills/`](skills/) | The Codex skills `$skill-installer` fetches. `gradient-*` are generated from `plugin/skills/`; see [`skills/README.md`](skills/README.md). |
-| [`docs/`](docs/) | [`dogfood.md`](docs/dogfood.md) is current; [`superpowers/`](docs/superpowers/) is a dated record of what was designed, not documentation. |
-| [`assets/`](assets/) | Logo marks. |
+See [SECURITY.md](SECURITY.md) and [dogfood evidence](docs/dogfood.md) for the
+boundaries and the difference between synthetic checks and observed live behavior.
 
 ## Develop
 
-```bash
-make test            # the CLI suite
-make build           # compile cli/ to dist/
-make artifacts       # rebuild the plugin bundle and the three skill directories
-npm --prefix cli run dogfood   # build, install by copying, and drive the real runner end to end
+```sh
+make test
+make build
+make artifacts
+npm --prefix cli run dogfood
 ```
 
-The dogfood harness is the real gate: it installs both shipping shapes into a
-disposable home where each product's own installer puts them, then reads every
-SKILL.md, runs the command it names with no `gradient` on PATH, and drives every
-verb against synthetic Claude Code and Codex histories. It asserts that every
-command in `--help` has a scenario, so the surface cannot drift from its
-coverage. A skill's command is prose until something runs it, which is how three
-separate releases shipped one that could not resolve.
-
-## License
+`cli/` contains the TypeScript source; `plugin/` contains the authored skills;
+`skills/gradient-*` are generated Codex copies. Both ship the same runner.
+The [development guide](cli/README.md) covers validation. Historical designs in
+`docs/superpowers/` are records, not current usage instructions.
 
 MIT. See [LICENSE](LICENSE).

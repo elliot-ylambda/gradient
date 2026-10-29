@@ -1,8 +1,7 @@
-import { homedir } from "node:os";
-import { join, relative } from "node:path";
-import { lstat, opendir } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
+import { lstat, opendir, realpath } from "node:fs/promises";
 import type { Assistant } from "./types.js";
-import { safeReadFile } from "./safeFs.js";
+import { ancestorDirs, assistantHomes, confineFor, managedMemoryGuard, projectRoot, readDiscovered, readSettings, repositoryDirs, type DiscoveryOptions } from "./discovery.js";
 import { normalize } from "./cluster.js";
 import { list, parseFrontmatter, type Frontmatter } from "./frontmatter.js";
 
@@ -35,6 +34,8 @@ export interface InstructionSource {
   bytes: number;
   /** Rules only: whether `paths:` frontmatter scopes when this file loads. */
   pathScoped?: boolean;
+  /** Assistant-managed memory remains read-only even when explicitly imported. */
+  readOnly?: boolean;
 }
 
 export interface InstructionLine {
@@ -45,11 +46,7 @@ export interface InstructionLine {
   normalized: string;
 }
 
-/**
- * Claude Code reads CLAUDE.md and not AGENTS.md. When a repository has both
- * assistants' users in it, the documented fix is a single `@AGENTS.md` import
- * at the top of CLAUDE.md (or a symlink), after which one file serves both.
- */
+/** Claude AGENTS.md loading depends on instruction mode and ancestor files. */
 export interface BridgeState {
   claudeMdPath: string;
   agentsMdPath: string;
@@ -57,6 +54,10 @@ export interface BridgeState {
   agentsMdExists: boolean;
   importsAgentsMd: boolean;
   symlinked: boolean;
+  claudeLoadsAgentsMd?: boolean;
+  codexLoadsAgentsMd?: boolean;
+  mode?: "claude-md-or-agents-md" | "claude-md-and-agents-md" | "claude-md" | "managed-only" | "unknown";
+  blockedBy?: string[];
 }
 
 export interface InstructionSet {
@@ -66,43 +67,33 @@ export interface InstructionSet {
   /** Paths that exist but could not be read, so a caller can say so rather
    *  than silently reporting a clean bill of health. */
   unreadable: string[];
+  /** Bounds and runtime-specific configuration the inventory cannot establish. */
+  warnings?: string[];
 }
 
-/** Candidate instruction files per assistant, in load order. */
-function candidatePaths(projectDir: string, home: string, assistant: Assistant): Array<{
-  path: string; scope: InstructionScope; kind: InstructionKind; base: string;
-}> {
-  if (assistant === "codex") {
-    return [
-      { path: join(home, ".codex", "AGENTS.md"), scope: "user", kind: "agents-md", base: home },
-      { path: join(projectDir, "AGENTS.md"), scope: "project", kind: "agents-md", base: projectDir },
-    ];
-  }
-  return [
-    { path: join(home, ".claude", "CLAUDE.md"), scope: "user", kind: "claude-md", base: home },
-    { path: join(projectDir, "CLAUDE.md"), scope: "project", kind: "claude-md", base: projectDir },
-    { path: join(projectDir, ".claude", "CLAUDE.md"), scope: "project", kind: "claude-md", base: projectDir },
-    { path: join(projectDir, "CLAUDE.local.md"), scope: "project", kind: "claude-local", base: projectDir },
-  ];
-}
-
-/** Recursively collect `*.md` under a rules directory. Symlinks are followed by
- *  Claude Code but not by gradient: a link can leave the tree entirely, and a
- *  read-only audit is not worth that reach. */
-async function ruleFiles(dir: string, depth = 0): Promise<string[]> {
-  if (depth > MAX_RULE_DEPTH) return [];
+/** Bounded rules traversal, including documented symlink folders. */
+async function ruleFiles(dir: string, warnings: string[], seen = new Set<string>(), depth = 0): Promise<string[]> {
+  if (depth > MAX_RULE_DEPTH) { warnings.push(`Rules below ${dir} exceed the ${MAX_RULE_DEPTH}-level inspection limit`); return []; }
   let entries;
   try {
-    entries = await opendir(dir);
-  } catch {
+    const canonical = await realpath(dir);
+    if (seen.has(canonical)) return [];
+    seen.add(canonical);
+    entries = await opendir(canonical);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") warnings.push(`Could not inspect rules in ${dir}`);
     return [];
   }
   const out: string[] = [];
   for await (const entry of entries) {
-    if (out.length >= MAX_RULE_FILES) break;
+    if (out.length >= MAX_RULE_FILES) { warnings.push(`Rules in ${dir} exceed the ${MAX_RULE_FILES}-file inspection limit`); break; }
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...await ruleFiles(full, depth + 1));
-    else if (entry.isFile() && entry.name.endsWith(".md")) out.push(full);
+    let directory = entry.isDirectory();
+    if (entry.isSymbolicLink()) {
+      try { directory = (await lstat(await realpath(full))).isDirectory(); } catch { continue; }
+    }
+    if (directory) out.push(...await ruleFiles(full, warnings, seen, depth + 1));
+    else if (entry.name.endsWith(".md")) out.push(full);
   }
   return out.slice(0, MAX_RULE_FILES);
 }
@@ -179,81 +170,189 @@ async function isSymlink(path: string): Promise<boolean> {
   }
 }
 
-async function readBounded(base: string, path: string): Promise<string | null> {
+/** Confined to `project` when the directory holding `path` is inside it. */
+async function readBounded(project: string, path: string, unreadable?: string[]): Promise<string | null> {
   try {
-    return await safeReadFile(base, path, { maxBytes: MAX_FILE_BYTES });
-  } catch {
+    return await readDiscovered(path, MAX_FILE_BYTES, await confineFor(project, dirname(path)));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") unreadable?.push(path);
     return null;
   }
+}
+
+/** Current documented Claude instruction setting. Project/local settings do not
+ * control it: https://code.claude.com/docs/en/memory#choose-which-instruction-files-load */
+function instructionMode(settings: Record<string, any>): NonNullable<BridgeState["mode"]> {
+  const ids = ["cc-plugin-agents-md@builtin", "agents-md@builtin"];
+  if (ids.some(id => settings.enabledPlugins?.[id] === false)) return "claude-md";
+  const value = ids.map(id => settings.pluginConfigs?.[id]?.options?.instructionFiles).find(value => value !== undefined);
+  if (value === undefined) return "claude-md-or-agents-md";
+  return ["claude-md-or-agents-md", "claude-md-and-agents-md", "claude-md", "managed-only"].includes(value) ? value : "unknown";
+}
+
+function importedPaths(raw: string, from: string, home: string): string[] {
+  const out: string[] = [];
+  let fence: string | null = null;
+  for (const line of raw.split("\n")) {
+    const match = /^\s*(```+|~~~+)/.exec(line);
+    if (match) { fence = fence ? null : match[1]; continue; }
+    if (fence) continue;
+    const bare = line.replace(/`[^`]*`/g, " ");
+    for (const match of bare.matchAll(/(?:^|\s)@([^\s`<>]+)/g)) {
+      const name = match[1];
+      if (name.includes("://")) continue;
+      out.push(name.startsWith("~/") ? join(home, name.slice(2)) : resolve(dirname(from), name));
+    }
+  }
+  return out.slice(0, 100);
 }
 
 export async function loadInstructions(
   projectDir: string,
   targets: Assistant[],
-  opts: { home?: string } = {},
+  opts: DiscoveryOptions = {},
 ): Promise<InstructionSet> {
-  const home = opts.home ?? homedir();
+  const roots = assistantHomes(opts);
   const sources: InstructionSource[] = [];
   const lines: InstructionLine[] = [];
   const unreadable: string[] = [];
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  const ancestors = ancestorDirs(projectDir);
+  const repoDirs = await repositoryDirs(projectDir);
+  const project = await projectRoot(projectDir);
+  const isManagedMemory = await managedMemoryGuard(projectDir, opts, warnings);
+  const settings = targets.includes("claude-code") ? await readSettings(join(roots.claude, "settings.json"), warnings) : {};
+  const configuredMode = instructionMode(settings);
+  const mode = settings.claudeMdExcludes?.length && configuredMode !== "managed-only" ? "unknown" : configuredMode;
+  const claudeCandidates = ancestors.flatMap(dir => [
+    { path: join(dir, "CLAUDE.md"), kind: "claude-md" as const },
+    { path: join(dir, ".claude", "CLAUDE.md"), kind: "claude-md" as const },
+    { path: join(dir, "CLAUDE.local.md"), kind: "claude-local" as const },
+  ]);
+  const blockedBy: string[] = [];
+  for (const entry of claudeCandidates) {
+    if (entry.path === join(roots.claude, "CLAUDE.md")) continue;
+    if (await readBounded(project, entry.path, unreadable) !== null) blockedBy.push(entry.path);
+  }
 
+  // `confine` comes from the directory walked; an @import inherits its
+  // importer's, so a repository file cannot import the user's own files.
+  // Claude Code asks before loading such an external import.
   const ingest = async (
-    path: string,
-    base: string,
-    scope: InstructionScope,
-    assistant: Assistant,
-    kind: InstructionKind,
+    path: string, scope: InstructionScope, assistant: Assistant, kind: InstructionKind, depth = 0,
+    confine?: string,
   ): Promise<void> => {
+    if (depth > 5 || sources.length >= 500) { warnings.push(`Instruction inspection limit reached at ${path}`); return; }
+    if (depth === 0) confine ??= await confineFor(project, dirname(path));
     let raw: string;
     try {
-      raw = await safeReadFile(base, path, { maxBytes: MAX_FILE_BYTES });
+      const canonical = await realpath(path);
+      const key = `${assistant}:${canonical}`;
+      if (seen.has(key)) return;
+      raw = await readDiscovered(path, MAX_FILE_BYTES, confine);
+      seen.add(key);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") unreadable.push(path);
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EOUTSIDE") {
+        warnings.push(`${path} is outside the repository and was not inspected; Claude Code asks before loading a repository's external import or link.`);
+      } else if (code !== "ENOENT" || depth > 0) unreadable.push(path);
       return;
     }
     const frontmatter: Frontmatter = parseFrontmatter(raw);
     const source: InstructionSource = {
-      path,
-      scope,
-      assistant,
-      kind,
+      path, scope, assistant, kind,
       lineCount: raw.split("\n").length,
       bytes: Buffer.byteLength(raw, "utf8"),
       ...(kind === "rule" ? { pathScoped: list(frontmatter, "paths").length > 0 } : {}),
+      ...(await isManagedMemory(path) ? { readOnly: true } : {}),
     };
     sources.push(source);
     lines.push(...extractLines(raw, source));
+    if (assistant === "claude-code") {
+      for (const imported of importedPaths(raw, path, roots.home)) {
+        await ingest(imported, scope, assistant, imported.endsWith("AGENTS.md") ? "agents-md" : kind, depth + 1, confine);
+      }
+    }
   };
 
-  for (const assistant of targets) {
-    for (const entry of candidatePaths(projectDir, home, assistant)) {
-      await ingest(entry.path, entry.base, entry.scope, assistant, entry.kind);
-    }
-    if (assistant !== "claude-code") continue;
-    for (const [dir, base, scope] of [
-      [join(projectDir, ".claude", "rules"), projectDir, "project"],
-      [join(home, ".claude", "rules"), home, "user"],
-    ] as const) {
-      for (const path of await ruleFiles(dir)) {
-        await ingest(path, base, scope, assistant, "rule");
+  if (targets.includes("claude-code")) {
+    warnings.push("Claude managed settings, command-line settings/additional directories, and lazy-loaded subdirectory instructions are outside this inventory; native AGENTS.md fallback assumes current Claude Code (2.1.281+).");
+    if (settings.claudeMdExcludes?.length) warnings.push("Claude claudeMdExcludes filters are not evaluated; listed instruction files may be excluded in the session.");
+    if (mode === "unknown") warnings.push("Unknown Claude instructionFiles setting; direct AGENTS.md loading could not be established.");
+    if (mode !== "managed-only") {
+      await ingest(join(roots.claude, "CLAUDE.md"), "user", "claude-code", "claude-md");
+      for (const entry of claudeCandidates) await ingest(entry.path, "project", "claude-code", entry.kind);
+      const nativeAgents = mode === "claude-md-and-agents-md" || (mode === "claude-md-or-agents-md" && blockedBy.length === 0);
+      if (nativeAgents) {
+        for (const dir of ancestors) {
+          for (const path of [join(dir, "AGENTS.md"), join(dir, ".claude", "AGENTS.md")]) {
+            await ingest(path, "project", "claude-code", "agents-md");
+          }
+        }
+      }
+      for (const [dir, scope] of [[join(roots.claude, "rules"), "user"], ...ancestors.map(dir => [join(dir, ".claude", "rules"), "project"])] as Array<[string, InstructionScope]>) {
+        // Confined by the rules root: the walk follows linked subdirectories.
+        const confine = await confineFor(project, dir);
+        for (const path of await ruleFiles(dir, warnings)) await ingest(path, scope, "claude-code", "rule", 0, confine);
       }
     }
   }
 
+  if (targets.includes("codex")) {
+    // Top-level scalar/array settings only; no ad-hoc parsing of nested TOML.
+    let fallback: string[] = [];
+    let budget = 32 * 1024;
+    for (const path of [join(roots.codex, "config.toml"), ...repoDirs.map(dir => join(dir, ".codex", "config.toml"))]) {
+      const raw = await readBounded(project, path, unreadable);
+      if (raw === null) continue;
+      const top = raw.split(/^\s*\[/m)[0];
+      const bytes = /^project_doc_max_bytes\s*=\s*(\d+)/m.exec(top);
+      if (bytes) budget = Math.min(Number(bytes[1]), 1_000_000);
+      const names = /^project_doc_fallback_filenames\s*=\s*(\[[^\]]*\])/m.exec(top);
+      if (names) {
+        try {
+          const parsed: unknown = JSON.parse(names[1]);
+          if (!Array.isArray(parsed) || !parsed.every(n => typeof n === "string" && n.length < 256 && !n.includes("/") && !n.includes("\\"))) throw new Error("unsupported names");
+          fallback = parsed.slice(0, 32);
+        } catch { warnings.push(`Could not interpret project_doc_fallback_filenames in ${path}; fallback files were not inspected.`); }
+      }
+    }
+    let consumed = 0;
+    for (const [dir, scope] of [[roots.codex, "user"], ...repoDirs.map(dir => [dir, "project"])] as Array<[string, InstructionScope]>) {
+      for (const name of ["AGENTS.override.md", "AGENTS.md", ...(scope === "project" ? fallback : [])]) {
+        const path = join(dir, name);
+        const raw = await readBounded(project, path, unreadable);
+        if (raw === null || !raw.trim()) continue;
+        if (consumed + Buffer.byteLength(raw) > budget) {
+          warnings.push(`Codex instruction budget (${budget} bytes) reached at ${path}; this file and later guidance were not inspected as fully loaded.`);
+          consumed = budget;
+        } else if (consumed < budget) {
+          await ingest(path, scope, "codex", "agents-md");
+          consumed += Buffer.byteLength(raw);
+        }
+        break;
+      }
+    }
+    warnings.push("Codex managed/profile overrides and project trust are not resolved; instruction discovery uses local config files and the documented precedence.");
+  }
+
   const claudeMdPath = join(projectDir, "CLAUDE.md");
   const agentsMdPath = join(projectDir, "AGENTS.md");
-  const claudeMd = await readBounded(projectDir, claudeMdPath);
-  const agentsMd = await readBounded(projectDir, agentsMdPath);
+  const claudeMd = await readBounded(project, claudeMdPath, unreadable);
+  const agentsMd = await readBounded(project, agentsMdPath, unreadable);
   const bridge: BridgeState = {
-    claudeMdPath,
-    agentsMdPath,
+    claudeMdPath, agentsMdPath,
     claudeMdExists: claudeMd !== null,
     agentsMdExists: agentsMd !== null,
     importsAgentsMd: claudeMd !== null && importsAgentsMd(claudeMd),
     symlinked: await isSymlink(claudeMdPath),
+    claudeLoadsAgentsMd: sources.some(s => s.assistant === "claude-code" && s.path === agentsMdPath),
+    codexLoadsAgentsMd: sources.some(s => s.assistant === "codex" && s.path === agentsMdPath),
+    mode, blockedBy,
   };
 
-  return { sources, lines, bridge, unreadable };
+  return { sources, lines, bridge, unreadable: [...new Set(unreadable)], warnings: [...new Set(warnings)] };
 }
 
 /** Project-relative display path, falling back to the absolute path when the

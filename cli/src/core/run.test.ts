@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -160,6 +160,32 @@ describe("snapshot and undoRun", () => {
     expect(await readFile(file, "utf8")).toBe("by a human, afterwards\n");
   });
 
+  /** The run format before 0.10: `--auto` recorded a deleted skill as the hash
+   *  of empty content, and a no-op import as a hash with no snapshot. Those are
+   *  exactly the runs people will want to undo. */
+  it("undoes a pre-0.10 run that deleted a skill and recorded a no-op", async () => {
+    const h = await home();
+    const p = await project();
+    const skill = join(p, ".claude", "skills", "old", "SKILL.md");
+    const untouched = join(p, "CLAUDE.md");
+    await mkdir(join(p, ".claude", "skills", "old"), { recursive: true });
+    await writeFile(skill, "<!-- gradient:generated -->\nold skill\n");
+    await writeFile(untouched, "@AGENTS.md\n");
+
+    const run = await beginRun({ home: h });
+    await snapshot(run, skill, p);
+    await rm(skill);
+    await saveResult(run, {
+      runId: run.id, startedAt: run.startedAt, applied: [], skipped: [],
+      wrote: { [skill]: sha256(""), [untouched]: sha256("@AGENTS.md\n") },
+    });
+
+    const outcome = await undoRun(run.id, { home: h });
+    expect(outcome).toEqual({ restored: [skill], conflicted: [] });
+    expect(await readFile(skill, "utf8")).toBe("<!-- gradient:generated -->\nold skill\n");
+    expect(await readFile(untouched, "utf8")).toBe("@AGENTS.md\n");
+  });
+
   it("reports an unknown run rather than silently doing nothing", async () => {
     await expect(undoRun("20260101-000000-abcdef", { home: await home() })).rejects.toThrow(/no such run/);
   });
@@ -196,4 +222,26 @@ describe("saveResult and loadResult", () => {
     expect(loaded?.applied[0].title).toBe("did a thing");
     expect(loaded?.skipped[0].reason).toContain("prose");
   });
+});
+
+it("keeps mutation undo when many read-only checkups follow", async () => {
+  const h = await home();
+  const p = await project();
+  const file = join(p, "CLAUDE.md");
+  await writeFile(file, "before\n");
+  const changed = await beginRun({ home: h, now: new Date("2026-01-01T00:00:00Z") });
+  await snapshot(changed, file, p);
+  await writeFile(file, "after\n");
+  await saveResult(changed, { runId: changed.id, startedAt: changed.startedAt, applied: [], skipped: [], wrote: { [file]: sha256("after\n") } });
+  for (let i = 1; i <= 12; i++) await beginRun({ home: h, now: new Date(`2026-01-${String(i + 1).padStart(2, "0")}T00:00:00Z`) });
+  expect(await pruneRuns({ home: h })).toHaveLength(2);
+  expect((await undoRun(changed.id, { home: h })).restored).toContain(file);
+  expect(await readFile(file, "utf8")).toBe("before\n");
+  expect(await undoRun(changed.id, { home: h })).toEqual({ restored: [], conflicted: [] });
+});
+
+it("rejects path traversal instead of reading a repository-supplied undo journal", async () => {
+  const h = await home();
+  await expect(undoRun("../../../repo/forged-run", { home: h })).rejects.toThrow(/invalid run id/);
+  expect(await loadResult("../../../repo/forged-run", h)).toBeNull();
 });

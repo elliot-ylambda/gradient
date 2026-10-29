@@ -3,9 +3,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cp, mkdir, mkdtemp } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { SKILLS, codexName, forCodex } from "../scripts/skill-render.mjs";
+import { SKILLS, codexName, forCodex, CODEX_SKILL_DIR_PLACEHOLDER } from "../scripts/skill-render.mjs";
 import { VERSION } from "./version.js";
 import { parseFrontmatter, scalar } from "./core/frontmatter.js";
 import { DESCRIPTION_CAP, loadSurface } from "./core/surface.js";
@@ -47,12 +47,11 @@ describe("the copy-installed Codex skills", () => {
   it("invokes the runner in its own directory, and never a plugin variable Codex cannot expand", () => {
     for (const name of SKILLS) {
       const body = read(join(codexDir(name), "SKILL.md"));
-      // Asks where it is rather than assuming: `$skill-installer` writes to
-      // $CODEX_HOME/skills, a hand copy goes to ~/.agents/skills, and Codex
-      // reads both. Hardcoding either is broken for half its users.
-      expect(body).toContain(`~/.codex/skills/${codexName(name)}/bin/gradient.mjs`);
-      expect(body).toContain(`~/.agents/skills/${codexName(name)}/bin/gradient.mjs`);
-      expect(body).not.toContain("$HOME/.agents/skills");
+      expect(body).toContain(`node "${CODEX_SKILL_DIR_PLACEHOLDER}/bin/gradient.mjs"`);
+      expect(body).toContain("containing this activated `SKILL.md`");
+      expect(body).not.toContain("~/.codex/skills");
+      expect(body).not.toContain("~/.agents/skills");
+      expect(body).not.toContain("$(ls");
       expect(body).not.toContain("CLAUDE_PLUGIN_ROOT");
       // No PATH fallback: nothing installs a `gradient` command any more.
       expect(body).not.toMatch(/(^|[^/])\bgradient (optimize|remove|on|off)\b/);
@@ -96,4 +95,22 @@ describe("the copy-installed Codex skills", () => {
       expect(result.stdout.trim()).toBe(VERSION);
     }
   });
+  it("runs the activated skill copy from a custom directory with shell-sensitive characters", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grad-runner-"));
+    const skillDir = join(root, "custom skills $literal 'quote'", "gradient-report");
+    await mkdir(join(skillDir, "bin"), { recursive: true });
+    await cp(join(repoRoot, "plugin", "bin", "gradient.mjs"), join(skillDir, "bin", "gradient.mjs"));
+    const body = forCodex(read(join(repoRoot, "plugin", "skills", "report", "SKILL.md")), "report");
+    await writeFile(join(skillDir, "SKILL.md"), body);
+    const documented = /(node "[^"\n]*gradient\.mjs")/.exec(body)?.[1];
+    expect(documented).toBe(`node "${CODEX_SKILL_DIR_PLACEHOLDER}/bin/gradient.mjs"`);
+    // Exactly the documented substitution: the active SKILL.md supplies the
+    // directory; normal shell quoting preserves spaces, quotes, and dollars.
+    const quoted = "'" + join(skillDir, "bin", "gradient.mjs").replaceAll("'", "'\"'\"'") + "'";
+    const command = documented!.replace(`"${CODEX_SKILL_DIR_PLACEHOLDER}/bin/gradient.mjs"`, quoted);
+    const result = spawnSync("/bin/sh", ["-c", `${command} --version`], { encoding: "utf8", timeout: 15_000 });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(VERSION);
+  });
+
 });

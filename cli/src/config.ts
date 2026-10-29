@@ -103,6 +103,7 @@ function validateConfig(value: unknown): Config {
   validateAutopilotProjects(config.autopilotProjects);
   validateProjectList(config.continuityProjects, "continuityProjects");
   validateProjectList(config.boardProjects, "boardProjects");
+  validateProjectList(config.optimizeProjects, "optimizeProjects");
   if (config.ignorePatterns !== undefined && (
     !Array.isArray(config.ignorePatterns) || config.ignorePatterns.length > 20 ||
     config.ignorePatterns.some(pattern => typeof pattern !== "string" || pattern.length > 200 || /[\u0000-\u001f\u007f-\u009f]/.test(pattern))
@@ -161,6 +162,17 @@ export function resolveTargets(config: Config): Assistant[] {
   }
   if (targets.length > ASSISTANTS.size) throw new Error("config targets lists too many assistants");
   return targets;
+}
+
+/** Gradient's background callbacks currently integrate with Claude Code only. */
+export function supportsClaudeHooks(config: Config): boolean {
+  return resolveTargets(config).includes("claude-code");
+}
+
+export function assertClaudeHooks(config: Config): void {
+  if (!supportsClaudeHooks(config)) {
+    throw new Error("Gradient's background features currently use Claude Code hooks only. Codex users can run optimize and the report manually; no hooks were installed.");
+  }
 }
 
 export function resolveCheapModel(config: Config): string | undefined {

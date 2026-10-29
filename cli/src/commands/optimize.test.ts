@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyOrder, autoEligible, optimize, optimizeJson } from "./optimize.js";
+import { applyOrder, optimize, optimizeJson } from "./optimize.js";
 import { loadResult } from "../core/run.js";
 import type { Finding } from "../core/findings.js";
 import type { Suggestion } from "../core/types.js";
@@ -116,21 +116,6 @@ describe("optimize", () => {
     expect(await readFile(join(dir, "CLAUDE.md"), "utf8")).toBe("- something else entirely now\n");
   });
 
-  it("--auto takes the bridge and leaves prose edits alone", async () => {
-    const home = await tree({});
-    const dir = await tree({
-      "AGENTS.md": "- shared guidance for both assistants here\n",
-      "CLAUDE.md": "- Build it with `scripts/build.sh` before committing\n",
-    });
-    const result = await optimize(dir, { target: "both", home, auto: true }, { suggestions: [] });
-
-    const appliedFamilies = result.applied.map(entry =>
-      result.findings.find(f => f.id === entry.id)?.family);
-    expect(appliedFamilies).toEqual(["drift"]);
-    // The stale line is still there: --auto never edits hand-written prose.
-    expect(await readFile(join(dir, "CLAUDE.md"), "utf8")).toContain("scripts/build.sh");
-  });
-
   // Found by running the packed binary as a new user would: the bridge and a
   // stale line both live in CLAUDE.md, and adding the import moved the stale
   // line out from under its own line number. The apply the CLI prints for
@@ -185,27 +170,6 @@ describe("applyOrder", () => {
   });
 });
 
-describe("autoEligible", () => {
-  it("refuses anything needing judgment, carrying a command, or installing an artifact", () => {
-    expect(autoEligible(finding({ deterministic: false })).ok).toBe(false);
-    expect(autoEligible(finding({ commandBearing: true })).ok).toBe(false);
-    expect(autoEligible(finding({ suggestion: suggestion() })).ok).toBe(false);
-    expect(autoEligible(finding({ changes: [] })).ok).toBe(false);
-  });
-
-  it("accepts an additive change to a gradient-owned or import-only path", () => {
-    expect(autoEligible(finding({
-      changes: [{ op: "prepend-import", path: "/p/CLAUDE.md", assistant: "claude-code", after: "@AGENTS.md" }],
-    })).ok).toBe(true);
-  });
-
-  it("refuses a line edit even when every other signal is green", () => {
-    expect(autoEligible(finding({
-      changes: [{ op: "delete-line", path: "/p/CLAUDE.md", assistant: "claude-code", line: 1 }],
-    })).ok).toBe(false);
-  });
-});
-
 describe("optimizeJson", () => {
   it("carries findings and their eligibility, and no mined transcript text", () => {
     const parsed = JSON.parse(optimizeJson({
@@ -215,7 +179,7 @@ describe("optimizeJson", () => {
       })],
       applied: [], skipped: [], installedSkill: [],
     }));
-    expect(parsed.findings[0]).toMatchObject({ id: "f1", family: "stale", autoEligible: true });
+    expect(parsed.findings[0]).toMatchObject({ id: "f1", family: "stale", actionable: true });
     expect(parsed.findings[0].changes[0]).toMatchObject({ op: "prepend-import", after: "@AGENTS.md" });
     expect(JSON.stringify(parsed)).not.toContain("sourceSignatures");
   });

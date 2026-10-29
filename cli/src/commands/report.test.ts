@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildReport, featureStatus, REPORT_MAX_SUGGESTIONS } from "./report.js";
 import { renderReport } from "./report-render.js";
 import { displayCommand } from "../core/hookBinary.js";
 import { saveSuggestions } from "./apply.js";
-import { FEATURES } from "./features.js";
+import { FEATURES, setFeature } from "./features.js";
+import { loadConfig } from "../config.js";
+import { freshState, saveState } from "../core/state.js";
 import type { InsightsReport } from "./insights.js";
 import type { Suggestion } from "../core/types.js";
 
@@ -130,6 +134,20 @@ describe("renderReport", () => {
     expect(out).toContain("do the thing");
   });
 
+  it("labels the latest autopilot decisions as observations across projects", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grad-report-autopilot-"));
+    const home = await mkdtemp(join(tmpdir(), "grad-report-home-"));
+    await setFeature("autopilot", true, dir, { home });
+    await saveState("another-project-session", {
+      ...freshState(),
+      log: [{ ts: "2026-10-28T12:00:00Z", action: "stand_down", why: "work is complete", excerpt: "done" }],
+    }, home);
+    const report = await buildReport(dir, { ...deps(), home });
+    const out = renderReport(report).join("\n");
+    expect(out).toContain("recent decisions from the latest recorded session across projects:");
+    expect(out).toContain("work is complete");
+  });
+
   it("omits a board that contains only this session", () => {
     const out = renderReport({ ...base, board: "gradient board — 0 other sessions in this repo" }).join("\n");
     expect(out).not.toContain("other sessions\n");
@@ -166,6 +184,30 @@ describe("renderReport", () => {
 });
 
 describe("the feature rows", () => {
+  it("reports only the current repository's installed and consented features", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-feature-home-"));
+    const a = await mkdtemp(join(tmpdir(), "grad-feature-a-"));
+    const b = await mkdtemp(join(tmpdir(), "grad-feature-b-"));
+    const git = promisify(execFile);
+    await git("git", ["init", "-q", a]);
+    await git("git", ["init", "-q", b]);
+    for (const feature of FEATURES) await setFeature(feature, true, a, { home });
+    const config = await loadConfig(home);
+    expect((await featureStatus(a, config, home)).every(row => row.on)).toBe(true);
+    expect((await featureStatus(b, config, home)).every(row => !row.on)).toBe(true);
+    await rm(join(a, ".claude", "settings.local.json"));
+    expect((await featureStatus(a, config, home)).every(row => !row.on)).toBe(true);
+  });
+
+  it("labels unsupported Codex-only features instead of displaying false activation", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-feature-home-"));
+    const rows = await featureStatus("/repo", { targets: ["codex"] }, home);
+    expect(rows.every(row => !row.on && row.supported === false)).toBe(true);
+    const out = renderReport({ insights: emptyInsights(), adoption: [], pending: [], features: rows, board: null, autopilot: null }).join("\n");
+    expect(out).toContain("unavailable (Gradient uses Claude Code hooks)");
+    expect(out).not.toContain("optimize on");
+  });
+
   /**
    * The report is where people read which features are on, so every name it
    * prints has to be a name `gradient on|off` accepts. The fourth row said

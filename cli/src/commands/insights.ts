@@ -15,8 +15,11 @@ import {
   type Recommendation,
   type ToolActivityMetrics,
 } from "../core/insights.js";
-import { DEFAULT_USER_SCOPE_DAYS } from "../core/scope.js";
-import { loadConfig, projectKey, resolveTargets } from "../config.js";
+import { DEFAULT_USER_SCOPE_DAYS, type ResolvedScope } from "../core/scope.js";
+import { loadConfig, projectKey, resolveTargets, supportsClaudeHooks } from "../config.js";
+import { continuityStatus } from "./continuity.js";
+import { hookInstalled } from "../core/settings.js";
+import { isGradientHookFor } from "../core/hookBinary.js";
 import { adoptionFromEvents, type AdoptionRow } from "../core/adoption.js";
 import { gradientDir } from "../core/manifest.js";
 import { safeWriteFile } from "../core/safeFs.js";
@@ -62,7 +65,7 @@ export interface InsightsDeps {
 }
 
 export async function insights(
-  opts: { projectDir: string; user?: boolean; home?: string; now?: number },
+  opts: { projectDir: string; user?: boolean; home?: string; now?: number; scope?: ResolvedScope },
   deps: InsightsDeps = {},
 ): Promise<InsightsReport> {
   const config = deps.config ?? (await loadConfig(opts.home));
@@ -73,10 +76,12 @@ export async function insights(
   const parseToolEventsFn = deps.parseToolEventsFn ?? (deps.parseFn ? undefined : parseToolEventsFile);
   const parseCodexFn = deps.parseCodexFn ?? parseCodexFile;
   const days = config.userScopeDays ?? DEFAULT_USER_SCOPE_DAYS;
-  const scope: CollectOptions = opts.user
+  const scope: CollectOptions = opts.scope
+    ? { scope: opts.scope.scope, projectPath: opts.projectDir, sinceDays: opts.scope.sinceDays, home: opts.home }
+    : opts.user
     ? { scope: "all", sinceDays: days, home: opts.home }
     : { scope: "project", projectPath: opts.projectDir, home: opts.home };
-  const label = opts.user ? `user scope · last ${days}d` : "project scope · all history";
+  const label = opts.scope?.label ?? (opts.user ? `user scope · last ${days}d` : "project scope · all history");
   const claudeFiles = targets.includes("claude-code") ? await collectFn(scope) : [];
   const codexFiles = targets.includes("codex") ? await collectCodexFn(scope) : [];
   const files: Array<{ path: string; assistant: "claude-code" | "codex" }> = [];
@@ -105,7 +110,8 @@ export async function insights(
   let processedTurns = 0;
   let analysisComplete = true;
   let capped = claudeFiles.length + codexFiles.length > files.length;
-  const cutoff = opts.user ? (opts.now ?? Date.now()) - days * 86_400_000 : undefined;
+  const sinceDays = opts.scope ? opts.scope.sinceDays : opts.user ? days : undefined;
+  const cutoff = sinceDays === undefined ? undefined : (opts.now ?? Date.now()) - sinceDays * 86_400_000;
   const inCutoff = (ts: string): boolean => {
     if (cutoff === undefined) return true;
     const timestamp = Date.parse(ts);
@@ -176,7 +182,12 @@ export async function insights(
   // verbatim, so without this the report counts one prompt, compaction or
   // command failure once per session that replayed it — and then disagrees with
   // scan about the same corpus.
-  const costs = buildCostRows(analysisTurns, ignore);
+  const hooksSupported = supportsClaudeHooks(config);
+  const continuity = await continuityStatus(opts.projectDir, { home: opts.home }).catch(() => ({ checkpoint: false, recap: false }));
+  const continuityOn = hooksSupported && continuity.checkpoint && continuity.recap;
+  const autopilotMode = hooksSupported && await hookInstalled(opts.projectDir, "Stop", cmd => isGradientHookFor(cmd, "respond"))
+    ? config.autopilotProjects?.[projectKey(opts.projectDir)] : undefined;
+  const costs = buildCostRows(analysisTurns, ignore, { continuityOn, autopilotOn: autopilotMode === "nudge" });
   const toolActivity: ToolActivityMetrics = {
     failureLoops: mineFailureLoops(toolEvents).length,
     postEditRituals: mineRituals(toolEvents).length,
@@ -185,7 +196,7 @@ export async function insights(
   if (toolEventsDropped > 0) capped = true;
   const avoided = await sumAutopilotAvoided(opts.home);
   let adoption: AdoptionRow[] = [];
-  if (!opts.user && analysisComplete && !capped) {
+  if (scope.scope === "project" && cutoff === undefined && analysisComplete && !capped) {
     try {
       adoption = await adoptionFromEvents(opts.projectDir, events, { home: opts.home, now: opts.now });
     } catch {
@@ -195,7 +206,8 @@ export async function insights(
   const unusedArtifacts = adoption.filter(artifact => artifact.suggestRemoval).map(artifact => artifact.name);
 
   const recommendations = buildRecommendations(metrics, {
-    autopilotMode: config.autopilotProjects?.[projectKey(opts.projectDir)],
+    autopilotMode,
+    continuityOn,
     avoided,
     unusedArtifacts,
     permissionPrompts: toolActivity.permissionPrompts,

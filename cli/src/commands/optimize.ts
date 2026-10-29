@@ -1,35 +1,38 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Assistant, Config, Suggestion } from "../core/types.js";
-import type { InsightsMetrics } from "../core/insights.js";
 import { scan, type ScanDeps } from "./scan.js";
-import { loadSuggestions, saveSuggestions } from "./apply.js";
-import { applySuggestion } from "../core/apply.js";
+import { loadSuggestions } from "./apply.js";
+import { applySuggestionTransactional, reverseBookkeeping } from "../core/apply.js";
 import { loadInstructions } from "../core/instructions.js";
 import { loadSurface } from "../core/surface.js";
 import { findStaleRefs } from "../core/staleness.js";
-import { buildFindings, type Change, type Finding } from "../core/findings.js";
-import { applyChange, autoApplicable, baseFor } from "../core/apply-change.js";
+import { buildFindings, findingActionability, findingPreview, type Change, type Finding } from "../core/findings.js";
+import { applyChange, baseFor } from "../core/apply-change.js";
 import {
   beginRun,
   pruneRuns,
   saveResult,
   undoRun,
   withLock,
+  withFileTransaction,
+  type BookkeepingRecord,
   type Run,
   type RunResult,
 } from "../core/run.js";
-import { addDismissal, isDismissed, loadDismissed } from "../core/dismiss.js";
+import { addDismissal, dismissFinding, findingEvidenceHash, isDismissed, isFindingDismissed, loadDismissed, loadFindingDismissals } from "../core/dismiss.js";
 import { FEATURE_PURPOSE, type FeatureName } from "./features.js";
 import { featureStatus } from "./report.js";
-import { adoptionFromEvents } from "../core/adoption.js";
-import { loadConfig, resolveCheapModel, resolveTargets } from "../config.js";
+import { loadManifest } from "../core/manifest.js";
+import { hookInstalled } from "../core/settings.js";
+import { continuityStatus } from "./continuity.js";
+import { loadConfig, projectCacheDir, resolveCheapModel } from "../config.js";
 import { resolveScanScope } from "../core/scope.js";
-import { gradientCommand } from "../core/hookBinary.js";
+import { gradientCommand, isGradientHookFor } from "../core/hookBinary.js";
 import { ensureTargets, type TargetAsker } from "../core/targets.js";
 import { renderPage } from "../core/page.js";
 import { insights } from "./insights.js";
-import { safeWriteFile } from "../core/safeFs.js";
+import { safeReadFile, safeWriteFile } from "../core/safeFs.js";
 
 /**
  * The one verb.
@@ -50,8 +53,6 @@ export interface OptimizeOptions {
   maxPrompts?: number;
   /** Ids to apply. Empty means propose only. */
   apply?: string[];
-  /** Apply every deterministic, unattended-safe finding without asking. */
-  auto?: boolean;
   /** Ids to remember as denied, so they stop coming back. */
   deny?: string[];
   /** Accepted for compatibility and no longer needed: the page is written on
@@ -75,13 +76,16 @@ export interface OptimizeResult {
    *  do. Carried on the result so the terminal and `--json` agree: most people
    *  reach optimize through the skill, which reads JSON and never sees the
    *  terminal block. */
-  features?: { name: string; on: boolean; purpose: string }[];
+  features?: { name: string; on: boolean; purpose: string; supported?: boolean; detail?: string }[];
+  warnings?: string[];
+  coverage?: { label: string; prompts: number; limited: boolean };
 }
 
 export interface OptimizeDeps extends ScanDeps {
   ask?: TargetAsker;
   /** Skips mining; used by tests and by callers that already have suggestions. */
   suggestions?: Suggestion[];
+  insightsFn?: typeof insights;
 }
 
 /**
@@ -139,31 +143,22 @@ async function applyFinding(
   config: Config,
   targets: Assistant[],
   home: string,
-): Promise<{ paths: string[]; wrote: Record<string, string> }> {
-  const paths: string[] = [];
-  const wrote: Record<string, string> = {};
-
+): Promise<{ paths: string[]; wrote: RunResult["wrote"]; bookkeeping?: BookkeepingRecord[] }> {
+  const action = findingActionability(finding);
+  if (!action.actionable) throw new Error(action.reason);
   if (finding.suggestion) {
-    const result = await applySuggestion(finding.suggestion, projectDir, {
-      targets,
-      cheapModel: resolveCheapModel(config),
-      home,
-      hookBinary: gradientCommand(),
+    return applySuggestionTransactional(finding.suggestion, projectDir, run, {
+      targets, cheapModel: resolveCheapModel(config), home, hookBinary: gradientCommand(),
     });
-    for (const write of result.writes) paths.push(write.path);
-    if (result.failures.length > 0 && result.writes.length === 0) {
-      throw new Error(result.failures.map(failure => `${failure.target}: ${failure.error}`).join("; "));
-    }
-    return { paths, wrote };
   }
-
-  for (const change of finding.changes) {
-    const base = baseFor(change, projectDir, home);
-    const outcome = await applyChange({ run, projectDir, base }, change);
-    paths.push(outcome.path);
-    wrote[outcome.path] = outcome.sha256;
-  }
-  return { paths, wrote };
+  const transaction = await withFileTransaction(run,
+    finding.changes.map(change => ({ path: change.path, base: baseFor(change, projectDir, home) })),
+    async () => {
+      for (const change of finding.changes) {
+        await applyChange({ run, projectDir, base: baseFor(change, projectDir, home) }, change);
+      }
+    });
+  return { paths: Object.keys(transaction.wrote), wrote: transaction.wrote };
 }
 
 /**
@@ -200,21 +195,6 @@ export function applyOrder(findings: Finding[]): Finding[] {
     .map(entry => entry.finding);
 }
 
-/** Whether `--auto` may take this finding without a person seeing it. */
-export function autoEligible(finding: Finding): { ok: boolean; reason?: string } {
-  if (!finding.deterministic) return { ok: false, reason: "needs judgment" };
-  if (finding.commandBearing) return { ok: false, reason: "proposes text containing a command" };
-  // A mined workflow creates a gradient-owned artifact and is reversible, but
-  // it is also the family most likely to be wrong, so it stays opt-in.
-  if (finding.suggestion) return { ok: false, reason: "installs a new artifact" };
-  if (finding.changes.length === 0) return { ok: false, reason: "has nothing to apply on its own" };
-  for (const change of finding.changes) {
-    const verdict = autoApplicable(change);
-    if (!verdict.ok) return verdict;
-  }
-  return { ok: true };
-}
-
 export async function optimize(
   projectDir: string,
   opts: OptimizeOptions = {},
@@ -233,129 +213,158 @@ export async function optimize(
 
   const instructions = await loadInstructions(projectDir, targets, { home });
   const surface = await loadSurface(projectDir, targets, { home });
+  const warnings = [...(instructions.warnings ?? []), ...(surface.warnings ?? [])];
+  warnings.push(...instructions.unreadable.map(path => `Instruction file could not be inspected: ${path}`));
   const stale = await findStaleRefs(instructions.lines, projectDir);
-  const adoption = await adoptionFromEvents(projectDir, [], {
-    home,
-    ...(opts.now !== undefined ? { now: opts.now } : {}),
-    suggestions,
-  });
-
-  const all = buildFindings({
-    projectDir, targets, instructions, surface, stale, suggestions, adoption,
-  });
-
-  // A denial sticks: a finding the user has already said no to must not come
-  // back every run, or a scheduled optimizer becomes noise.
-  const dismissed = await loadDismissed(projectDir);
-  const findings = all.filter(finding =>
-    !(finding.suggestion && isDismissed(finding.suggestion, dismissed)));
-
-  for (const id of opts.deny ?? []) {
-    const finding = findings.find(candidate => candidate.id === id);
-    if (finding?.suggestion) await addDismissal(projectDir, finding.suggestion);
-  }
-
-  const requested = opts.apply ?? [];
-  // A finding id, or — for a mined workflow — the suggestion's own id or name.
-  // The report lists pending suggestions by name, so the name has to work.
-  const matches = (finding: Finding): boolean =>
-    requested.includes(finding.id) ||
-    (finding.suggestion !== undefined &&
-      (requested.includes(finding.suggestion.id) || requested.includes(finding.suggestion.name)));
-
-  const wanted = opts.auto
-    ? findings.filter(finding => autoEligible(finding).ok)
-    : findings.filter(matches);
-
-  // Findings are recomputed every run, so an id from an older run only matches
-  // while the thing it described is still true. Saying nothing here would look
-  // like a successful apply that changed nothing — the user has to be told the
-  // finding is gone, not left to guess.
-  const unmatched = requested
-    .filter(id => !findings.some(finding =>
-      finding.id === id ||
-      (finding.suggestion !== undefined && (finding.suggestion.id === id || finding.suggestion.name === id))))
-    .map(id => ({ id, reason: "no current finding has this id; it may have been fixed already — rerun to see the list" }));
-
-  // The page describes a run, so a read-only run gets a run directory too —
-  // its own id is what the user quotes back and what --undo would name.
-  //
-  // Written on every run, not only when asked. The findings are a ranked list
-  // with ids and evidence; the page is where that list is actually reviewable,
-  // and a flag you have to know about is a flag most people never pass. Runs
-  // are pruned to the newest ten, so this costs one bounded file per run.
-  // One run per invocation, shared by the page and by anything applied. Writing
-  // the page in its own run would give the reader a run id that `--undo` does
-  // not name, and would burn two of the ten retained runs per apply.
-  // Read once and shared by both return paths. Best-effort: a config that will
-  // not load must not stop the findings from being reported.
+  // Reuse this bounded read for usage evidence and the page. Unknown or capped
+  // history yields no retirement advice, never fabricated zero-use evidence.
+  const scope = resolveScanScope({ user: opts.user, all: opts.all, since: opts.since }, config);
+  const observed = await (deps.insightsFn ?? insights)({ projectDir, home, now: opts.now, scope }, { config })
+    .catch(() => { warnings.push("History metrics were unavailable; usage could not be assessed."); return undefined; });
+  if (observed?.capped) warnings.push("History inspection reached a safety limit; usage observations are incomplete.");
+  const coverage = observed ? { label: observed.label, prompts: observed.metrics.prompts, limited: observed.capped } : undefined;
   const features = await featureStatus(projectDir, config, home)
-    .then(rows => rows.map(row => ({
-      name: row.name,
-      on: row.on,
-      purpose: FEATURE_PURPOSE[row.name as FeatureName] ?? "",
-    })))
+    .then(rows => rows.map(row => ({ ...row, purpose: FEATURE_PURPOSE[row.name as FeatureName] ?? "" })))
     .catch(() => undefined);
+  const pendingSuggestions = await unsatisfiedSuggestions(suggestions, projectDir, home, features);
+  const all = buildFindings({
+    projectDir, targets, instructions, surface, stale, suggestions: pendingSuggestions,
+    adoption: observed && !observed.capped ? observed.adoption : [],
+  });
+  const dismissed = await loadDismissed(projectDir);
+  const findingDismissals = await loadFindingDismissals(projectDir, home);
+  const reviewed = await loadLastCheckup(projectDir, { home });
+  let findings = all.filter(finding =>
+    !isFindingDismissed(finding, findingDismissals) &&
+    !(finding.suggestion && isDismissed(finding.suggestion, dismissed)));
+  const requested = opts.apply ?? [];
+  const matches = (finding: Finding, id: string): boolean =>
+    finding.id === id || finding.suggestion?.id === id || finding.suggestion?.name === id;
+  const wanted = findings.filter(finding => requested.some(id => matches(finding, id)));
+  const skipped: RunResult["skipped"] = requested
+    .filter(id => !findings.some(finding => matches(finding, id)))
+    .map(id => ({ id, reason: "no current finding has this id; it may be resolved or dismissed — rerun to see the list" }));
 
-  const writePage = async (run: Run): Promise<string> => {
-    const path = join(run.dir, "report.html");
-    await safeWriteFile(home, path, renderPage({
-      runId: run.id,
-      projectDir,
-      targets,
-      findings,
-      ...(await pageMetrics(projectDir, home)),
-      contextCost: { skills: surface.skills.length, chars: surface.contextChars },
-    }), { mode: 0o600 });
-    return path;
-  };
-
-  if (wanted.length === 0) {
+  const execute = async (): Promise<OptimizeResult> => {
+    const denied = new Set<string>();
+    for (const id of opts.deny ?? []) {
+      const finding = all.find(candidate => matches(candidate, id));
+      if (!finding) { skipped.push({ id, reason: "no current finding has this id to dismiss" }); continue; }
+      if (finding.suggestion) await addDismissal(projectDir, finding.suggestion);
+      else await dismissFinding(projectDir, finding, home);
+      denied.add(finding.id);
+    }
+    findings = findings.filter(finding => !denied.has(finding.id));
     const run = await beginRun({ home, ...(opts.now !== undefined ? { now: new Date(opts.now) } : {}) });
-    const pagePath = await writePage(run);
-    await pruneRuns({ home });
-    return { targets, findings, applied: [], skipped: unmatched, pagePath, ...(features ? { features } : {}) };
-  }
-
-  return withLock(async () => {
-    const run = await beginRun({ home, ...(opts.now !== undefined ? { now: new Date(opts.now) } : {}) });
-    const pagePath = await writePage(run);
     const applied: RunResult["applied"] = [];
-    const skipped: RunResult["skipped"] = [...unmatched];
-    const wrote: Record<string, string> = {};
-
+    const wrote: RunResult["wrote"] = {};
+    const bookkeeping: BookkeepingRecord[] = [];
     for (const finding of applyOrder(wanted)) {
-      if (opts.auto) {
-        const verdict = autoEligible(finding);
-        if (!verdict.ok) {
-          skipped.push({ id: finding.id, reason: verdict.reason ?? "not eligible" });
-          continue;
-        }
+      if (denied.has(finding.id)) { skipped.push({ id: finding.id, reason: "dismissed in this request" }); continue; }
+      const prior = reviewed?.findings.find(entry => entry.id === finding.id);
+      if (prior?.evidenceHash && prior.evidenceHash !== findingEvidenceHash(finding)) {
+        skipped.push({ id: finding.id, reason: "the evidence or proposed change changed since the last checkup; review the new page before applying" });
+        continue;
       }
       try {
         const outcome = await applyFinding(finding, run, projectDir, config, targets, home);
+        if (outcome.paths.length === 0) {
+          skipped.push({ id: finding.id, reason: "no files changed; the proposed state is already present" });
+          continue;
+        }
         applied.push({ id: finding.id, title: finding.title, paths: outcome.paths });
         Object.assign(wrote, outcome.wrote);
+        bookkeeping.push(...(outcome.bookkeeping ?? []));
       } catch (error) {
         skipped.push({ id: finding.id, reason: (error as Error).message });
       }
+      // Retain a complete undo record as soon as each finding finishes.
+      await saveResult(run, {
+        runId: run.id, startedAt: run.startedAt, applied, skipped, wrote,
+        ...(bookkeeping.length ? { bookkeeping } : {}),
+      });
     }
-
-    // The suggestion cache has to agree with what was installed, or a later
-    // `gradient remove` looks for an artifact that is not in it.
-    if (applied.length > 0) await saveSuggestions(projectDir, await loadSuggestions(projectDir, { home }), home);
-
-    await saveResult(run, { runId: run.id, startedAt: run.startedAt, applied, skipped, wrote });
+    const appliedIds = new Set(applied.map(entry => entry.id));
+    findings = findings.filter(finding => !appliedIds.has(finding.id));
+    const pagePath = join(run.dir, "report.html");
+    await safeWriteFile(home, pagePath, renderPage({
+      runId: run.id, projectDir, targets, findings, warnings, coverage,
+      ...(observed ? { metrics: observed.metrics } : {}),
+      contextCost: { skills: surface.skills.length, chars: surface.contextChars },
+    }), { mode: 0o600 });
+    await saveLastCheckup(projectDir, home, {
+      checkedAt: run.startedAt, pagePath, targets,
+      findings: findings.map(finding => ({
+        id: finding.id, family: finding.family, title: finding.title, severity: finding.severity,
+        actionable: findingActionability(finding).actionable,
+        evidenceHash: findingEvidenceHash(finding),
+      })),
+    });
     await pruneRuns({ home });
-    return { targets, findings, runId: run.id, applied, skipped, pagePath, ...(features ? { features } : {}) };
-  }, { home, ...(opts.now !== undefined ? { now: opts.now } : {}) });
+    return { targets, findings, ...(applied.length ? { runId: run.id } : {}), applied, skipped, pagePath,
+      ...(features ? { features } : {}), warnings, ...(coverage ? { coverage } : {}) };
+  };
+  return wanted.length || opts.deny?.length
+    ? withLock(execute, { home, ...(opts.now !== undefined ? { now: opts.now } : {}) }) : execute();
+}
+
+async function unsatisfiedSuggestions(
+  suggestions: Suggestion[], projectDir: string, home: string, features: OptimizeResult["features"],
+): Promise<Suggestion[]> {
+  const installed = new Set((await loadManifest(projectDir).catch(() => [])).map(entry => entry.suggestionId));
+  const continuity = await continuityStatus(projectDir, { home }).catch(() => ({ checkpoint: false, recap: false }));
+  const pending: Suggestion[] = [];
+  for (const suggestion of suggestions) {
+    if (installed.has(suggestion.id)) continue;
+    const payload = suggestion.payload;
+    if (payload.type === "loop" && features?.some(feature => feature.name === "autopilot" && feature.on)) continue;
+    if (payload.type === "hook") {
+      if (payload.subcommand === "checkpoint" && continuity.checkpoint) continue;
+      if (payload.subcommand === "recap" && continuity.recap) continue;
+      if (!["checkpoint", "recap"].includes(payload.subcommand ?? "") && await hookInstalled(projectDir, payload.event,
+        command => payload.command !== undefined ? command === payload.command : isGradientHookFor(command, payload.subcommand ?? ""),
+        { matcher: payload.matcher })) continue;
+    }
+    pending.push(suggestion);
+  }
+  return pending;
+}
+
+export interface CheckupSummary {
+  checkedAt: string;
+  pagePath: string;
+  targets: Assistant[];
+  findings: Array<{ id: string; family: string; title: string; severity: "high" | "medium" | "low"; actionable: boolean; evidenceHash?: string }>;
+}
+const CHECKUP_MAX_BYTES = 1_000_000;
+async function saveLastCheckup(projectDir: string, home: string, summary: CheckupSummary): Promise<void> {
+  const data = JSON.stringify(summary);
+  if (Buffer.byteLength(data) > CHECKUP_MAX_BYTES) throw new Error("checkup summary exceeds safety limit");
+  await safeWriteFile(home, join(projectCacheDir(projectDir, home), "last-checkup.json"), data, { mode: 0o600 });
+}
+export async function loadLastCheckup(projectDir: string, opts: { home?: string } = {}): Promise<CheckupSummary | null> {
+  const home = opts.home ?? homedir();
+  try {
+    const value = JSON.parse(await safeReadFile(home, join(projectCacheDir(projectDir, home), "last-checkup.json"), { maxBytes: CHECKUP_MAX_BYTES }));
+    if (!value || typeof value.checkedAt !== "string" || !Number.isFinite(Date.parse(value.checkedAt)) ||
+      typeof value.pagePath !== "string" || !Array.isArray(value.targets) ||
+      !value.targets.every((target: unknown) => target === "claude-code" || target === "codex") ||
+      !Array.isArray(value.findings) || value.findings.length > 2_000 ||
+      !value.findings.every((finding: any) => finding && /^[a-f0-9]{12}$/.test(finding.id) &&
+        typeof finding.title === "string" && finding.title.length <= 2_000 && !/[\r\n\u001b]/.test(finding.title) &&
+        typeof finding.family === "string" && ["high", "medium", "low"].includes(finding.severity) && typeof finding.actionable === "boolean" &&
+        (finding.evidenceHash === undefined || /^[a-f0-9]{64}$/.test(finding.evidenceHash)))) return null;
+    return value as CheckupSummary;
+  } catch { return null; }
 }
 
 export async function undo(runId: string, opts: { home?: string } = {}): Promise<{
   restored: string[];
   conflicted: string[];
 }> {
-  return withLock(() => undoRun(runId, opts), opts);
+  return withLock(() => undoRun(runId, {
+    ...opts, reverseBookkeeping: records => reverseBookkeeping(records, opts.home),
+  }), opts);
 }
 
 /** The machine-readable form the skill reads. Findings only — never the raw
@@ -368,6 +377,8 @@ export function optimizeJson(result: OptimizeResult): string {
     // say where — an agent handed --json cannot otherwise point the user at it.
     ...(result.pagePath ? { pagePath: result.pagePath } : {}),
     ...(result.features ? { features: result.features } : {}),
+    warnings: result.warnings ?? [],
+    ...(result.coverage ? { coverage: result.coverage } : {}),
     findings: result.findings.map(finding => ({
       id: finding.id,
       family: finding.family,
@@ -378,7 +389,8 @@ export function optimizeJson(result: OptimizeResult): string {
       targets: finding.targets,
       deterministic: finding.deterministic,
       commandBearing: finding.commandBearing,
-      autoEligible: autoEligible(finding).ok,
+      ...findingActionability(finding),
+      ...(findingPreview(finding) ? { preview: findingPreview(finding) } : {}),
       changes: finding.changes.map((change: Change) => ({
         op: change.op,
         path: change.path,
@@ -390,16 +402,4 @@ export function optimizeJson(result: OptimizeResult): string {
     applied: result.applied,
     skipped: result.skipped,
   }, null, 2);
-}
-
-/** Behaviour metrics for the page header. Best-effort: the page is worth
- *  showing without them, and this is the one part of a run that reads the whole
- *  corpus a second time. */
-async function pageMetrics(projectDir: string, home: string): Promise<{ metrics?: InsightsMetrics }> {
-  try {
-    const report = await insights({ projectDir, home });
-    return { metrics: report.metrics };
-  } catch {
-    return {};
-  }
 }

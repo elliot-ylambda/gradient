@@ -22,6 +22,14 @@ async function rollout(
 }
 
 describe("collectCodex", () => {
+  it("reads a configured Codex home instead of another default installation", async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-home-")));
+    const custom = await realpath(await mkdtemp(join(tmpdir(), "gradient-custom-")));
+    const expected = await rollout(custom, "custom", "/repo/app");
+    const codexHome = join(custom, ".codex");
+    expect(await collectCodex({ scope: "project", projectPath: "/repo/app", home })).toEqual([]);
+    expect(await collectCodex({ scope: "project", projectPath: "/repo/app", home, codexHome })).toEqual([expected]);
+  });
   it("collects project rollouts and nested worktree sessions", async () => {
     // realpath: collected paths are canonical, and macOS tmpdirs live behind /var → /private/var
     const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-codex-")));

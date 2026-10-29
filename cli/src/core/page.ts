@@ -1,4 +1,4 @@
-import type { Finding, Severity } from "./findings.js";
+import { findingActionability, findingPreview, type Finding, type Severity } from "./findings.js";
 import type { InsightsMetrics } from "./insights.js";
 import { escapeHtml } from "./insights.js";
 import { displayCommand } from "./hookBinary.js";
@@ -26,10 +26,12 @@ export interface PageInput {
   targets: readonly string[];
   findings: readonly Finding[];
   metrics?: InsightsMetrics;
-  /** Skills installed for the assistants, and what they cost every session. */
+  /** Inspected skills and description characters, not measured context cost. */
   contextCost?: { skills: number; chars: number };
   /** How to invoke gradient on this machine; the page's output is a command. */
   invocation?: string;
+  warnings?: string[];
+  coverage?: { label: string; prompts: number; limited: boolean };
 }
 
 const SEVERITY_LABEL: Record<Severity, string> = { high: "high", medium: "medium", low: "low" };
@@ -117,7 +119,7 @@ const script = (invocation: string) => `
       if (d === "accept") accept.push(card.getAttribute("data-id"));
       if (d === "deny") deny.push(card.getAttribute("data-id"));
     });
-    var parts = [${JSON.stringify(`${invocation} optimize`)}];
+    var parts = [${JSON.stringify(`${invocation} optimize`).replace(/</g, "\\u003c")}];
     if (accept.length) parts.push("--apply " + accept.join(","));
     if (deny.length) parts.push("--deny " + deny.join(","));
     out.textContent = parts.length > 1 ? parts.join(" ") : "choose the changes you want, then copy the command";
@@ -163,9 +165,8 @@ function metricRow(label: string, value: number): string {
  *  files and from transcripts, and must never become markup. */
 function renderChanges(finding: Finding): string {
   if (finding.changes.length === 0) {
-    return finding.suggestion
-      ? `<div class="detail">Installs a new artifact for ${escapeHtml(finding.targets.join(" and "))}.</div>`
-      : "";
+    const preview = findingPreview(finding);
+    return preview ? `<details class="diff"><summary>Review proposed content</summary><pre>${escapeHtml(preview)}</pre></details>` : "";
   }
   const lines: string[] = [];
   for (const change of finding.changes) {
@@ -180,19 +181,22 @@ function renderChanges(finding: Finding): string {
 }
 
 function renderCard(finding: Finding): string {
+  const action = findingActionability(finding);
   return [
     `<article class="card" data-id="${escapeHtml(finding.id)}" data-severity="${finding.severity}" data-decision="">`,
     `<div class="head">`,
     `<span class="title">${escapeHtml(finding.title)}</span>`,
     `<span class="chip">${escapeHtml(SEVERITY_LABEL[finding.severity])}</span>`,
+    `<span class="chip">${escapeHtml(finding.targets.join(" + "))}</span>`,
     `<span class="chip mono">${escapeHtml(finding.id)}</span>`,
     `</div>`,
     `<p class="detail">${escapeHtml(finding.detail)}</p>`,
     `<div class="evidence">${escapeHtml(finding.evidence)}</div>`,
     renderChanges(finding),
+    ...(!action.actionable ? [`<p class="detail">${escapeHtml(action.reason ?? "Review this observation with your assistant.")}</p>`] : []),
     `<div class="actions">`,
-    `<button class="accept" type="button" data-act="accept" aria-pressed="false">accept</button>`,
-    `<button class="deny" type="button" data-act="deny" aria-pressed="false">deny</button>`,
+    ...(action.actionable ? [`<button class="accept" type="button" data-act="accept" aria-pressed="false">choose fix</button>`] : []),
+    `<button class="deny" type="button" data-act="deny" aria-pressed="false">dismiss</button>`,
     `</div>`,
     `</article>`,
   ].join("");
@@ -201,9 +205,10 @@ function renderCard(finding: Finding): string {
 export function renderPage(input: PageInput): string {
   const byFamily = new Map<string, Finding[]>();
   for (const finding of input.findings) {
-    const group = byFamily.get(finding.family) ?? [];
+    const category = findingActionability(finding).actionable ? "Choose a fix" : "Review observations";
+    const group = byFamily.get(category) ?? [];
     group.push(finding);
-    byFamily.set(finding.family, group);
+    byFamily.set(category, group);
   }
 
   const metrics = input.metrics;
@@ -211,22 +216,22 @@ export function renderPage(input: PageInput): string {
     metricRow("prompts", metrics.prompts),
     metricRow("nudges", metrics.nudges),
     metricRow("interrupts", metrics.interrupts),
-    metricRow("context deaths", metrics.continuations),
+    metricRow("continuations", metrics.continuations),
     metricRow("compacts", metrics.compacts),
     metricRow("error pastes", metrics.errorPastes),
   ].join("") : "";
   const cost = input.contextCost
-    ? metricRow(`skill description chars, every session`, input.contextCost.chars) +
-      metricRow("skills installed", input.contextCost.skills)
+    ? metricRow(`skill description chars inventoried`, input.contextCost.chars) +
+      metricRow("skills inspected", input.contextCost.skills)
     : "";
 
-  const groups = [...byFamily.entries()]
+  const groups = [...byFamily.entries()].sort(([a], [b]) => a.localeCompare(b))
     .map(([family, findings]) =>
       `<h2>${escapeHtml(family)}</h2>${findings.map(renderCard).join("")}`)
     .join("");
 
   const body = input.findings.length === 0
-    ? `<p class="empty">Nothing to change — your setup matches how you actually work.</p>`
+    ? `<p class="empty">No findings from the inspected files and history. This is a bounded check, not proof that every part of your setup is correct.</p>`
     : groups;
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -236,6 +241,8 @@ export function renderPage(input: PageInput): string {
 <style>${STYLE}</style></head><body><div class="wrap">
 <h1>gradient checkup</h1>
 <p class="sub mono">${escapeHtml(input.projectDir)} · ${escapeHtml(input.targets.join(" + "))} · run ${escapeHtml(input.runId)}</p>
+${input.coverage ? `<p class="sub">${escapeHtml(input.coverage.label)} · ${input.coverage.prompts} prompts inspected${input.coverage.limited ? " · incomplete coverage" : ""}. Skill descriptions are an inventory measure, not tokens saved.</p>` : ""}
+${input.warnings?.length ? `<details open><summary>Inspection limits</summary><ul>${input.warnings.map(warning => `<li>${escapeHtml(warning)}</li>`).join("")}</ul></details>` : ""}
 ${tiles || cost ? `<ul class="metrics">${tiles}${cost}</ul>` : ""}
 ${body}
 </div>

@@ -143,8 +143,10 @@ export interface Config {
   userScopeDays?: number;
   /** Max prompts fed into clustering before older ones are dropped. Defaults to 1500. */
   maxPrompts?: number;
-  /** When true, SessionStart surfaces one cached suggestion and starts a detached scan. */
+  /** Legacy global flag. Ignored; background optimize requires per-project consent. */
   scanOnSessionStart?: boolean;
+  /** Canonical project paths whose Claude hooks may run a daily read-only checkup. */
+  optimizeProjects?: string[];
   /** Legacy global mode. Ignored by 0.1.1+; users must re-consent per project. */
   autopilot?: AutopilotMode;
   /** Canonical project path -> locally consented mode. */

@@ -1,12 +1,13 @@
 import { isAbsolute, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import type { ArtifactType, Assistant, ManifestEntry, Suggestion } from "./types.js";
 import { emit } from "./emit/index.js";
 import { assertInside } from "./security.js";
-import { addEntry, artifactHasMarker, loadManifest, manifestTarget } from "./manifest.js";
+import { addEntry, artifactHasMarker, loadManifest, manifestTarget, replaceEntry } from "./manifest.js";
 import { safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
-import { installHook, removeHook } from "./settings.js";
+import { installHook, removeHook, settingsPath } from "./settings.js";
 import { gradientCommand } from "./hookBinary.js";
-import { loadConfig, projectKey, saveConfig } from "../config.js";
+import { configPath, loadConfig, projectKey, saveConfig } from "../config.js";
 
 /**
  * Hook subcommands that do nothing without a matching per-project consent.
@@ -33,9 +34,10 @@ async function grantContinuityConsent(projectDir: string, home?: string): Promis
   await saveConfig(config, home);
 }
 import { validateSuggestion } from "./validate.js";
-import { hookApprovalContent, recordArtifactApproval } from "./approvals.js";
+import { approvalLedgerPath, hookApprovalContent, recordArtifactApproval } from "./approvals.js";
 import { AGENTS_MD_TEMPLATE, SHARED_FILE_HEADING, spliceLine, spliceUnderHeading } from "./playbook-splice.js";
-import { parseProjectPlaybook, savePlaybookPin } from "./playbook.js";
+import { parseProjectPlaybook, playbookPinPath, savePlaybookPin } from "./playbook.js";
+import { withFileTransaction, type BookkeepingRecord, type Run, type RunResult } from "./run.js";
 
 export interface ApplyResult {
   suggestion: Suggestion;
@@ -70,6 +72,77 @@ function normalizeTargets(value: Assistant[] | undefined): Assistant[] {
   }
   if (out.length === 0 || out.length > 2) throw new Error("apply requires one or two assistant targets");
   return out;
+}
+
+/** The optimizer owns one transaction for all assistant targets. Derive every
+ * destination from the same emitter as the executor, never from cached paths. */
+export async function applySuggestionTransactional(
+  suggestion: Suggestion,
+  projectDir: string,
+  run: Run,
+  opts: NonNullable<Parameters<typeof applySuggestion>[2]> = {},
+): Promise<{ paths: string[]; wrote: RunResult["wrote"]; bookkeeping: BookkeepingRecord[] }> {
+  const home = opts.home ?? homedir();
+  const targets = normalizeTargets(opts.targets);
+  const files: Array<{ path: string; base: string; bookkeeping?: boolean }> = [
+    { path: join(projectDir, ".gradient", "manifest.json"), base: projectDir, bookkeeping: true },
+    { path: approvalLedgerPath(projectDir, home), base: home, bookkeeping: true },
+  ];
+  const priorEntries = await loadManifest(projectDir);
+  const hasConsent = async (): Promise<boolean> =>
+    (await loadConfig(home)).continuityProjects?.includes(projectKey(projectDir)) ?? false;
+  const hadConsent = await hasConsent();
+  for (const target of targets) {
+    if (target === "codex" && suggestion.payload.type !== "command" && suggestion.payload.type !== "rule") continue;
+    const output = emit(suggestion, { assistant: target, cheapModel: opts.cheapModel, hookBinary: opts.hookBinary });
+    if (output.kind === "loop") throw new Error("this observation needs a native workflow choice; no files to apply");
+    if (output.kind === "skill" || output.kind === "rule") {
+      files.push({ path: join(projectDir, output.path), base: projectDir });
+    } else if (output.kind === "block-line") {
+      files.push({ path: join(projectDir, "AGENTS.md"), base: projectDir });
+    } else if (output.kind === "playbook-line") {
+      files.push({ path: join(projectDir, "gradient.md"), base: projectDir });
+      files.push({ path: playbookPinPath(projectDir, home), base: home });
+    } else {
+      files.push({ path: settingsPath(projectDir), base: projectDir });
+      if (suggestion.payload.type === "hook" && hookNeedsConsent(suggestion.payload.subcommand)) {
+        files.push({ path: configPath(home), base: home, bookkeeping: true });
+      }
+    }
+  }
+  const transaction = await withFileTransaction(run, files, async () => {
+    const result = await applySuggestion(suggestion, projectDir, opts);
+    if (result.failures.length) throw new Error(result.failures.map(f => `${f.target}: ${f.error}`).join("; "));
+    if (!result.writes.length) throw new Error("no supported target has a change to apply");
+    return result;
+  });
+  const grantedConsent = !hadConsent && await hasConsent();
+  const bookkeeping = [...new Set(transaction.value.writes.map(write => write.target))].map((target, index) => ({
+    projectDir, name: suggestion.name, target, suggestionId: suggestion.id,
+    prior: priorEntries.find(entry => entry.name === suggestion.name && manifestTarget(entry) === target) ?? null,
+    consent: grantedConsent && index === 0,
+  }));
+  return { paths: Object.keys(transaction.wrote), wrote: transaction.wrote, bookkeeping };
+}
+
+/** Undo the manifest entries and consent a run added, leaving every later
+ * entry alone. An entry another run has since replaced is not this run's. */
+export async function reverseBookkeeping(records: BookkeepingRecord[], home?: string): Promise<void> {
+  for (const record of records) {
+    const current = (await loadManifest(record.projectDir))
+      .find(entry => entry.name === record.name && manifestTarget(entry) === record.target);
+    if (current?.suggestionId === record.suggestionId) {
+      await replaceEntry(record.projectDir, { name: record.name, target: record.target }, record.prior);
+    }
+    if (record.consent) {
+      const config = await loadConfig(home);
+      const key = projectKey(record.projectDir);
+      if (config.continuityProjects?.includes(key)) {
+        config.continuityProjects = config.continuityProjects.filter(project => project !== key);
+        await saveConfig(config, home);
+      }
+    }
+  }
 }
 
 export async function applySuggestion(

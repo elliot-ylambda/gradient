@@ -16,8 +16,6 @@ export const TOOL_EVENT_WINDOW = 20;
 export const DIGEST_LINE_CAP = 25;
 export const REFRESH_FLOOR_MS = 30_000;
 export const SEEN_TTL_MS = 604_800_000;
-export const PR_CACHE_FRESH_MS = 300_000;
-export const GH_TIMEOUT_MS = 2_000;
 const GIT_TIMEOUT_MS = 5_000;
 const DISCOVERY_FILE_CAP = 500;
 
@@ -316,106 +314,6 @@ export async function collectRepoState(
   return { defaultBranch, mainTip, landed, ahead, behind };
 }
 
-export type GhRunner = (args: string[], cwd: string) => Promise<string>;
-export type PrResult = { lines: string[]; staleMs?: number } | "unavailable";
-
-/** Bumped when the query changes, so caches written by an older gradient
- *  (which listed every author on the `origin` repo) are discarded instead of
- *  replayed for up to PR_CACHE_FRESH_MS. */
-const PR_QUERY_VERSION = 2;
-
-/** Fetch more than we show so truncation is detectable and can be announced
- *  rather than silently dropping rows off the end of the board. */
-const PR_FETCH_LIMIT = 20;
-const PR_DISPLAY_LIMIT = 10;
-
-interface PrCache { fetchedAt: number; lines: string[]; queryVersion?: number }
-
-/** Owner/repo for the remote this branch actually pushes to.
- *
- * `gh pr list` with no --repo resolves through `origin`, which on a fork points
- * at the upstream vendor — so a fork's board filled up with the upstream's PRs.
- * Prefer the push remote and fall back to origin only when nothing else is set. */
-export async function pushRepoSlug(
-  boardRoot: string,
-  gitRunner: typeof git = git,
-): Promise<string | null> {
-  const branch = await gitRunner(["rev-parse", "--abbrev-ref", "HEAD"], boardRoot);
-  const remote =
-    (branch && await gitRunner(["config", "--get", `branch.${branch}.pushRemote`], boardRoot)) ||
-    await gitRunner(["config", "--get", "remote.pushDefault"], boardRoot) ||
-    (branch && await gitRunner(["config", "--get", `branch.${branch}.remote`], boardRoot)) ||
-    "origin";
-  const url = await gitRunner(["remote", "get-url", "--push", remote], boardRoot);
-  if (!url) return null;
-  const match = /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/.exec(url.trim());
-  return match ? `${match[1]}/${match[2]}` : null;
-}
-
-const defaultGh: GhRunner = async (args, cwd) => {
-  const { stdout } = await execFileP("gh", args, {
-    cwd,
-    timeout: GH_TIMEOUT_MS,
-    maxBuffer: 1_000_000,
-  });
-  return stdout;
-};
-
-export async function openPrs(
-  boardRoot: string,
-  opts: { home?: string; now?: number; gh?: GhRunner; git?: typeof git } = {},
-): Promise<PrResult> {
-  const home = opts.home ?? homedir();
-  const now = opts.now ?? Date.now();
-  const stateDir = boardStateDir(boardRoot, home);
-  const cachePath = join(stateDir, "pr-cache.json");
-  let cache: PrCache | null = null;
-  try {
-    const parsed = JSON.parse(await safeReadFile(home, cachePath, { maxBytes: 100_000 })) as PrCache;
-    if (Number.isFinite(parsed.fetchedAt) && Array.isArray(parsed.lines) &&
-      parsed.lines.every(line => typeof line === "string") &&
-      parsed.queryVersion === PR_QUERY_VERSION) {
-      cache = parsed;
-    }
-  } catch {
-    // no usable cache
-  }
-  if (cache && now - cache.fetchedAt < PR_CACHE_FRESH_MS) return { lines: cache.lines };
-  try {
-    const gh = opts.gh ?? defaultGh;
-    const slug = await pushRepoSlug(boardRoot, opts.git ?? git);
-    const raw = JSON.parse(await gh(
-      [
-        "pr", "list",
-        "--json", "number,headRefName,baseRefName",
-        // The board reports what *you* have in flight; without this a busy
-        // upstream drowns it in other people's branches.
-        "--author", "@me",
-        ...(slug ? ["--repo", slug] : []),
-        "--limit", String(PR_FETCH_LIMIT),
-      ],
-      boardRoot,
-    )) as Array<{ number?: unknown; headRefName?: unknown; baseRefName?: unknown }>;
-    const kept = raw
-      .filter(pr => typeof pr.number === "number" && typeof pr.headRefName === "string");
-    const lines = kept
-      .slice(0, PR_DISPLAY_LIMIT)
-      .map(pr => `#${pr.number} ${redact(String(pr.headRefName)).slice(0, 80)} → ` +
-        `${redact(String(pr.baseRefName ?? "main")).slice(0, 80)}`);
-    if (kept.length > lines.length) lines.push(`…and ${kept.length - lines.length} more`);
-    await safeMkdir(home, stateDir);
-    await safeWriteFile(
-      home,
-      cachePath,
-      JSON.stringify({ fetchedAt: now, lines, queryVersion: PR_QUERY_VERSION } satisfies PrCache),
-    );
-    return { lines };
-  } catch {
-    if (cache) return { lines: cache.lines, staleMs: now - cache.fetchedAt };
-    return "unavailable";
-  }
-}
-
 export interface BoardState {
   root: string;
   defaultBranch: string;
@@ -425,12 +323,10 @@ export interface BoardState {
   landed: string[];
   ahead: number;
   behind: number;
-  prs: PrResult;
 }
 
 export interface AssembleOptions extends DiscoverOptions {
   selfSessionId?: string;
-  gh?: GhRunner;
 }
 
 export async function assembleBoard(
@@ -447,7 +343,6 @@ export async function assembleBoard(
   ].sort((a, b) => a.ageMs - b.ageMs);
   const self = discovered.find(session => session.sessionId === opts.selfSessionId);
   const sessions = discovered.filter(session => session.sessionId !== opts.selfSessionId);
-  const prs = await openPrs(root, opts);
   return {
     root,
     defaultBranch: repo.defaultBranch,
@@ -457,7 +352,6 @@ export async function assembleBoard(
     landed: repo.landed,
     ahead: repo.ahead,
     behind: repo.behind,
-    prs,
   };
 }
 
@@ -484,14 +378,6 @@ export function renderDigest(state: BoardState): string {
   if (state.landed.length > 0) {
     lines.push(`landed on ${state.defaultBranch} (24h): ${state.landed.join(", ")}`);
   }
-  if (state.prs === "unavailable") {
-    lines.push("open PRs: (PR info unavailable)");
-  } else if (state.prs.lines.length > 0) {
-    const label = state.prs.staleMs === undefined
-      ? "open PRs"
-      : `open PRs (${formatAge(state.prs.staleMs)} ago)`;
-    lines.push(`${label}: ${state.prs.lines.join(", ")}`);
-  }
   if (state.behind > 0) {
     lines.push(
       `heads-up: your branch is ${state.behind} commit${state.behind === 1 ? "" : "s"} ` +
@@ -505,7 +391,6 @@ export interface SeenState {
   checkedAt: number;
   sessions: string[];
   mainTip: string;
-  prs: string[];
   landed: string[];
 }
 
@@ -516,13 +401,14 @@ export function seenFromBoard(state: BoardState, now: number): SeenState {
       .map(session => `${session.agent}:${session.sessionId}:${session.branch ?? ""}`)
       .sort(),
     mainTip: state.mainTip,
-    prs: state.prs === "unavailable" ? [] : [...state.prs.lines].sort(),
     landed: [...state.landed],
   };
 }
 
 export function seenEqual(a: SeenState, b: SeenState): boolean {
-  return JSON.stringify({ ...a, checkedAt: 0 }) === JSON.stringify({ ...b, checkedAt: 0 });
+  // Ignore legacy cached PR fields; the board now observes only local state.
+  const comparable = (state: SeenState) => ({ sessions: state.sessions, mainTip: state.mainTip, landed: state.landed });
+  return JSON.stringify(comparable(a)) === JSON.stringify(comparable(b));
 }
 
 function describeSessionKey(key: string): string {
@@ -544,7 +430,6 @@ export function deltaLine(prev: SeenState, next: SeenState, defaultBranch: strin
   for (const key of prev.sessions) {
     if (!nextSessions.has(key)) parts.push(`${describeSessionKey(key)} ended`);
   }
-  if (JSON.stringify(prev.prs) !== JSON.stringify(next.prs)) parts.push("open PRs changed");
   if (parts.length === 0 && prev.mainTip !== next.mainTip) {
     parts.push(`new commits on ${defaultBranch}`);
   }
@@ -576,6 +461,8 @@ export async function digestForSession(
     } catch {
       // the digest is still useful without a refresh baseline
     }
+    // Before 0.10 the board cached GitHub pull request titles here.
+    await safeUnlink(home, join(boardStateDir(state.root, home), "pr-cache.json")).catch(() => undefined);
   }
   return renderDigest(state);
 }

@@ -264,11 +264,11 @@ describe("scan", () => {
 
   // A nudge never reaches the model at all: autopilot is the tool that answers
   // repeated nudging, and saying so costs nothing.
-  it("drops a 'continue'-style nudge before the model sees it and points at autopilot", async () => {
+  it("drops a repeated approval without promoting another automation", async () => {
     const { suggestions, log } = await runLoopScan("continue");
     expect(suggestions).toEqual([]);
     expect(log).toContain("nudge filter → 1 approval phrase(s) dropped");
-    expect(log).toContain("gradient on autopilot");
+    expect(log).toContain("repeated approvals are not workflow instructions");
     expect(log).not.toContain("restatement filter");
   });
 

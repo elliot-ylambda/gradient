@@ -176,6 +176,17 @@ export async function addEntry(projectDir: string, entry: ManifestEntry): Promis
   await save(projectDir, entries);
 }
 
+/** Replace, or with null drop, the entry for one name and assistant target. */
+export async function replaceEntry(
+  projectDir: string,
+  key: Pick<ManifestEntry, "name" | "target">,
+  entry: ManifestEntry | null,
+): Promise<void> {
+  const entries = (await loadManifest(projectDir)).filter(existing => keyOf(existing) !== keyOf(key));
+  if (entry) entries.push(entry);
+  await save(projectDir, entries);
+}
+
 /** Remove every assistant target for an artifact name. */
 export async function removeEntries(projectDir: string, name: string): Promise<ManifestEntry[]> {
   const entries = await loadManifest(projectDir);

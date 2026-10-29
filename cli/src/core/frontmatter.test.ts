@@ -57,4 +57,14 @@ describe("parseFrontmatter", () => {
     const parsed = parseFrontmatter(raw);
     expect(raw.slice(parsed.length)).toBe("Body line\n");
   });
+
+  it("reads folded and literal descriptions without consuming following metadata", () => {
+    for (const marker of [">-", "|"]) {
+      const parsed = parseFrontmatter(`---\nname: review\ndescription: ${marker}\n  Review changed code\n  when a pull request is ready.\nmetadata:\n  version: 2\n  owner: team\nallowed-tools: [Read, Grep]\n---\nBody\n`);
+      expect(scalar(parsed, "description")).toBe(marker === ">-" ? "Review changed code when a pull request is ready." : "Review changed code\nwhen a pull request is ready.");
+      expect(parsed.keys).toEqual(["name", "description", "metadata", "allowed-tools"]);
+      expect(list(parsed, "allowed-tools")).toEqual(["Read", "Grep"]);
+      expect(parsed.error).toBeUndefined();
+    }
+  });
 });

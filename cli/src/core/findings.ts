@@ -37,7 +37,6 @@ export type ChangeOp =
   | "splice-line"
   | "replace-line"
   | "delete-line"
-  | "delete-file"
   | "prepend-import";
 
 export interface Change {
@@ -68,6 +67,38 @@ export interface Finding {
   changes: Change[];
   /** Set for family "workflow": applied through applySuggestion. */
   suggestion?: Suggestion;
+}
+
+/** One decision shared by the CLI, JSON, page, and executor. Native-feature
+ * observations and unsupported assistant targets require a choice in context. */
+export function findingActionability(finding: Finding): { actionable: boolean; reason?: string } {
+  const proposal = finding.suggestion;
+  if (!proposal) return finding.changes.length > 0
+    ? { actionable: true }
+    : { actionable: false, reason: "This observation needs review; Gradient has no file change to apply." };
+  if (proposal.payload.type === "loop") {
+    return { actionable: false, reason: "Review the assistant's native continuation or task controls first; no automation is installed." };
+  }
+  if (proposal.payload.type === "hook" && ["checkpoint", "recap"].includes(proposal.payload.subcommand ?? "")) {
+    return { actionable: false, reason: "Review native compaction and memory first. Gradient continuity is an optional compatibility feature, enabled separately." };
+  }
+  if (!finding.targets.includes("claude-code") && proposal.payload.type !== "command" && proposal.payload.type !== "rule") {
+    return { actionable: false, reason: "Gradient does not install this artifact for the selected assistant." };
+  }
+  return { actionable: true };
+}
+
+/** The exact proposed content is reviewable before a workflow is approved. */
+export function findingPreview(finding: Finding): string | undefined {
+  const payload = finding.suggestion?.payload;
+  if (!payload) return undefined;
+  switch (payload.type) {
+    case "command": return payload.body;
+    case "rule": return payload.text;
+    case "project-playbook": return payload.text;
+    case "hook": return `${payload.event}${payload.matcher ? ` (${payload.matcher})` : ""}: ${payload.command ?? `gradient ${payload.subcommand}`}`;
+    case "loop": return payload.instruction;
+  }
 }
 
 /** Ranked so the cheapest structural wins come before the interpretive ones. */
@@ -116,29 +147,26 @@ export interface FindingsInput {
   adoption: AdoptionRow[];
 }
 
-/**
- * The bridge finding, and the reason it is ranked first.
- *
- * Claude Code reads CLAUDE.md and not AGENTS.md. Until a repository with both
- * has the documented `@AGENTS.md` import, every other cross-assistant proposal
- * has to be written twice; afterwards, one file serves both. Fixing it first
- * makes every later finding cheaper.
- */
+/** Offer an explicit bridge only when the inspected loading mode actually
+ * excludes the same AGENTS.md that Codex uses. Native fallback needs no fix. */
 function driftFindings(input: FindingsInput): Finding[] {
   const { bridge } = input.instructions;
   const out: Finding[] = [];
   const both = input.targets.includes("claude-code") && input.targets.includes("codex");
 
-  if (both && bridge.agentsMdExists && !bridge.importsAgentsMd && !bridge.symlinked) {
+  if (both && bridge.agentsMdExists && !bridge.importsAgentsMd && !bridge.symlinked &&
+      bridge.codexLoadsAgentsMd !== false &&
+      !bridge.claudeLoadsAgentsMd && bridge.mode !== "managed-only" && bridge.mode !== "unknown" &&
+      (bridge.claudeMdExists || bridge.mode === "claude-md" || (bridge.blockedBy?.length ?? 0) > 0)) {
     out.push({
       id: findingId("drift", "agents-md-bridge", [bridge.claudeMdPath]),
       family: "drift",
       severity: "high",
       title: "AGENTS.md is not reaching Claude Code",
       detail:
-        "Claude Code reads CLAUDE.md and never AGENTS.md. Importing it with a single " +
-        "`@AGENTS.md` line at the top of CLAUDE.md gives both assistants the same instructions " +
-        "from one file, and stops every future rule from having to be written twice.",
+        "The inspected instruction mode prefers CLAUDE.md here, so AGENTS.md is not included. " +
+        "An explicit `@AGENTS.md` import shares these repository instructions. " +
+        "Review the two files for conflicting rules before adding it.",
       evidence: `${displayPath(bridge.agentsMdPath, input.projectDir)} exists; ` +
         `${displayPath(bridge.claudeMdPath, input.projectDir)} ${bridge.claudeMdExists ? "does not import it" : "does not exist"}`,
       targets: ["claude-code", "codex"],
@@ -163,15 +191,16 @@ function staleFindings(input: FindingsInput): Finding[] {
     title: `${displayPath(ref.line.source.path, input.projectDir)}:${ref.line.line} refers to something that is gone`,
     detail:
       `The instruction names ${JSON.stringify(ref.ref)}, and ${ref.detail}. ` +
-      "An instruction the repository has outgrown costs context in every session and " +
-      "points the assistant at nothing.",
+      (ref.line.source.readOnly
+        ? "This is assistant-managed memory. Review it with the assistant that owns it; Gradient will not edit or delete it."
+        : "The reference may be outdated or intentionally describe a missing file. Review the full instruction before choosing to remove this line."),
     evidence: oneLine(ref.line.text),
     targets: [ref.line.source.assistant],
     deterministic: true,
     // Rewriting prose is a judgment call, so the change is proposed as an
     // outright deletion and anything better comes from the skill.
     commandBearing: COMMAND_BEARING.test(ref.line.text),
-    changes: [{
+    changes: ref.line.source.readOnly ? [] : [{
       op: "delete-line" as const,
       path: ref.line.source.path,
       assistant: ref.line.source.assistant,
@@ -186,6 +215,9 @@ function skillProblemFinding(
   input: FindingsInput,
 ): Finding | null {
   if (skill.problems.length === 0) return null;
+  // Ignored extension keys are not a setup problem. Keep them in inventory
+  // for a packaging audit, without filling a working checkup with lint noise.
+  if (skill.problems.every(problem => problem.kind === "non-standard-key" || problem.kind === "non-portable-key")) return null;
   // Only unreadable frontmatter actually stops a skill from loading. Claude
   // Code tolerates extra keys, so calling a non-standard key "broken" would be
   // a confident false alarm — the dogfood run flagged a working skill that way.
@@ -210,28 +242,28 @@ function skillProblemFinding(
   const sentences: string[] = [];
   if (nonStandard.length > 0) {
     sentences.push(
-      `${list(nonStandard)} ${nonStandard.length > 1 ? "are" : "is"} outside the Agent Skills spec's ` +
-      `six fields, so this skill cannot be uploaded to claude.ai, used through the Skills API, or ` +
-      `packaged. Claude Code itself ignores ${nonStandard.length > 1 ? "them" : "it"}.`);
+      `${list(nonStandard)} ${nonStandard.length > 1 ? "are" : "is"} outside Gradient's known frontmatter fields. ` +
+      `Claude Code ignores unknown keys; this does not establish a loading or selection failure. ` +
+      `Check the destination's current documentation before changing portable metadata.`);
   }
   if (nonPortable.length > 0) {
     sentences.push(
       `${list(nonPortable)} ${nonPortable.length > 1 ? "are" : "is"} a Claude Code extension, so this ` +
-      `skill does nothing under Codex.`);
+      `metadata may behave differently under Codex; the skill body may still load.`);
   }
   for (const problem of skill.problems) {
     switch (problem.kind) {
       case "unreadable-frontmatter":
-        sentences.push(`Its frontmatter cannot be read (${problem.detail}), so nothing loads it.`);
+        sentences.push(`Gradient could not parse its frontmatter (${problem.detail}). Claude Code can still load the body without those fields; review metadata rather than assuming the skill is broken.`);
         break;
       case "no-description":
         sentences.push("It has no description, so selection falls back to the first paragraph of the body.");
         break;
       case "description-over-cap":
-        sentences.push(`Its description is ${problem.chars} characters; everything past 1,536 is truncated out of the listing.`);
+        sentences.push(`Its description is ${problem.chars} characters. A shorter, specific trigger may be easier to select; listing limits depend on the assistant and version.`);
         break;
       case "duplicate-description":
-        sentences.push(`Its description is barely distinguishable from \`${problem.other}\`, so the model picks between them arbitrarily.`);
+        sentences.push(`Its description overlaps with \`${problem.other}\`. Review whether their triggers are distinct; overlap alone does not prove incorrect selection.`);
         break;
     }
   }
@@ -240,11 +272,11 @@ function skillProblemFinding(
   return {
     id: findingId("skill-health", skill.name, [skill.path]),
     family: "skill-health",
-    severity: blocking ? "high" : "medium",
+    severity: "low",
     title: blocking
-      ? `The ${skill.name} skill will not load (${skill.assistant})`
+      ? `Review the ${skill.name} skill's frontmatter (${skill.assistant})`
       : affectsSelection
-        ? `The ${skill.name} skill is unlikely to be selected (${skill.assistant})`
+        ? `Review the ${skill.name} skill's description (${skill.assistant})`
         : `The ${skill.name} skill carries frontmatter outside the spec (${skill.assistant})`,
     detail,
     // Cite the number the finding is actually about. A portability problem
@@ -256,7 +288,7 @@ function skillProblemFinding(
         : `${[...nonStandard, ...nonPortable].join(", ")}`
     }`,
     targets: [skill.assistant],
-    deterministic: true,
+    deterministic: false,
     commandBearing: false,
     // Repairing frontmatter is authoring; the finding reports and the skill fixes.
     changes: [],
@@ -264,39 +296,27 @@ function skillProblemFinding(
 }
 
 function unusedFindings(input: FindingsInput): Finding[] {
-  const byName = new Map(input.surface.skills.map(skill => [skill.name, skill]));
+  // Only explicit Claude command/skill invocations are currently observable.
+  // A missing event never proves a skill was not automatically selected.
   return input.adoption
-    .filter(row => row.suggestRemoval)
-    .map(row => {
-      const skill = byName.get(row.name);
-      return {
-        id: findingId("skill-health", `unused:${row.name}`, [skill?.path ?? row.name]),
+    .filter(row => row.suggestRemoval && (row.type === "skill" || row.type === "command"))
+    .flatMap(row => {
+      const skill = input.surface.skills.find(item => item.name === row.name && item.assistant === "claude-code");
+      if (!skill) return [];
+      return [{
+        id: findingId("skill-health", `unused:${row.name}`, [skill.path]),
         family: "skill-health" as const,
-        severity: "medium" as const,
-        title: `${row.name} has never been invoked`,
-        detail: skill?.gradientOwned
-          ? "Its description is loaded into every session whether or not it is used. " +
-            "Removing it is reversible; gradient generated it and can generate it again."
-          : "Its description is loaded into every session whether or not it is used. " +
-            "It carries no gradient marker, so gradient will not delete it for you — " +
-            `remove it yourself with \`rm ${skill?.path ?? row.name}\`.`,
-        evidence: `installed ${row.createdAt} · 0 uses`,
-        targets: [skill?.assistant ?? "claude-code"],
-        deterministic: true,
+        severity: "low" as const,
+        title: `No explicit invocation of ${row.name} was found`,
+        detail: "No explicit invocation was recorded in the inspected history since installation. " +
+          "Automatic selection and unavailable history may not be represented. Review whether this skill " +
+          "still helps before choosing to remove it; Gradient never removes it automatically.",
+        evidence: `installed ${row.createdAt} · ${row.uses} recorded explicit invocations`,
+        targets: [skill.assistant],
+        deterministic: false,
         commandBearing: false,
-        // Offer the deletion only when apply-change will actually perform it.
-        // `gradientOwned` is the same marker test the delete guard uses, so
-        // consulting it here is what keeps the two from disagreeing. The
-        // manifest alone is not enough: it recorded these artifacts before the
-        // marker existed, so gradient listed a file as its own, told the user
-        // "gradient generated it and can generate it again", printed the id in
-        // its own apply line — and then refused the command it had just
-        // written. The observation is still true and worth reporting; only the
-        // automatic change is impossible.
-        changes: skill?.gradientOwned
-          ? [{ op: "delete-file" as const, path: skill.path, assistant: skill.assistant }]
-          : [],
-      };
+        changes: [],
+      }];
     });
 }
 
@@ -340,15 +360,15 @@ function deadLetterFindings(input: FindingsInput): { findings: Finding[]; restat
       id: findingId("dead-letter", key, [best.line.source.path]),
       family: "dead-letter",
       severity: "medium",
-      title: `An instruction in ${displayPath(best.line.source.path, input.projectDir)} is not holding`,
+      title: `A written instruction in ${displayPath(best.line.source.path, input.projectDir)} is also repeated in prompts`,
       detail:
         `Line ${best.line.line} already says this, and it was still typed ` +
         `${suggestion.evidence.count} times across ${suggestion.evidence.sessions} sessions. ` +
-        "An instruction is a request; a hook or a skill is a guarantee. Promote it, or drop the line " +
-        "and stop paying for it in every session.",
+        "This may be a reminder or a repeated task, not evidence that the assistant ignored the rule. " +
+        "Review whether the instruction is clear and whether the assistant already has a native control for it.",
       evidence: oneLine(best.line.text),
       targets: [best.line.source.assistant],
-      deterministic: true,
+      deterministic: false,
       commandBearing: COMMAND_BEARING.test(best.line.text),
       changes: [],
     });
@@ -371,7 +391,7 @@ function workflowFindings(input: FindingsInput, restated: Set<string>): Finding[
       evidence: `seen ${suggestion.evidence.count}× across ${suggestion.evidence.sessions} session(s)` +
         (isMeasured(suggestion) ? " · counted from tool events" : " · inferred from repeated prompts"),
       targets: input.targets,
-      deterministic: true,
+      deterministic: false,
       commandBearing: false,
       changes: [],
       suggestion,
@@ -389,9 +409,9 @@ function practiceFindings(input: FindingsInput): Finding[] {
       severity: "low",
       title: `${displayPath(source.path, input.projectDir)} is ${source.lineCount} lines`,
       detail:
-        `The documented target is under ${CLAUDE_MD_MAX_LINES} lines: longer files consume more context ` +
-        "and measurably reduce adherence. Path-scoped rules under `.claude/rules/` load only when Claude " +
-        "touches matching files, which is the documented way to shorten this without losing anything.",
+        source.assistant === "claude-code"
+        ? "Claude recommends concise instruction files. Review repeated or outdated guidance; path-scoped rules can move specialized instructions closer to their use."
+        : "Review whether these instructions are concise and still relevant. Codex instruction loading is subject to its configured byte budget; line count alone does not prove truncation.",
       evidence: `${source.lineCount} lines · ${source.bytes} bytes, loaded every session`,
       targets: [source.assistant],
       deterministic: true,
@@ -404,9 +424,10 @@ function practiceFindings(input: FindingsInput): Finding[] {
   // inconsistently, and the docs call out contradiction as a real failure mode.
   const byNormalized = new Map<string, InstructionLine[]>();
   for (const line of input.instructions.lines) {
-    const group = byNormalized.get(line.normalized) ?? [];
+    const key = `${line.source.assistant}\0${line.normalized}`;
+    const group = byNormalized.get(key) ?? [];
     group.push(line);
-    byNormalized.set(line.normalized, group);
+    byNormalized.set(key, group);
   }
   for (const [, group] of byNormalized) {
     const distinct = group.filter((line, index) =>
@@ -416,10 +437,10 @@ function practiceFindings(input: FindingsInput): Finding[] {
       id: findingId("practice", "duplicate", distinct.map(line => `${line.source.path}:${line.line}`)),
       family: "practice",
       severity: "low",
-      title: "The same instruction is written in more than one loaded file",
+      title: "The same instruction is written in multiple inspected files",
       detail:
-        "Both files load every session, so the instruction is paid for twice and can drift into " +
-        "two versions that disagree. Keep the one closest to where it applies.",
+        "This instruction appears in multiple inspected files for the same assistant. " +
+        "Check their loading scope before consolidating them; path-scoped rules may not load together.",
       evidence: distinct
         .map(line => `${displayPath(line.source.path, input.projectDir)}:${line.line}`)
         .join(" · "),

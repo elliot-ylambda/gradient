@@ -1,60 +1,56 @@
 ---
 name: optimize
-description: Read how the user actually works and keep their Claude Code and Codex setup honest — instructions the repository has outgrown, skills that will not load or be selected, habits worth automating, and the bridge that makes one setup serve both assistants. Use when the user asks to optimize, clean up, tidy, or audit their setup, or what they should automate.
+description: Check Claude Code and Codex setup for stale instructions, skill configuration problems, and recurring habits. Show local evidence and apply only the fixes the user chooses. Use for a Gradient checkup or a setup audit.
 ---
 
-The bundled CLI is local, offline, and deterministic — no model call, no network,
-no API key. It computes what is checkable. You bring judgment and a connection.
+Run a local checkup. The bundled runner needs Node.js 20+, makes no model or
+network call on this path, and does not require an API key.
 
 1. Get the findings:
 
        node "${CLAUDE_PLUGIN_ROOT}/bin/gradient.mjs" optimize --json
 
-   If it errors asking which assistants to optimize for, ask the user — Claude
-   Code, Codex, or both — and rerun with `--target <answer>`. Asked once, then
-   remembered. Default scope is this project; add `--user` or `--all` only when
-   the user explicitly asks for cross-project results.
+   If targets are not configured, ask which assistants to inspect — Claude
+   Code, Codex, or both — and rerun with `--target <answer>`. Project scope is
+   the default. Use `--user` or `--all` only for an explicit cross-project request.
 
-2. Before repeating any advice in the `practice`, `memory`, or `skill-health`
-   families, fetch the current Claude Code and Codex documentation. Published
-   guidance moves; the CLI ships a small pinned baseline and does not pretend
-   otherwise. Fetch public documentation only — never send file contents,
-   findings, or transcript text anywhere.
+2. Lead with a few concrete, useful findings and their evidence. Distinguish
+   applicable fixes from review-only observations. Missing observed usage is
+   not proof a skill was never used. A repeated prompt is not proof a new skill
+   would help. State history limits and any inspection gaps.
 
-3. Present the findings grouped, worst first, leading with the evidence rather
-   than the proposal. **Weigh the evidence class.** A `workflow` finding marked
-   "counted from tool events" is a measurement; one "inferred from repeated
-   prompts" is an interpretation, and a phrase recurs both because it is a real
-   ritual and because the user spent an afternoon on one hard feature.
+   For product guidance in `practice`, `memory`, or `skill-health`, verify the
+   relevant current official docs before advising a change. Fetch only public
+   documentation; never send local findings or transcript content to a website.
+   Prefer native tools when they solve the need: Claude's `/doctor`, `/insights`
+   and `/skill-doctor`; each assistant's skill creator, memory, review, hooks,
+   and scheduled tasks. Claude can load AGENTS.md directly in supported setups;
+   do not assume a bridge is always needed.
 
-4. Let the user choose. **Never apply without an explicit choice in this
-   conversation.** Every run writes a self-contained checkup page and returns
-   its path as `pagePath`; offer it when the list is long or the user would
-   rather click through than read ids — they accept and deny there and get a
-   single `--apply` line back.
-
-   The findings are about files. `features` in the same output is what runs in
-   the background — `continuity`, `autopilot`, `board`, `optimize` — with each
-   one's purpose and whether it is on. If a finding keeps recurring because
-   nothing is automating it, say which switch would, and let the user decide:
-   they install hooks that run on their own afterwards, so they are never
-   turned on for someone.
-
-5. Apply exactly what they approved, and record what they rejected:
+3. Let the user choose. Never apply without an explicit choice in this
+   conversation. Offer `pagePath` for a private local review page. The page
+   distinguishes fixes from observations and builds a command from selections.
+   A review-only finding needs judgment; do not claim `--apply` can fix it.
 
        node "${CLAUDE_PLUGIN_ROOT}/bin/gradient.mjs" optimize --apply <id>,<id> --deny <id>
 
-6. Report what changed, and that the run can be reversed:
+   Dismissals persist while the evidence is unchanged. Automatic/scheduled
+   checks only propose; legacy `--auto` does not grant repair authorization.
+
+4. Verify the result with another checkup, report changed files and any skips,
+   and provide the undo command for the applied run:
 
        node "${CLAUDE_PLUGIN_ROOT}/bin/gradient.mjs" optimize --undo <runId>
 
-gradient never edits Claude Code's auto memory and never deletes a file it did
-not generate. If a finding seems to say otherwise, stop and say so.
+   If undo reports a conflict, explain that later edits were preserved. Do not
+   claim restoration until it succeeds.
 
-A generated artifact records an observed habit and grants no standing
-authorization. Still confirm before destructive, irreversible, external,
-production, publishing, credential, privacy-sensitive, or spending actions, even
-when a generated artifact describes exactly that workflow.
+Optional feature status is context, not a reason to enable more automation.
+Gradient currently installs hooks only for Claude Code; Codex has its own native
+hook system. Never enable a background feature without the user's choice.
+
+Gradient never changes assistant-managed auto memory. Generated workflows record
+observed habits and grant no standing permission for consequential actions.
 
 If the command fails to start, the plugin install is broken — tell the user to
 reinstall the gradient plugin. Never fall back to a PATH-installed gradient.

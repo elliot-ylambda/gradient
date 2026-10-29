@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { installHook, removeHook } from "../core/settings.js";
-import { loadConfig, saveConfig } from "../config.js";
+import { assertClaudeHooks, loadConfig, saveConfig, supportsClaudeHooks } from "../config.js";
 import {
   assembleBoard,
   boardStateDir,
@@ -37,7 +37,7 @@ async function consentedRoot(projectDir: string, home?: string): Promise<string 
   const root = await resolveBoardRoot(projectDir);
   if (!root) return null;
   const config = await loadConfig(home);
-  return config.boardProjects?.includes(root) ? root : null;
+  return supportsClaudeHooks(config) && config.boardProjects?.includes(root) ? root : null;
 }
 
 export async function setBoard(
@@ -50,6 +50,7 @@ export async function setBoard(
   const config = await loadConfig(opts.home);
   const projects = new Set(config.boardProjects ?? []);
   if (on) {
+    assertClaudeHooks(config);
     try {
       await installHook(projectDir, "SessionStart", gradientHookCommand(DIGEST_SUB),
         { replacing: [isDigestHook] });

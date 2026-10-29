@@ -1,14 +1,18 @@
 import type { AdoptionRow } from "../core/adoption.js";
-import type { Suggestion } from "../core/types.js";
+import type { Config, Suggestion } from "../core/types.js";
 import { isDismissed, loadDismissed } from "../core/dismiss.js";
 import { loadManifest } from "../core/manifest.js";
-import { loadConfig, projectKey } from "../config.js";
+import { loadConfig, projectKey, supportsClaudeHooks } from "../config.js";
 import { insights, type InsightsReport } from "./insights.js";
 import { loadSuggestions } from "./apply.js";
-import { boardShow } from "./board.js";
+import { boardShow, DIGEST_SUB, REFRESH_SUB } from "./board.js";
 import { continuityStatus } from "./continuity.js";
 import { autopilotStatus, type AutopilotStatus } from "./autopilot.js";
 import { isMeasured } from "../core/classify.js";
+import { resolveBoardRoot } from "../core/board.js";
+import { hookInstalled } from "../core/settings.js";
+import { isGradientHookFor } from "../core/hookBinary.js";
+import { FEATURES, SESSION_END_SUB, SESSION_START_SUB } from "./features.js";
 
 /** How many pending suggestions the bare report shows before deferring to scan. */
 export const REPORT_MAX_SUGGESTIONS = 3;
@@ -17,6 +21,7 @@ export interface FeatureStatus {
   name: string;
   on: boolean;
   detail?: string;
+  supported?: boolean;
 }
 
 export interface Report {
@@ -100,30 +105,43 @@ async function autopilotDetail(projectDir: string, home?: string): Promise<Autop
 
 export async function featureStatus(
   projectDir: string,
-  config: { autopilotProjects?: Record<string, string>; boardProjects?: string[]; scanOnSessionStart?: boolean },
+  config: Config,
   home?: string,
 ): Promise<FeatureStatus[]> {
+  if (!supportsClaudeHooks(config)) {
+    return FEATURES.map(name => ({ name, on: false, supported: false, detail: "Gradient currently uses Claude Code hooks only" }));
+  }
   const continuity = await continuityStatus(projectDir, { home }).catch(() => ({ checkpoint: false, recap: false }));
   const mode = config.autopilotProjects?.[projectKey(projectDir)];
+  const root = await resolveBoardRoot(projectDir).catch(() => null);
+  const hasHook = (event: string, sub: string): Promise<boolean> =>
+    hookInstalled(projectDir, event, cmd => isGradientHookFor(cmd, sub));
+  const [respond, digest, refresh, start, end] = await Promise.all([
+    hasHook("Stop", "respond"), hasHook("SessionStart", DIGEST_SUB),
+    hasHook("UserPromptSubmit", REFRESH_SUB), hasHook("SessionStart", SESSION_START_SUB),
+    hasHook("SessionEnd", SESSION_END_SUB),
+  ]);
   return [
     {
       name: "continuity",
-      on: continuity.checkpoint || continuity.recap,
+      on: continuity.checkpoint && continuity.recap,
       ...(continuity.checkpoint !== continuity.recap
         ? { detail: `${continuity.checkpoint ? "checkpoint" : "recap"} only` }
         : {}),
     },
     {
       name: "autopilot",
-      on: mode === "nudge" || mode === "full",
-      ...(mode && mode !== "off" ? { detail: mode } : {}),
+      on: mode === "nudge" && respond,
+      ...(mode === "nudge" ? { detail: respond ? mode : "hook missing; enable again to repair" } : {}),
     },
-    { name: "board", on: (config.boardProjects ?? []).length > 0 },
+    { name: "board", on: !!root && (config.boardProjects ?? []).includes(root) && digest && refresh },
     // Named for the verb that toggles it. This row said "session-scan", which
     // is the config's name for the behaviour and not a feature any command
     // accepts: `gradient on session-scan` answers "unknown feature". The
     // report is where people read the state, so it has to print the word they
     // can act on.
-    { name: "optimize", on: config.scanOnSessionStart === true },
+    { name: "optimize", on: (config.optimizeProjects ?? []).includes(projectKey(projectDir)) && start && end,
+      ...(config.scanOnSessionStart === true && !config.optimizeProjects?.includes(projectKey(projectDir))
+        ? { detail: "enable again for this project; legacy global consent is inactive" } : {}) },
   ];
 }

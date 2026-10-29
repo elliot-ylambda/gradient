@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -106,35 +106,54 @@ describe("hook entry points", () => {
     const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
     const repo = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-repo-")));
     await initRepo(repo);
-    const gh = async () => "[]";
 
-    expect(await boardDigest({ session_id: "me" }, repo, { home, gh })).toBeNull();
+    expect(await boardDigest({ session_id: "me" }, repo, { home })).toBeNull();
 
     await setBoard(true, repo, { home });
-    const digest = await boardDigest({ session_id: "me" }, repo, { home, gh });
+    const digest = await boardDigest({ session_id: "me" }, repo, { home });
     expect(digest).toContain("<gradient-board>");
     expect(digest).toContain("untrusted data");
     expect(digest).toContain("gradient board — 0 other sessions in this repo");
-    expect(await boardRefresh({ session_id: "me" }, repo, { home, gh })).toBeNull();
+    expect(await boardRefresh({ session_id: "me" }, repo, { home })).toBeNull();
 
     // Consent revoked → both entry points go inert (stale-hook safety).
     await setBoard(false, repo, { home });
-    expect(await boardDigest({ session_id: "me" }, repo, { home, gh })).toBeNull();
-    expect(await boardRefresh({ session_id: "me" }, repo, { home, gh })).toBeNull();
+    expect(await boardDigest({ session_id: "me" }, repo, { home })).toBeNull();
+    expect(await boardRefresh({ session_id: "me" }, repo, { home })).toBeNull();
 
     // Entry points swallow even a non-repo failure.
     const plain = await mkdtemp(join(tmpdir(), "gradient-board-plain-"));
-    expect(await boardDigest({}, plain, { home, gh })).toBeNull();
+    expect(await boardDigest({}, plain, { home })).toBeNull();
   });
 
   it("boardShow is loud outside a repo and needs no consent inside one", async () => {
     const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
     const repo = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-repo-")));
     await initRepo(repo);
-    const gh = async () => { throw new Error("no gh"); };
-    const digest = await boardShow(repo, { home, gh });
-    expect(digest).toContain("(PR info unavailable)");
+    const digest = await boardShow(repo, { home });
+    expect(digest).toContain("gradient board");
+    expect(digest).not.toContain("PR info");
     const plain = await mkdtemp(join(tmpdir(), "gradient-board-plain-"));
     await expect(boardShow(plain, { home })).rejects.toThrow(/git repository/);
+  });
+
+  it.skipIf(process.platform === "win32")("reads only local state even when GitHub CLI is available", async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-repo-")));
+    await initRepo(repo);
+    await execFileP("git", ["remote", "add", "origin", "https://github.com/example/project.git"], { cwd: repo });
+    const bin = join(home, "bin");
+    const called = join(home, "gh-called");
+    await mkdir(bin);
+    const gh = join(bin, "gh");
+    await writeFile(gh, `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(called)}, "called");\n`);
+    await chmod(gh, 0o755);
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
+    try {
+      expect(await boardShow(repo, { home })).toContain("gradient board");
+      expect(existsSync(called)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

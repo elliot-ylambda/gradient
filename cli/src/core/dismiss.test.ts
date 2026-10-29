@@ -56,3 +56,21 @@ describe("dismissals", () => {
     expect(dismissed[0].dismissedAt).toBe("2026-07-18T00:00:00.000Z");
   });
 });
+
+import { dismissFinding, isFindingDismissed, loadFindingDismissals } from "./dismiss.js";
+import type { Family, Finding } from "./findings.js";
+
+describe("finding-level decisions", () => {
+  const families: Family[] = ["drift", "stale", "skill-health", "dead-letter", "workflow", "practice", "memory"];
+  it.each(families)("persists a %s dismissal only while its evidence is unchanged", async family => {
+    const home = await mkdtemp(join(tmpdir(), "gradient-dismiss-home-"));
+    const project = await mkdtemp(join(tmpdir(), "gradient-dismiss-project-"));
+    const finding: Finding = { id: "abcdef123456", family, severity: "low", title: "Review this evidence",
+      detail: "Details", evidence: "observed version one", targets: ["claude-code"], deterministic: false,
+      commandBearing: false, changes: [] };
+    await dismissFinding(project, finding, home);
+    const entries = await loadFindingDismissals(project, home);
+    expect(isFindingDismissed(finding, entries)).toBe(true);
+    expect(isFindingDismissed({ ...finding, evidence: "materially changed evidence" }, entries)).toBe(false);
+  });
+});

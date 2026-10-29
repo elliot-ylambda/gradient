@@ -6,7 +6,7 @@ import { fingerprint, readTranscriptLines } from "../core/tail.js";
 import { assertInside, redact } from "../core/security.js";
 import { assertNoSymlinkPath, safeWriteFile } from "../core/safeFs.js";
 import { homedir } from "node:os";
-import { loadConfig, projectCacheDir, projectKey } from "../config.js";
+import { loadConfig, projectCacheDir, projectKey, supportsClaudeHooks } from "../config.js";
 
 export interface CheckpointInput { transcript_path?: string }
 
@@ -20,8 +20,9 @@ export async function checkpoint(
   readLinesFn: (path: string) => Promise<string[]> = readTranscriptLines,
   opts: { home?: string; consent?: boolean } = {},
 ): Promise<string | null> {
-  const consented = opts.consent ??
-    (await loadConfig(opts.home)).continuityProjects?.includes(projectKey(projectDir)) === true;
+  const config = await loadConfig(opts.home);
+  const consented = supportsClaudeHooks(config) && (opts.consent ??
+    config.continuityProjects?.includes(projectKey(projectDir)) === true);
   if (!consented) return null;
   const userHome = opts.home ?? homedir();
   let transcriptLines: string[] = [];

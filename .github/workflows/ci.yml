@@ -62,6 +62,8 @@ jobs:
         run: git diff --exit-code -- ../plugin/.claude-plugin/plugin.json ../plugin/bin/gradient.mjs ../skills
       - name: Smoke-test the bundled CLI
         run: node ../plugin/bin/gradient.mjs --version
+      - name: Verify the public checkup example
+        run: node scripts/checkup-demo.mjs
       - name: Run the packaged dogfood release gate
         run: npm run dogfood -- --output ../artifacts/dogfood
       - name: Upload dogfood evidence

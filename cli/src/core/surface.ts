@@ -1,10 +1,10 @@
 import { homedir } from "node:os";
-import { join, basename } from "node:path";
-import { opendir } from "node:fs/promises";
+import { join, basename, dirname, isAbsolute, resolve } from "node:path";
+import { opendir, realpath } from "node:fs/promises";
 import type { Assistant } from "./types.js";
-import { safeReadFile } from "./safeFs.js";
+import { ancestorDirs, assistantHomes, confineFor, projectRoot, readDiscovered, readSettings, repositoryDirs, within, type DiscoveryOptions } from "./discovery.js";
 import { normalize, similarity } from "./cluster.js";
-import { list, parseFrontmatter, scalar } from "./frontmatter.js";
+import { parseFrontmatter, scalar } from "./frontmatter.js";
 import { locateRepo } from "./board.js";
 
 /**
@@ -98,8 +98,10 @@ export interface Surface {
   skills: InstalledSkill[];
   /** Null when the project has no auto-memory index. Never written to. */
   memory: MemoryState | null;
-  /** Description characters loaded into every session by installed skills. */
+  /** Description characters in the inspected inventory; not a token measurement. */
   contextChars: number;
+  /** Known limits, skipped locations, and unreadable configuration. */
+  warnings?: string[];
 }
 
 interface SkillDir {
@@ -109,51 +111,106 @@ interface SkillDir {
   scope: "project" | "user";
   /** `.claude/commands/*.md` are flat files rather than directories. */
   flat?: boolean;
+  namespace?: string;
 }
 
-function skillDirs(projectDir: string, home: string, targets: Assistant[]): SkillDir[] {
+async function skillDirs(projectDir: string, opts: DiscoveryOptions, targets: Assistant[], warnings: string[]): Promise<{ dirs: SkillDir[]; disabled: Set<string>; overrides: Record<string, unknown>; claudeSettings: Record<string, any> }> {
+  const roots = assistantHomes(opts);
+  const repoDirs = await repositoryDirs(projectDir);
+  const project = await projectRoot(projectDir);
   const out: SkillDir[] = [];
+  const disabled = new Set<string>();
+  const overrides: Record<string, unknown> = {};
+  const claudeSettings: Record<string, any> = {};
   if (targets.includes("claude-code")) {
-    out.push(
-      { dir: join(projectDir, ".claude", "skills"), base: projectDir, assistant: "claude-code", scope: "project" },
-      { dir: join(home, ".claude", "skills"), base: home, assistant: "claude-code", scope: "user" },
-      { dir: join(projectDir, ".claude", "commands"), base: projectDir, assistant: "claude-code", scope: "project", flat: true },
-    );
+    for (const [dir, scope] of [[roots.claude, "user"], ...ancestorDirs(projectDir).map(dir => [join(dir, ".claude"), "project"])] as Array<[string, "user" | "project"]>) {
+      out.push({ dir: join(dir, "skills"), base: dir, assistant: "claude-code", scope });
+      out.push({ dir: join(dir, "commands"), base: dir, assistant: "claude-code", scope, flat: true });
+    }
+    const enabled: Record<string, unknown> = {};
+    for (const path of [join(roots.claude, "settings.json"), ...repoDirs.flatMap(dir => [join(dir, ".claude", "settings.json"), join(dir, ".claude", "settings.local.json")])]) {
+      const settings = await readSettings(path, warnings, await confineFor(project, dirname(path)));
+      Object.assign(claudeSettings, settings);
+      if (settings.enabledPlugins && typeof settings.enabledPlugins === "object") Object.assign(enabled, settings.enabledPlugins);
+      if (settings.skillOverrides && typeof settings.skillOverrides === "object") Object.assign(overrides, settings.skillOverrides);
+    }
+    const installed = await readSettings(join(roots.claude, "plugins", "installed_plugins.json"), warnings);
+    const plugins = installed.plugins && typeof installed.plugins === "object" ? installed.plugins : {};
+    for (const [id, isEnabled] of Object.entries(enabled).slice(0, MAX_SKILLS)) {
+      if (isEnabled !== true || id.endsWith("@builtin")) continue;
+      const records = Array.isArray(plugins[id]) ? plugins[id] as Array<Record<string, unknown>> : [];
+      const eligible = records.filter(record => typeof record.installPath === "string" && isAbsolute(record.installPath) &&
+        (record.scope === "user" || (typeof record.projectPath === "string" && repoDirs.some(dir => resolve(record.projectPath as string) === resolve(dir)))));
+      const rank = (record: Record<string, unknown>) => record.scope === "local" ? 3 : record.scope === "project" ? 2 : 1;
+      eligible.sort((a, b) => rank(b) - rank(a));
+      const record = eligible[0];
+      if (!record) { warnings.push(`Enabled Claude plugin ${id} has no applicable installation record; its skills were not inspected.`); continue; }
+      const root = record.installPath as string;
+      const manifest = await readSettings(join(root, ".claude-plugin", "plugin.json"), warnings);
+      const namespace = typeof manifest.name === "string" ? manifest.name : id.split("@")[0];
+      const extra = typeof manifest.skills === "string" ? [manifest.skills] : Array.isArray(manifest.skills) ? manifest.skills.filter((p: unknown): p is string => typeof p === "string") : [];
+      for (const relative of ["skills", ...extra].slice(0, 32)) {
+        const dir = resolve(root, relative);
+        if (!within(root, dir)) { warnings.push(`Plugin ${id} skill path leaves its installation: ${relative}`); continue; }
+        out.push({ dir, base: root, assistant: "claude-code", scope: record.scope === "user" ? "user" : "project", namespace });
+      }
+      out.push({ dir: join(root, "commands"), base: root, assistant: "claude-code", scope: record.scope === "user" ? "user" : "project", namespace, flat: true });
+    }
+    warnings.push("Claude built-in/account-synced/managed skills and command-line plugin or additional-directory overrides are not included.");
   }
   if (targets.includes("codex")) {
+    for (const dir of repoDirs) out.push({ dir: join(dir, ".agents", "skills"), base: dir, assistant: "codex", scope: "project" });
     out.push(
-      { dir: join(projectDir, ".agents", "skills"), base: projectDir, assistant: "codex", scope: "project" },
-      { dir: join(home, ".agents", "skills"), base: home, assistant: "codex", scope: "user" },
+      { dir: join(roots.home, ".agents", "skills"), base: roots.home, assistant: "codex", scope: "user" },
+      { dir: join(roots.codex, "skills"), base: roots.codex, assistant: "codex", scope: "user" },
     );
+    if (roots.home === resolve(homedir())) out.push({ dir: "/etc/codex/skills", base: "/etc/codex", assistant: "codex", scope: "user" });
+    for (const path of [join(roots.codex, "config.toml"), ...repoDirs.map(dir => join(dir, ".codex", "config.toml"))]) {
+      try {
+        const config = await readDiscovered(path, undefined, await confineFor(project, dirname(path)));
+        for (const section of config.split(/\[\[skills\.config\]\]/).slice(1)) {
+          const block = section.split(/^\s*\[/m)[0];
+          const name = /^path\s*=\s*["']([^"']+)["']/m.exec(block)?.[1];
+          if (name && /^enabled\s*=\s*false\s*(?:#.*)?$/m.test(block)) {
+            disabled.add(resolve(name));
+            try { disabled.add(await realpath(name)); } catch { /* missing skill */ }
+          }
+        }
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") warnings.push(`Could not inspect skill enablement in ${path}`); }
+    }
+    warnings.push("Codex bundled/plugin skills, managed/profile overrides, and dynamically supplied skill locations are outside this inventory.");
   }
-  return out;
+  return { dirs: out, disabled, overrides, claudeSettings };
 }
 
-async function entries(dir: string): Promise<string[]> {
+async function entries(dir: string, warnings: string[]): Promise<string[]> {
   try {
     const handle = await opendir(dir);
     const out: string[] = [];
     for await (const entry of handle) {
-      if (out.length >= MAX_SKILLS) break;
+      if (out.length >= MAX_SKILLS) { warnings.push(`Skills in ${dir} exceed the ${MAX_SKILLS}-entry inspection limit`); break; }
       out.push(entry.name);
     }
-    return out;
-  } catch {
+    return out.sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") warnings.push(`Could not inspect skill directory ${dir}`);
     return [];
   }
 }
 
 async function readSkill(
   path: string,
-  base: string,
   name: string,
   assistant: Assistant,
   scope: "project" | "user",
+  warnings: string[],
+  confine?: string,
 ): Promise<InstalledSkill | null> {
   let raw: string;
   try {
-    raw = await safeReadFile(base, path, { maxBytes: MAX_SKILL_BYTES });
-  } catch {
+    raw = await readDiscovered(path, MAX_SKILL_BYTES, confine);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") warnings.push(`Could not inspect skill ${path}: ${(error as Error).message}`);
     return null;
   }
 
@@ -172,11 +229,14 @@ async function readSkill(
     }
   }
 
-  const description = scalar(frontmatter, "description") ?? "";
+  const authoredDescription = scalar(frontmatter, "description") ?? "";
+  // Claude documents a body-line fallback; absence is not proof it cannot load.
+  const fallback = assistant === "claude-code" ? raw.slice(frontmatter.length).split("\n").find(line => line.trim())?.trim() ?? "" : "";
+  const description = authoredDescription || fallback;
   const whenToUse = scalar(frontmatter, "when_to_use") ?? "";
   const descriptionChars = description.length + whenToUse.length;
   if (!description) problems.push({ kind: "no-description" });
-  else if (descriptionChars > DESCRIPTION_CAP) {
+  else if (assistant === "claude-code" && descriptionChars > DESCRIPTION_CAP) {
     problems.push({ kind: "description-over-cap", chars: descriptionChars });
   }
 
@@ -195,7 +255,7 @@ async function readSkill(
 /** Auto-memory lives under the repository root, so every worktree shares one
  *  directory. The encoding of that root into a directory name is not
  *  documented, so candidates are tried rather than guessed at. */
-async function memoryIndexPath(projectDir: string, home: string): Promise<string | null> {
+async function memoryIndexPath(projectDir: string, home: string, claudeHome = join(home, ".claude")): Promise<string | null> {
   const repo = await locateRepo(projectDir);
   const root = repo?.root ?? projectDir;
   const candidates = [
@@ -204,9 +264,9 @@ async function memoryIndexPath(projectDir: string, home: string): Promise<string
     root.replace(/[^a-zA-Z0-9]/g, "-"),
   ];
   for (const encoded of [...new Set(candidates)]) {
-    const path = join(home, ".claude", "projects", encoded, "memory", "MEMORY.md");
+    const path = join(claudeHome, "projects", encoded, "memory", "MEMORY.md");
     try {
-      await safeReadFile(home, path, { maxBytes: MAX_MEMORY_BYTES });
+      await readDiscovered(path, MAX_MEMORY_BYTES);
       return path;
     } catch {
       continue;
@@ -220,12 +280,12 @@ async function memoryIndexPath(projectDir: string, home: string): Promise<string
  * directory and manages it well, so gradient reports what it sees and never
  * edits or deletes a memory file.
  */
-export async function loadMemory(projectDir: string, home: string): Promise<MemoryState | null> {
-  const indexPath = await memoryIndexPath(projectDir, home);
+export async function loadMemory(projectDir: string, home: string, claudeHome = join(home, ".claude"), memoryDirectory?: string): Promise<MemoryState | null> {
+  const indexPath = memoryDirectory ? join(memoryDirectory, "MEMORY.md") : await memoryIndexPath(projectDir, home, claudeHome);
   if (!indexPath) return null;
   let raw: string;
   try {
-    raw = await safeReadFile(home, indexPath, { maxBytes: MAX_MEMORY_BYTES });
+    raw = await readDiscovered(indexPath, MAX_MEMORY_BYTES);
   } catch {
     return null;
   }
@@ -264,22 +324,36 @@ export async function loadMemory(projectDir: string, home: string): Promise<Memo
 export async function loadSurface(
   projectDir: string,
   targets: Assistant[],
-  opts: { home?: string } = {},
+  opts: DiscoveryOptions = {},
 ): Promise<Surface> {
-  const home = opts.home ?? homedir();
+  const roots = assistantHomes(opts);
   const skills: InstalledSkill[] = [];
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  const inventory = await skillDirs(projectDir, opts, targets, warnings);
+  const project = await projectRoot(projectDir);
+  let candidates = 0;
 
-  for (const spec of skillDirs(projectDir, home, targets)) {
-    for (const entry of await entries(spec.dir)) {
-      if (spec.flat) {
-        if (!entry.endsWith(".md")) continue;
-        const skill = await readSkill(
-          join(spec.dir, entry), spec.base, basename(entry, ".md"), spec.assistant, spec.scope);
-        if (skill) skills.push(skill);
-        continue;
-      }
-      const skill = await readSkill(
-        join(spec.dir, entry, "SKILL.md"), spec.base, entry, spec.assistant, spec.scope);
+  scan: for (const spec of inventory.dirs) {
+    if (skills.length >= MAX_SKILLS) { warnings.push(`Skill inventory reached its ${MAX_SKILLS}-skill limit`); break; }
+    const confine = await confineFor(project, spec.base);
+    for (const entry of await entries(spec.dir, warnings)) {
+      if (skills.length >= MAX_SKILLS) { warnings.push(`Skill inventory reached its ${MAX_SKILLS}-skill limit`); break; }
+      if (spec.flat && !entry.endsWith(".md")) continue;
+      if (entry.startsWith(".")) { if (entry !== ".DS_Store") warnings.push(`Hidden/system skill entry ${join(spec.dir, entry)} is outside the inventory`); continue; }
+      if (++candidates > MAX_SKILLS * 4) { warnings.push(`Skill inspection reached its ${MAX_SKILLS * 4}-candidate limit`); break scan; }
+      const path = spec.flat ? join(spec.dir, entry) : join(spec.dir, entry, "SKILL.md");
+      if (inventory.disabled.has(resolve(path))) continue;
+      const name = spec.flat ? basename(entry, ".md") : entry;
+      if (!spec.namespace && spec.assistant === "claude-code" && inventory.overrides[name] === "off") continue;
+      try {
+        const canonical = await realpath(path);
+        if (inventory.disabled.has(canonical)) continue;
+        const key = `${spec.assistant}:${canonical}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+      } catch { /* readSkill reports unreadable files and skips absent ones */ }
+      const skill = await readSkill(path, spec.namespace ? `${spec.namespace}:${name}` : name, spec.assistant, spec.scope, warnings, confine);
       if (skill) skills.push(skill);
     }
   }
@@ -299,16 +373,21 @@ export async function loadSurface(
     }
   }
 
+  const memorySetting = inventory.claudeSettings.autoMemoryDirectory;
+  const memoryDirectory = typeof memorySetting === "string" && memorySetting.startsWith("~/") ? join(roots.home, memorySetting.slice(2))
+    : typeof memorySetting === "string" && isAbsolute(memorySetting) ? memorySetting : undefined;
+  if (memorySetting !== undefined && !memoryDirectory) warnings.push("The configured Claude autoMemoryDirectory could not be resolved; auto memory was not inspected.");
   return {
     skills,
-    memory: targets.includes("claude-code") ? await loadMemory(projectDir, home) : null,
+    memory: targets.includes("claude-code") && inventory.claudeSettings.autoMemoryEnabled !== false && (memorySetting === undefined || memoryDirectory)
+      ? await loadMemory(projectDir, roots.home, roots.claude, memoryDirectory) : null,
     contextChars: skills.reduce((total, skill) => total + skill.descriptionChars, 0),
+    warnings: [...new Set(warnings)],
   };
 }
 
-/** Skill descriptions the assistant loads every session, as a share of the
- *  documented listing budget. Used for the one number worth reporting. */
+/** Description text found in the bounded inventory, not measured session cost. */
 export function describeContextCost(surface: Surface): string {
   const skills = surface.skills.length;
-  return `${skills} skill(s) · ${surface.contextChars} description chars loaded every session`;
+  return `${skills} skill(s) · ${surface.contextChars} description chars inventoried`;
 }

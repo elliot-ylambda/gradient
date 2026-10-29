@@ -1,12 +1,23 @@
 ---
 name: gradient-features
-description: Turn one of gradient's background features on or off — continuity, autopilot, board, or optimize. Each installs a hook that runs on its own afterwards, so this is the user's decision to make.
+description: Manage Gradient's optional Claude Code hooks: continuity, autopilot, board, and periodic checkups. Use only when the user explicitly asks to turn a feature on or off.
 ---
+
+In every command below, replace `<skill-directory>` with the absolute directory
+containing this activated `SKILL.md` (the path supplied when this skill was loaded).
+Quote that path for the shell. Run only this directory's `bin/gradient.mjs`; never
+search default skill folders or select another installed copy. The placeholder
+is not a literal path or an environment variable.
+
+These optional features currently install **Claude Code hooks only**. Codex has
+native hooks, but Gradient does not install them. A Codex-only setup must receive
+an unsupported explanation, never a claim that a feature was enabled. Prefer the
+assistant's native memory, scheduling, and continuation when they meet the need.
 
 Every feature here installs a hook that runs without being asked again. Explain
 what it does, then run the exact toggle the user chose — never choose for them:
 
-    node "$(ls ~/.codex/skills/gradient-features/bin/gradient.mjs ~/.agents/skills/gradient-features/bin/gradient.mjs 2>/dev/null | head -1)" on|off <feature>
+    node "<skill-directory>/bin/gradient.mjs" on|off <feature>
 
 - **continuity** — a `PreCompact` hook writes a bounded, redacted checkpoint of
   recent intent, and a `SessionStart` hook reads it back after a resume or a
@@ -17,14 +28,20 @@ what it does, then run the exact toggle the user chose — never choose for them
 - **board** — `SessionStart` and `UserPromptSubmit` hooks report what other
   sessions are doing in this repository.
 - **optimize** — a `SessionEnd` hook re-checks the setup after a session ends
-  (at most once a day), and a `SessionStart` hook surfaces the highest-severity
-  pending finding at the next one.
+  (propose-only, at most once a day), and a `SessionStart` hook surfaces the highest-severity
+  pending finding at the next one. Background checks start once a first checkup has
+  recorded which assistants to inspect.
 
 With no feature named, read the current state rather than guessing at it. Both
 the report and `optimize` name every feature, and say what each one that is off
 would do:
 
-    node "$(ls ~/.codex/skills/gradient-features/bin/gradient.mjs ~/.agents/skills/gradient-features/bin/gradient.mjs 2>/dev/null | head -1)"
+    node "<skill-directory>/bin/gradient.mjs"
 
 While autopilot is on, the bare report also carries its detail — mode, judge
 budget, `gradient.md` clamps, and recent decisions.
+
+Continuity returns a local checkpoint to the existing Claude session.
+Autopilot calls a separate configured model judge and can incur usage charges.
+Board and periodic checks stay local. Old global optimize consent requires
+per-project re-enable.

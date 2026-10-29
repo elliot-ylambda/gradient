@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { insights } from "./insights.js";
 import type { CommandEvent, ToolEvent, Turn } from "../core/types.js";
+import { setFeature } from "./features.js";
 
 let dir: string;
 let home: string;
@@ -24,6 +25,28 @@ const nudgeTurns: Turn[] = Array.from({ length: 12 }, (_, index) => ({
 }));
 
 describe("insights", () => {
+  it("does not tell users to enable continuity when its hooks already run here", async () => {
+    await setFeature("continuity", true, dir, { home });
+    const turns = Array.from({ length: 12 }, (_, i) => ({
+      ts: `2026-10-28T00:${String(i).padStart(2, "0")}:00Z`, project: "p", role: "user" as const,
+      sessionId: `s${i}`, text: "This session is being continued from a previous conversation that ran out of context.",
+    }));
+    const report = await insights({ projectDir: dir, home }, { collectFn: async () => ["f"], parseFn: async () => turns });
+    expect(report.metrics.continuations).toBe(12);
+    expect(report.recommendations.map(row => row.line).join("\n")).not.toContain("gradient on continuity");
+    expect(report.costs.map(row => row.line).join("\n")).not.toContain("gradient on continuity");
+  });
+
+  it("does not recommend Claude-only background features for Codex history", async () => {
+    const report = await insights({ projectDir: dir, home }, {
+      config: { targets: ["codex"] }, collectCodexFn: async () => ["f"], parseCodexFn: async () => nudgeTurns,
+    });
+    const advice = [...report.recommendations, ...report.costs].map(row => row.line).join("\n");
+    expect(report.metrics.nudges).toBe(12);
+    expect(advice).not.toContain("gradient on autopilot");
+    expect(advice).not.toContain("gradient on continuity");
+  });
+
   it("reports detector-backed failure loops and post-edit rituals", async () => {
     const failures: ToolEvent[] = [
       { ts: "2026-07-01T00:00:00Z", sessionId: "f1", kind: "bash", command: "npm test", isError: true },
@@ -64,7 +87,7 @@ describe("insights", () => {
       { collectFn: async () => ["f"], parseFn: async () => ({ turns: nudgeTurns, events: [] }) },
     );
     expect(report.metrics.nudges).toBe(12);
-    expect(report.recommendations.map(item => item.line).join("\n")).toContain("gradient on autopilot");
+    expect(report.recommendations.map(item => item.line).join("\n")).toContain("native continuation and scheduled tasks");
     expect(report.label).toContain("project");
   });
 
@@ -137,7 +160,7 @@ describe("insights", () => {
       },
     );
     expect({ collects, parses }).toEqual({ collects: 1, parses: 1 });
-    expect(report.recommendations.map(item => item.line)).toContain("unused 30d+: gradient remove dead");
+    expect(report.recommendations.map(item => item.line).join("\n")).toContain("no explicit invocation of dead observed in the bounded history");
   });
 
 

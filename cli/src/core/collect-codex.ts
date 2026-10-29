@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { lstat, open, opendir, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
+import { assistantHomes } from "./assistant-homes.js";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { CollectOptions } from "./collect.js";
 import { canonicalRoot, matchesSince, symlinkWarner } from "./collect.js";
@@ -127,11 +127,11 @@ function isWithinProject(cwd: string, projectPath: string): boolean {
 
 /** Collect bounded Codex rollout JSONL without loading conversation bodies. */
 export async function collectCodex(opts: CollectOptions): Promise<string[]> {
-  const home = opts.home ?? homedir();
+  const roots = assistantHomes(opts);
   const now = opts.now ?? Date.now();
   const projectPath = opts.projectPath ?? process.cwd();
   const canonicalProject = await canonical(projectPath);
-  const sessionsRoot = await canonicalRoot(join(home, ".codex", "sessions"));
+  const sessionsRoot = await canonicalRoot(join(roots.codex, "sessions"));
   const discovered: string[] = [];
   await walk(sessionsRoot, sessionsRoot, discovered, symlinkWarner(opts.onWarn));
   const candidates: Array<{ path: string; size: number; mtimeMs: number; meta: CodexSessionMeta }> = [];

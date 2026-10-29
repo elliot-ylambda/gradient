@@ -1,27 +1,25 @@
 ---
 name: report
-description: Show how the user actually works — what their habits cost, which generated artifacts exist and whether anything invokes them, what other sessions are doing in this repo, and what to do next. Use when the user asks how they use Claude Code, what gradient has found, or what they should automate.
+description: Read Gradient's local report of observed Claude Code and Codex activity, generated artifacts, and project feature state. Use when the user asks what Gradient has found or how their observed workflow has changed.
 ---
 
-Run the bundled gradient CLI with no arguments. It is read-only, needs no prior
-scan, and answers all of those questions at once:
+Run the bundled report. It reads local state and needs no prior scan:
 
     node "${CLAUDE_PLUGIN_ROOT}/bin/gradient.mjs"
 
-Lead with what it says. In particular:
+Lead with what is actionable. Explain that input limits bound the observation:
+zero observed uses is not proof an artifact is useless, and estimated effort is
+not measured time or tokens saved. Tool-event counts and inferred prompt patterns
+are different evidence classes. Do not recommend removing a skill solely because
+this report observed no invocation.
 
-- **cost of unautomated habits** — each line names the action that addresses it.
-  The nudge line is honest about buying back attention rather than tokens; do
-  not restate it as a token saving.
-- **installed** — an artifact with 0 uses and a `remove` hint is dead weight.
-  Say so; that number is the point of the section.
-- **pending suggestions** — a `measured` tag means the evidence is counted tool
-  invocations. Anything without it was inferred from repeated prompt text; read
-  the evidence before repeating the claim.
+For setup fixes, use the optimize skill. Recommend native diagnostics, skill
+creators, memory, review, and scheduled tasks before adding overlapping tools.
+Gradient's optional hooks currently run only in Claude Code. Status applies to
+the current repository; never enable a feature without the user's choice.
 
-Add `--user` for the same behaviour report across every project in a recent
-window, and `--html` to write a self-contained private `.gradient/insights.html`.
-Neither makes a model call.
+Add `--user` only for an explicit cross-project request. `--html` writes a private
+local report. Reports, board, and the setup checkup stay local and offline.
 
 If the command fails to start, the plugin install is broken — tell the user to
 reinstall the gradient plugin. Never fall back to a PATH-installed gradient.

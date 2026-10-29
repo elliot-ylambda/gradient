@@ -1,15 +1,14 @@
 import { lstat, opendir, realpath } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { assistantHomes, type DiscoveryOptions } from "./assistant-homes.js";
 import { assertNoSymlinkPath, symlinkRefusalError } from "./safeFs.js";
 import { MAX_TRANSCRIPT_BYTES } from "./parse.js";
 
-export interface CollectOptions {
+export interface CollectOptions extends DiscoveryOptions {
   scope: "project" | "all";
   projectPath?: string;
   sinceDays?: number;
   now?: number;
-  home?: string;
   onWarn?: (message: string) => void;
 }
 
@@ -137,9 +136,9 @@ async function walk(
 }
 
 export async function collect(opts: CollectOptions): Promise<string[]> {
-  const home = opts.home ?? homedir();
+  const rootsForAssistant = assistantHomes(opts);
   const now = opts.now ?? Date.now();
-  const projectsRoot = await canonicalRoot(join(home, ".claude", "projects"));
+  const projectsRoot = await canonicalRoot(join(rootsForAssistant.claude, "projects"));
   const onRefused = symlinkWarner(opts.onWarn);
   let roots: string[];
   if (opts.scope === "all") {
