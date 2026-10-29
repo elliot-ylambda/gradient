@@ -48,12 +48,12 @@ Codex, or real transcript. It writes:
   viewer.
 - `artifacts/dogfood/report.html` — a self-contained visual report.
 
-Pass means all 19 scenarios passed with zero failures and zero skipped
+Pass means every scenario passed with zero failures and zero skipped
 dependencies. A failure still writes reports and exits non-zero. `--keep`
 preserves only the synthetic temporary sandbox for debugging; otherwise it is
 removed after reporting.
 
-### What the 19 scenarios prove
+### What the scenarios prove
 
 | Area | Behavior |
 |---|---|
@@ -61,7 +61,7 @@ removed after reporting.
 | Isolation | disposable project/home, invented Claude and Codex histories, deterministic CLI backend protocols |
 | Setup | the one first-run consent (which assistants); **every SKILL.md's own command is executed**, in both shapes, on a PATH with no `gradient` on it |
 | Mining | project and cross-project scope, both collectors, the restatement filter, the suggestion cache |
-| Review | findings as JSON, the local checkup page, direct apply, deny, refusal to auto-apply prose |
+| Review | findings as JSON, the local checkup page, direct apply, deny, propose-only automatic mode |
 | Artifacts | the AGENTS.md bridge and its undo; every generated artifact family; ownership and provenance |
 | Runtime | continuity checkpoint/recap, board discovery/delta/consent, autopilot continue/progress/stand-down, notification fail-open, leftover-hook exit |
 | Reporting | the composed report from real state |
@@ -78,6 +78,16 @@ degraded skill — it is a skill that can do nothing, and nothing finds out unti
 a user's session fails. Asserting the *shape* of that command is what let a
 release ship in which every installed skill named a `gradient` that no install
 puts on PATH. The scenario runs it.
+
+## Reproduce the basic checkup
+
+```sh
+node cli/scripts/checkup-demo.mjs
+```
+
+This disposable fixture uses the committed runner to find two known setup issues,
+apply the selected fixes, recheck, undo, and compare the original files byte for
+byte. It is a demonstration of mechanics, not a measured user productivity gain.
 
 ## Live dogfood pass
 

@@ -9,7 +9,8 @@
  * It is lenient on purpose. Anything it does not model is skipped, never
  * reported: skills legitimately carry nested maps, and calling one corrupt
  * would report a working skill as broken. `error` is reserved for frontmatter
- * no reader could use, so that "unreadable" can honestly mean "will not load".
+ * this bounded reader cannot interpret. Callers must not equate that with a
+ * host rejecting the skill: Claude can still load a body without these fields.
  */
 
 const MAX_FRONTMATTER_BYTES = 16_000;
@@ -26,9 +27,7 @@ export interface Frontmatter {
   keys: string[];
   /** True when a `---` block opened and closed. */
   present: boolean;
-  /** Set only when the block is unusable to any reader — an unterminated `---`,
-   *  or more keys than any real skill has. Content this reader simply does not
-   *  model is skipped instead, so `error` can mean "will not load" and be right. */
+  /** A missing closing delimiter or inspection limit; not a host load verdict. */
   error?: string;
   /** Characters consumed by the block, including both delimiters. */
   length: number;
@@ -78,7 +77,9 @@ export function parseFrontmatter(raw: string): Frontmatter {
   const keys: string[] = [];
   let currentKey: string | null = null;
 
-  for (const line of body.split(/\r?\n/)) {
+  const lines = body.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
     if (!line.trim() || line.trim().startsWith("#")) continue;
 
     // A `  - item` continuation belongs to the key above it.
@@ -109,6 +110,19 @@ export function parseFrontmatter(raw: string): Frontmatter {
     const [, key, rest] = pair;
     if (!keys.includes(key)) keys.push(key);
     currentKey = key;
+    // A common description spelling. Collect its indented lines without
+    // mistaking nested metadata keys for top-level fields. We only need the
+    // description text, not a general YAML syntax tree.
+    if (/^[|>][+-]?\s*(?:#.*)?$/.test(rest.trim())) {
+      const block: string[] = [];
+      while (index + 1 < lines.length && (!lines[index + 1].trim() || /^[ \t]/.test(lines[index + 1]))) {
+        block.push(lines[++index]);
+      }
+      const indentation = Math.min(...block.filter(l => l.trim()).map(l => /^[ \t]*/.exec(l)![0].length));
+      const text = block.map(l => l.slice(Number.isFinite(indentation) ? indentation : 0));
+      values[key] = (rest.trim().startsWith(">") ? text.join(" ").replace(/\s+/g, " ") : text.join("\n")).trim().slice(0, MAX_SCALAR_CHARS);
+      continue;
+    }
     const list = inlineList(rest);
     if (list) values[key] = list;
     else if (rest.trim() === "") values[key] = [];

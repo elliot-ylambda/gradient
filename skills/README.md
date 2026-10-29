@@ -7,26 +7,25 @@ into the right place works in either.
 ## gradient itself
 
 `gradient-optimize`, `gradient-report`, and `gradient-features` are how gradient
-is installed for Codex, which has no plugin marketplace. Each is self-contained —
+is installed for Codex. Each is self-contained —
 a `SKILL.md` plus the single-file runner it invokes — so a copy is a complete
-install, with no package manager, no PATH entry, and nothing global. Use Codex's
+install, with no package manager, no PATH entry, and Node.js 20+ as its runtime requirement. Use Codex's
 built-in installer — the same one the official `openai/skills` catalog uses:
 
 ```
 $skill-installer install gradient-optimize, gradient-report and gradient-features from elliot-ylambda/gradient
 ```
 
-That writes to `$CODEX_HOME/skills`. Codex also reads `~/.agents/skills`, and
-each skill resolves its runner in **either** — one that hardcoded a single root
-would be silently broken for everyone who used the other, which is exactly how
-this shipped broken once.
+That writes to `$CODEX_HOME/skills`. Codex also reads `~/.agents/skills`.
+Each activated skill resolves the runner beside its own SKILL.md, so custom
+installation destinations cannot accidentally launch another installed version.
 
 The installer aborts rather than overwrite a destination that already exists, so
 updating is a removal and a reinstall, not one command:
 
-```bash
-rm -rf ~/.codex/skills/gradient-{optimize,report,features}
-```
+Remove only these three directories from their actual installed location,
+then rerun the installer. Do not assume the default path with a custom
+`CODEX_HOME` or `--dest`.
 
 Claude Code users install the same three skills as a plugin instead — see the
 [root README](../README.md).

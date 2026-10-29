@@ -1,5 +1,5 @@
 import type { Config } from "../core/types.js";
-import { boundedAutopilotBudget, loadConfig, DEFAULT_AUTOPILOT_MODEL, projectKey } from "../config.js";
+import { boundedAutopilotBudget, loadConfig, DEFAULT_AUTOPILOT_MODEL, projectKey, supportsClaudeHooks } from "../config.js";
 import { loadState, saveState, cleanupStale } from "../core/state.js";
 import { renderTail, fingerprint, readTranscriptLines } from "../core/tail.js";
 import { loadPlaybook, loadProjectPlaybook, clampMode, loadPlaybookPin, pinnedProse } from "../core/playbook.js";
@@ -8,6 +8,7 @@ import { redact } from "../core/security.js";
 import { selectBackend } from "../llm/index.js";
 import { ClaudeCliBackend } from "../llm/claudeCli.js";
 import { AnthropicBackend } from "../llm/anthropic.js";
+import { CodexCliBackend } from "../llm/codexCli.js";
 import type { LLMBackend } from "../llm/backend.js";
 
 export interface StopHookInput {
@@ -41,7 +42,7 @@ export const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
   haiku: "claude-haiku-4-5-20251001",
 };
 
-async function autopilotBackend(config: Config): Promise<LLMBackend | null> {
+export async function autopilotBackend(config: Config): Promise<LLMBackend | null> {
   const model = config.autopilotModel ?? DEFAULT_AUTOPILOT_MODEL;
   return selectBackend({
     config,
@@ -49,6 +50,8 @@ async function autopilotBackend(config: Config): Promise<LLMBackend | null> {
       // Private cwd + guard env: the headless child must never re-enter this hook.
       new ClaudeCliBackend({ model, extraEnv: { GRADIENT_AUTOPILOT_CHILD: "1" } }),
       new AnthropicBackend({ model: ANTHROPIC_MODEL_ALIASES[model] ?? model }),
+      // Transcript tails go to a different provider only when the user pinned it.
+      ...(config.backend === "codex-cli" ? [new CodexCliBackend({ model: config.codexModel })] : []),
     ],
   });
 }
@@ -67,6 +70,7 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
 
     // Gate 2: mode.
     const config = deps.config ?? (await loadConfig(deps.home));
+    if (!supportsClaudeHooks(config)) return allow;
     const mode = input.cwd ? config.autopilotProjects?.[projectKey(input.cwd)] : undefined;
     // "full" from legacy/tampered config fails closed. Only per-project nudge
     // consent is supported in the hardened release.

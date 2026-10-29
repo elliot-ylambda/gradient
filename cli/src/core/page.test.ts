@@ -84,21 +84,29 @@ describe("renderPage", () => {
     expect(script).not.toContain("CLAUDE.md");
   });
 
-  it("groups by family and shows a diff per change", () => {
+  it("groups by actionability and shows a diff per change", () => {
     const html = page({
       findings: [
         finding(),
-        finding({ id: "f00d", family: "drift", severity: "high", title: "bridge missing" }),
+        finding({ id: "f00d", family: "skill-health", severity: "low", title: "review metadata", changes: [] }),
       ],
     });
-    expect(html).toContain(">stale</h2>");
-    expect(html).toContain(">drift</h2>");
+    expect(html).toContain(">Choose a fix</h2>");
+    expect(html).toContain(">Review observations</h2>");
+    expect(html.match(/<button class="accept"/g)).toHaveLength(1);
     expect(html).toContain('class="del"');
+  });
+
+  it("keeps a custom runner path from closing the page script", () => {
+    const html = page({ invocation: "node '/custom/</script><script>alert(1)</script>/gradient.mjs'" });
+    expect(html.match(/<script/gi)).toHaveLength(1);
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("\\u003c/script>");
   });
 
   it("renders a run that found nothing", () => {
     const html = page({ findings: [] });
-    expect(html).toContain("Nothing to change");
+    expect(html).toContain("No findings from the inspected");
     expect(html).not.toContain('class="card"');
   });
 

@@ -29,25 +29,18 @@ export const SKILLS = ["optimize", "report", "features"];
  */
 const CLAUDE_ONLY_KEYS = ["disable-model-invocation", "user-invocable", "disallowed-tools"];
 
-/**
- * Where a Codex skill can end up, and why the command has to ask rather than
- * assume.
- *
- * `$skill-installer` — the installer the official openai/skills catalog tells
- * people to use — writes to `$CODEX_HOME/skills`. Copying by hand, the
- * agentskills convention, puts it in `~/.agents/skills`. Codex discovers both.
- * A skill that hardcodes either one is broken for half its users, and it breaks
- * silently: the command is prose until an agent runs it.
- *
- * Resolved inline rather than once into a variable, because each tool call gets
- * a fresh shell — a variable set in one command is gone by the next.
- */
-const codexRunner = name => {
-  const dirs = [".codex/skills", ".agents/skills"]
-    .map(dir => `~/${dir}/${codexName(name)}/bin/gradient.mjs`)
-    .join(" ");
-  return `node "$(ls ${dirs} 2>/dev/null | head -1)"`;
-};
+/** Codex has no documented equivalent of CLAUDE_PLUGIN_ROOT in skill bodies.
+ * The assistant knows the activated SKILL.md path. Bind commands to that path,
+ * including custom destinations, instead of guessing a global installation. */
+export const CODEX_SKILL_DIR_PLACEHOLDER = "<skill-directory>";
+const codexRunner = () => `node "${CODEX_SKILL_DIR_PLACEHOLDER}/bin/gradient.mjs"`;
+const runnerInstructions = `In every command below, replace \`<skill-directory>\` with the absolute directory
+containing this activated \`SKILL.md\` (the path supplied when this skill was loaded).
+Quote that path for the shell. Run only this directory's \`bin/gradient.mjs\`; never
+search default skill folders or select another installed copy. The placeholder
+is not a literal path or an environment variable.
+
+`;
 
 export function forCodex(body, name) {
   const runner = codexRunner(name);
@@ -79,5 +72,8 @@ export function forCodex(body, name) {
     if (required && next === out) throw new Error(`skill ${name}: nothing matched ${pattern}`);
     out = next;
   }
-  return out;
+  const end = out.indexOf("\n---", 4);
+  if (end < 0) throw new Error(`skill ${name}: missing frontmatter delimiter`);
+  const bodyStart = out.indexOf("\n", end + 4) + 1;
+  return out.slice(0, bodyStart) + "\n" + runnerInstructions + out.slice(bodyStart).replace(/^\n+/, "");
 }

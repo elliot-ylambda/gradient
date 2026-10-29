@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { loadConfig, projectKey } from "../config.js";
+import { loadConfig, projectKey, supportsClaudeHooks } from "../config.js";
 import { safeReadFile } from "../core/safeFs.js";
 import { redact } from "../core/security.js";
 import { progressPath } from "./checkpoint.js";
@@ -13,8 +13,9 @@ export async function recap(
   opts: { home?: string; consent?: boolean } = {},
 ): Promise<string | null> {
   try {
-    const consented = opts.consent ??
-      (await loadConfig(opts.home)).continuityProjects?.includes(projectKey(projectDir)) === true;
+    const config = await loadConfig(opts.home);
+    const consented = supportsClaudeHooks(config) && (opts.consent ??
+      config.continuityProjects?.includes(projectKey(projectDir)) === true);
     if (!consented) return null;
     const userHome = opts.home ?? homedir();
     const raw = redact(await safeReadFile(

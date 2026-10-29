@@ -15,7 +15,7 @@ import { sessionStart } from "./commands/sessionStart.js";
 import { scheduleSnippet, sessionEnd } from "./commands/sessionEnd.js";
 import { VERSION } from "./version.js";
 import { stripUnsafeControls } from "./core/security.js";
-import type { Finding } from "./core/findings.js";
+import { findingActionability, type Finding } from "./core/findings.js";
 
 /** Subcommands that exist to be invoked by settings.json, never typed. They stay
  *  dispatchable under their bare names because that is the form already written
@@ -25,7 +25,7 @@ const HOOK_TARGETS: ReadonlySet<string> = new Set([
   "checkpoint", "recap", "notify", "respond", "session-start", "session-end",
 ]);
 
-const help = (): string => `gradient — measure how you actually work, and keep your setup current
+const help = (): string => `gradient — a local checkup for your assistant setup
 
 gradient installs as a Claude Code plugin or a copied skill directory, so there
 is no \`gradient\` on your PATH. Run it as:
@@ -36,12 +36,12 @@ which is written \`gradient\` below. Normally you do not type it at all — ask
 your assistant to optimize your setup and the skill runs these for you.
 
 Usage:
-  gradient                      the report: what it cost you, what is installed,
-                                what other sessions are doing, what to do next
+  gradient                      observed history, installed artifacts, and active sessions
   gradient optimize             find what recurs and what has gone stale, across
                                 Claude Code and Codex, then propose the changes
     [--target claude-code|codex|both]   which assistants to optimize for
-    [--apply <id>...] [--deny <id>...] [--auto] [--undo <runId>]
+    [--apply <id>...] [--deny <id>...] [--undo <runId>]
+    [--auto]                            compatibility: propose only, no repairs
     [--json]                            findings for an agent, as JSON
                                         (every run also writes a local page)
     [--print-schedule]                  a scheduling snippet for this platform
@@ -106,29 +106,25 @@ type LogFn = (s: string) => void;
 /** Findings grouped by family, in the order the ranking already put them. */
 export function renderFindings(findings: Finding[], log: LogFn): void {
   if (findings.length === 0) {
-    log(`\n${c.ok("nothing to change")} ${c.dim("— your setup matches how you actually work")}`);
+    log(`\n${c.ok("no findings")} ${c.dim("from the files and history inspected; this check is not exhaustive")}`);
     return;
   }
-  let family = "";
-  for (const finding of findings) {
-    if (finding.family !== family) {
-      family = finding.family;
-      log(`\n${c.bold(family)}`);
+  for (const actionable of [true, false]) {
+    const group = findings.filter(finding => findingActionability(finding).actionable === actionable);
+    if (!group.length) continue;
+    log(`\n${c.bold(actionable ? "choose a fix" : "review observations")}`);
+    for (const finding of group) {
+      log(`  ${severityChip(finding.severity)} ${c.dim(finding.id)}  ${terminalSafeLine(finding.title)}`);
+      log(`      ${c.muted(terminalSafeLine(finding.evidence))} ${c.dim(`[${finding.targets.join(", ")}]`)}`);
+      if (!actionable) log(`      ${c.dim(findingActionability(finding).reason ?? "Review with your assistant.")}`);
     }
-    log(`  ${severityChip(finding.severity)} ${c.dim(finding.id)}  ${terminalSafeLine(finding.title)}`);
-    log(`      ${c.muted(terminalSafeLine(finding.evidence))}`);
   }
-  // Only ids that carry a change apply to anything. Taking the first three
-  // findings regardless printed a headline command in which every id was a
-  // no-op — a report-only finding has `changes: []` by design, and a deletion
-  // gradient will refuse has one too. The user copies the line gradient wrote
-  // and gets three skips.
-  const appliable = findings.filter(finding => finding.changes.length > 0);
+  const appliable = findings.filter(finding => findingActionability(finding).actionable);
   const ids = appliable.slice(0, 3).map(finding => finding.id).join(",");
   if (ids) {
-    log(`\n${c.dim("apply:")} ${c.violet(`${displayCommand()} optimize --apply ${ids}`)}`);
+    log(`\n${c.dim("after reviewing the page, apply chosen ids:")} ${c.violet(`${displayCommand()} optimize --apply ${ids}`)}`);
   } else {
-    log(`\n${c.dim("nothing here applies automatically — each finding says what to change")}`);
+    log(`\n${c.dim("these observations need review; there are no automatic fixes to apply")}`);
   }
   log(`${c.dim("or hand the whole list to your assistant:")} ${c.violet(`${displayCommand()} optimize --json`)}`);
 }
@@ -151,7 +147,7 @@ async function runOptimize(
       log(c.coral(`changed since the run, left alone: ${terminalSafeLine(path)}`));
     }
     if (outcome.restored.length === 0 && outcome.conflicted.length === 0) log(c.dim("nothing to restore"));
-    return 0;
+    return outcome.conflicted.length ? 1 : 0;
   }
 
   const quiet = !!flags.json;
@@ -167,16 +163,18 @@ async function runOptimize(
     ...(maxPrompts !== undefined ? { maxPrompts } : {}),
     apply: idList(flags.apply),
     deny: idList(flags.deny),
-    auto: !!flags.auto,
     page: !!flags.page,
     home,
   }, { log: quiet ? () => {} : message => log(c.dim(message)) });
 
   if (quiet) {
     log(optimizeJson(result));
-    return 0;
+    return result.skipped.length ? 1 : 0;
   }
 
+  if (flags.auto) log(c.dim("Automatic mode only proposes changes. Use --apply with chosen ids to make repairs."));
+  if (result.coverage) log(c.dim(`${result.coverage.label} · ${result.coverage.prompts} prompts inspected${result.coverage.limited ? " · incomplete" : ""}`));
+  for (const warning of result.warnings ?? []) log(c.dim(`inspection limit: ${terminalSafeLine(warning)}`));
   renderFindings(result.findings, log);
   renderFeatures(result.features, log);
   if (result.pagePath) {
@@ -190,7 +188,7 @@ async function runOptimize(
     log(c.coral(`skipped ${entry.id}: ${terminalSafeLine(entry.reason)}`));
   }
   if (result.runId) log(`\n${c.dim("undo:")} ${c.violet(`${displayCommand()} optimize --undo ${result.runId}`)}`);
-  return 0;
+  return result.skipped.length ? 1 : 0;
 }
 
 /**
@@ -203,18 +201,13 @@ async function runOptimize(
  * `off` row is useless without saying what turning it on buys.
  */
 function renderFeatures(features: OptimizeResult["features"], log: LogFn): void {
-  if (!features || features.length === 0) return;
-  log(`\n${c.bold("features")}`);
-  const width = Math.max(...features.map(feature => feature.name.length));
-  for (const feature of features) {
-    // Only an off row needs selling; an on row is already doing its job.
-    // Padding goes only where something follows, so no row ends in whitespace.
-    const purpose = feature.on ? "" : `  ${c.dim(`— ${feature.purpose}`)}`;
-    const state = feature.on ? c.ok("on") : c.muted("off");
-    log(`  ${feature.name.padEnd(width)}  ${state}${purpose}`);
+  if (!features?.length) return;
+  const enabled = features.filter(feature => feature.on && feature.supported !== false);
+  if (enabled.length) {
+    log(`\n${c.dim("optional Claude hooks enabled:")} ${enabled.map(feature => feature.name).join(", ")}`);
   }
-  if (features.some(feature => !feature.on)) {
-    log(`  ${c.dim("turn one on with")} ${c.violet(`${displayCommand()} on <feature>`)}`);
+  if (features.every(feature => feature.supported === false)) {
+    log(`\n${c.dim("Optional Gradient hooks are not installed for Codex-only setups; the checkup works independently.")}`);
   }
 }
 
@@ -297,7 +290,7 @@ export async function main(
   try {
     switch (command) {
       case "optimize": {
-        if (!flags.json) log(banner(VERSION));
+        if (!flags.json && !flags["print-schedule"]) log(banner(VERSION));
         return await runOptimize(projectDir, flags, io.home, log);
       }
       case "remove": {

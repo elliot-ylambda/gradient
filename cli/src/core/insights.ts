@@ -135,7 +135,11 @@ function attentionLine(tokens: number, prompts: number, label: string, action: s
 /** Token-attributed cost of habits gradient can remove. Tokens stay approximate:
  * recorded model-turn usage is attributable but not necessarily incremental,
  * while older transcripts use the conventional chars/4 fallback. */
-export function buildCostRows(turns: Turn[], ignore: RegExp[] = []): CostRow[] {
+export function buildCostRows(
+  turns: Turn[],
+  ignore: RegExp[] = [],
+  features: { continuityOn?: boolean; autopilotOn?: boolean } = {},
+): CostRow[] {
   const pasteCounts = new Map<string, number>();
   for (const turn of turns) {
     if (turn.role !== "user" || !turn.text) continue;
@@ -175,7 +179,8 @@ export function buildCostRows(turns: Turn[], ignore: RegExp[] = []): CostRow[] {
     metric: "continuations",
     ...totals.continuations,
     recoverable: true,
-    line: costLine(totals.continuations.tokens, totals.continuations.prompts, "context re-explain(s)", "gradient on continuity"),
+    line: costLine(totals.continuations.tokens, totals.continuations.prompts, "context re-explain(s)",
+      features.continuityOn ? "continuity is on; review native compaction and memory" : "review native compaction and memory"),
   });
   if (totals.pastes.prompts > 0) rows.push({
     metric: "pastes",
@@ -187,7 +192,8 @@ export function buildCostRows(turns: Turn[], ignore: RegExp[] = []): CostRow[] {
     metric: "nudges",
     ...totals.nudges,
     recoverable: false,
-    line: attentionLine(totals.nudges.tokens, totals.nudges.prompts, "nudge prompt(s)", "gradient on autopilot"),
+    line: attentionLine(totals.nudges.tokens, totals.nudges.prompts, "nudge prompt(s)",
+      features.autopilotOn ? "autopilot is on" : "review native continuation and scheduled tasks"),
   });
   return rows;
 }
@@ -199,6 +205,7 @@ export function buildRecommendations(
     avoided: number;
     unusedArtifacts: string[];
     permissionPrompts: number;
+    continuityOn?: boolean;
   },
 ): Recommendation[] {
   const recommendations: Recommendation[] = [];
@@ -206,18 +213,18 @@ export function buildRecommendations(
   if (autopilotOn) {
     recommendations.push({
       metric: "nudges",
-      line: `autopilot on — ${context.avoided} nudge(s) avoided (7d)`,
+      line: `autopilot on here — ${context.avoided} nudge(s) sent across projects (7d)`,
     });
   } else if (metrics.nudges > 10) {
     recommendations.push({
       metric: "nudges",
-      line: `you typed ${metrics.nudges} nudges — try: gradient on autopilot`,
+      line: `you typed ${metrics.nudges} nudges — review the assistant's native continuation and scheduled tasks`,
     });
   }
-  if (metrics.continuations + metrics.compacts > 10) {
+  if (metrics.continuations + metrics.compacts > 10 && !context.continuityOn) {
     recommendations.push({
       metric: "context",
-      line: `${metrics.continuations} context death(s), ${metrics.compacts} compact(s) — try: gradient on continuity`,
+      line: `${metrics.continuations} context continuation(s), ${metrics.compacts} compact(s) — review native compaction and memory settings`,
     });
   }
   if (metrics.interrupts > 20) {
@@ -239,7 +246,7 @@ export function buildRecommendations(
     });
   }
   for (const name of context.unusedArtifacts) {
-    recommendations.push({ metric: "adoption", line: `unused 30d+: gradient remove ${name}` });
+    recommendations.push({ metric: "adoption", line: `no explicit invocation of ${name} observed in the bounded history — review its purpose and automatic selection before considering removal` });
   }
   // Printed only when the transcripts show it. Unconditional advice is noise
   // dressed as a finding: it appeared under every report gradient has ever

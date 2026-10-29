@@ -1,4 +1,4 @@
-import { loadConfig, saveConfig } from "../config.js";
+import { assertClaudeHooks, loadConfig, projectKey, saveConfig } from "../config.js";
 import { gradientHookCommand, isGradientHookFor } from "../core/hookBinary.js";
 import { installHook, removeHook } from "../core/settings.js";
 import { setAutopilotMode } from "./autopilot.js";
@@ -47,6 +47,7 @@ export async function setFeature(
   projectDir: string,
   opts: { home?: string } = {},
 ): Promise<FeatureResult> {
+  if (on) assertClaudeHooks(await loadConfig(opts.home));
   switch (name) {
     case "continuity": {
       const result = await setContinuity(on, projectDir, opts);
@@ -77,33 +78,35 @@ async function setOptimize(
   home?: string,
 ): Promise<FeatureResult> {
   const config = await loadConfig(home);
+  const projects = new Set(config.optimizeProjects ?? []);
+  const key = projectKey(projectDir);
   if (on) {
     // Both halves of the loop, because one without the other is half a feature:
     // SessionEnd keeps the findings current, SessionStart is where you see them.
-    const settingsPath = await installHook(projectDir, "SessionStart", gradientHookCommand(SESSION_START_SUB), {
-      // The pre-0.5 form is still in some users' settings and names a flag the
-      // CLI no longer parses; replace it rather than sitting beside it.
-      replacing: ["gradient scan --detach", cmd => isGradientHookFor(cmd, SESSION_START_SUB)],
-    });
-    await installHook(projectDir, "SessionEnd", gradientHookCommand(SESSION_END_SUB), {
-      replacing: [cmd => isGradientHookFor(cmd, SESSION_END_SUB)],
-    });
-    config.scanOnSessionStart = true;
     try {
+      const settingsPath = await installHook(projectDir, "SessionStart", gradientHookCommand(SESSION_START_SUB), {
+        // The pre-0.5 form is still in some users' settings and names a flag the
+        // CLI no longer parses; replace it rather than sitting beside it.
+        replacing: ["gradient scan --detach", cmd => isGradientHookFor(cmd, SESSION_START_SUB)],
+      });
+      await installHook(projectDir, "SessionEnd", gradientHookCommand(SESSION_END_SUB), {
+        replacing: [cmd => isGradientHookFor(cmd, SESSION_END_SUB)],
+      });
+      projects.add(key);
+      config.optimizeProjects = [...projects].sort();
+      delete config.scanOnSessionStart;
       await saveConfig(config, home);
+      return { on: true, settingsPath, detail: FEATURE_PURPOSE.optimize };
     } catch (error) {
       await removeHook(projectDir, "SessionStart", cmd => isGradientHookFor(cmd, SESSION_START_SUB)).catch(() => undefined);
       await removeHook(projectDir, "SessionEnd", cmd => isGradientHookFor(cmd, SESSION_END_SUB)).catch(() => undefined);
       throw error;
     }
-    return {
-      on: true,
-      settingsPath,
-      detail: FEATURE_PURPOSE.optimize,
-    };
   }
 
-  config.scanOnSessionStart = false;
+  projects.delete(key);
+  config.optimizeProjects = [...projects].sort();
+  delete config.scanOnSessionStart;
   await saveConfig(config, home);
   await removeHook(projectDir, "SessionEnd", cmd => isGradientHookFor(cmd, SESSION_END_SUB));
   const settingsPath = await removeHook(projectDir, "SessionStart", cmd => isGradientHookFor(cmd, SESSION_START_SUB));

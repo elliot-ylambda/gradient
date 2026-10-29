@@ -88,14 +88,19 @@ function runnerWord(scriptPath: string): string {
  * A copied skill directory is the user's own and never moves, so it is named
  * directly. A plugin is versioned, so it is resolved at fire time instead.
  */
-export function gradientCommand(opts: { execPath?: string; scriptPath?: string | null } = {}): string {
+export function gradientRuntimePaths(opts: { execPath?: string; scriptPath?: string | null } = {}): { execPath: string; scriptPath: string } {
   const scriptPath = opts.scriptPath === undefined ? ownBinPath() : opts.scriptPath;
   if (!scriptPath) {
     throw new Error(
       "cannot locate gradient's own entry point, so any hook written now would never run — reinstall the gradient plugin or skill",
     );
   }
-  return `${shellQuote(opts.execPath ?? process.execPath)} ${runnerWord(scriptPath)}`;
+  return { execPath: opts.execPath ?? process.execPath, scriptPath };
+}
+
+export function gradientCommand(opts: { execPath?: string; scriptPath?: string | null } = {}): string {
+  const { execPath, scriptPath } = gradientRuntimePaths(opts);
+  return `${shellQuote(execPath)} ${runnerWord(scriptPath)}`;
 }
 
 /** The command an installed hook should run for one gradient subcommand. Every

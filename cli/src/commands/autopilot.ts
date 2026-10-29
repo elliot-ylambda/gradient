@@ -1,5 +1,5 @@
 import { access } from "node:fs/promises";
-import { boundedAutopilotBudget, loadConfig, saveConfig, projectKey } from "../config.js";
+import { assertClaudeHooks, boundedAutopilotBudget, loadConfig, saveConfig, projectKey, supportsClaudeHooks } from "../config.js";
 import { installHook, removeHook, hookInstalled } from "../core/settings.js";
 import { latestState } from "../core/state.js";
 import { playbookPath, projectPlaybookPath, loadProjectPlaybook, clampMode, loadPlaybookPin, pinState, type PinState } from "../core/playbook.js";
@@ -41,6 +41,7 @@ export async function setAutopilotMode(
     const settingsPath = await removeHook(projectDir, "Stop", cmd => isGradientHookFor(cmd, RESPOND_SUB));
     return { mode, hookInstalled: false, settingsPath };
   }
+  assertClaudeHooks(config);
   const settingsPath = await installHook(projectDir, "Stop", gradientHookCommand(RESPOND_SUB),
     { timeout: HOOK_TIMEOUT_S, replacing: [cmd => isGradientHookFor(cmd, RESPOND_SUB)] });
   projects[key] = mode;
@@ -67,6 +68,7 @@ export interface AutopilotStatus {
   projectPlaybookPin: PinState;
   projectMalformed: boolean;
   hookInstalled: boolean;
+  /** Latest recorded session across projects; the state schema does not record project ownership. */
   recent: AutopilotLogEntry[];
 }
 
@@ -83,7 +85,7 @@ export async function autopilotStatus(
     playbookExists = false;
   }
 
-  const mode = (config.autopilotProjects?.[projectKey(projectDir)] ?? "off") as AutopilotMode;
+  const mode = (supportsClaudeHooks(config) ? config.autopilotProjects?.[projectKey(projectDir)] ?? "off" : "off") as AutopilotMode;
   const project = await loadProjectPlaybook(projectDir);
   let effectiveMode = mode;
   let projectMalformed = false;

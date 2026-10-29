@@ -1,13 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { join as pjoin } from "node:path";
-import { respond, type RespondDeps, type StopHookInput } from "./respond.js";
+import { autopilotBackend, respond, type RespondDeps, type StopHookInput } from "./respond.js";
 import { loadState, saveState, freshState } from "../core/state.js";
 import type { LLMBackend } from "../llm/backend.js";
 import type { Config } from "../core/types.js";
 import { projectKey } from "../config.js";
+import { CodexCliBackend } from "../llm/codexCli.js";
 
 const tmpHome = () => mkdtemp(join(tmpdir(), "grad-home-"));
 
@@ -100,6 +101,43 @@ describe("respond gates (all fail-open)", () => {
 });
 
 describe("respond judge outcomes", () => {
+  it("honors an explicitly selected Codex judge backend", async () => {
+    const home = await tmpHome();
+    const available = vi.spyOn(CodexCliBackend.prototype, "available").mockResolvedValue(true);
+    const complete = vi.spyOn(CodexCliBackend.prototype, "complete").mockResolvedValue(CONTINUE);
+    try {
+      const result = await run({ home, backend: undefined, config: consent(input.cwd!, "nudge", { backend: "codex-cli" }) });
+      expect(result).toEqual({ decision: "block", reason: "Continue." });
+      expect(available).toHaveBeenCalledOnce();
+      expect(complete).toHaveBeenCalledOnce();
+    } finally {
+      available.mockRestore();
+      complete.mockRestore();
+    }
+  });
+
+  /** Transcript tails reach a different provider only when the user pinned it. */
+  it("never falls back to Codex when no backend is pinned", async () => {
+    const home = await tmpHome();
+    const available = vi.spyOn(CodexCliBackend.prototype, "available").mockResolvedValue(true);
+    const complete = vi.spyOn(CodexCliBackend.prototype, "complete").mockResolvedValue(CONTINUE);
+    try {
+      const backend = await autopilotBackend({ autopilotProjects: {} });
+      expect(backend?.name).not.toBe("codex-cli");
+      expect((await autopilotBackend({ backend: "codex-cli" }))?.name).toBe("codex-cli");
+    } finally {
+      available.mockRestore();
+      complete.mockRestore();
+    }
+  });
+
+  it("does not invoke a judge from leftover Claude hooks when targets are Codex-only", async () => {
+    const home = await tmpHome();
+    const complete = vi.fn(async () => CONTINUE);
+    const result = await run({ home, config: consent(input.cwd!, "nudge", { targets: ["codex"] }), backend: { name: "fake", available: async () => true, complete } });
+    expect(result.decision).toBe("allow");
+    expect(complete).not.toHaveBeenCalled();
+  });
   it("continue → block with a fixed trusted nudge, state updated & logged", async () => {
     const home = await tmpHome();
     const r = await run({ home });

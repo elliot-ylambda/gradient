@@ -56,6 +56,12 @@ describe("config", () => {
     await expect(saveConfig({ boardProjects: ["relative/path"] }, home))
       .rejects.toThrow(/boardProjects/);
   });
+  it("bounds project-specific optimize consent", async () => {
+    const home = await mkdtemp(join(tmpdir(), "gradient-config-"));
+    await saveConfig({ optimizeProjects: ["/repo/a"] }, home);
+    expect((await loadConfig(home)).optimizeProjects).toEqual(["/repo/a"]);
+    await expect(saveConfig({ optimizeProjects: ["relative/path"] }, home)).rejects.toThrow(/optimizeProjects/);
+  });
 });
 
 describe("assistant target config", () => {

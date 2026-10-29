@@ -1,15 +1,16 @@
-# gradient — Claude Code plugin
+# Gradient — Claude Code plugin
 
-Installs the gradient runner (bundled — no npm, no PATH, no global install) and
-three skills: `/gradient:optimize`, `/gradient:report`, `/gradient:features`.
+A local setup checkup, distributed as a bundled runner and three skills:
+`/gradient:optimize`, `/gradient:report`, and `/gradient:features`.
 
-These three `SKILL.md` files are the authored source for both shipping shapes;
-`skills/gradient-*` in the repository root is generated from them for Codex,
-which has no plugin marketplace.
+These SKILL.md files are the authored source. `make artifacts` generates the
+Codex copies in `skills/gradient-*` with their own runner references.
 
-**Installing this plugin runs nothing.** No hooks, no MCP servers, no settings
-changes. Every automation gradient can set up stays opt-in behind the `features` skill,
-and is reversible.
+Installing enables no hooks or background work. Node.js 20+ is required.
+The checkup makes no model or network calls. Continuity returns a local checkpoint to the existing Claude session;
+autopilot calls a separate configured model judge. Board and reports stay local.
+Background hooks are opt-in per project
+and currently implemented for Claude Code only.
 
-The bundled CLI makes no network calls and needs no API key. Only autopilot's
-Stop-hook judge calls a model, and only after you turn it on for a project.
+See the [root README](../README.md) for installation, the checkup workflow,
+compatibility, and data boundaries.

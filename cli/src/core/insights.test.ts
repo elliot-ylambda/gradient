@@ -108,9 +108,12 @@ describe("buildRecommendations", () => {
       permissionPrompts: 12,
     });
     const all = recommendations.map(recommendation => recommendation.line).join("\n");
-    expect(all).toContain("gradient on autopilot");
-    expect(all).toContain("gradient on continuity");
-    expect(all).toContain("gradient remove dead");
+    expect(all).toContain("native continuation and scheduled tasks");
+    expect(all).toContain("native compaction and memory");
+    expect(all).toContain("no explicit invocation of dead observed");
+    expect(all).not.toContain("gradient on");
+    expect(all).not.toContain("gradient remove");
+    expect(all).not.toContain("unused 30d");
     expect(all).toContain("defaultModel");
     expect(all).toContain("fewer-permission-prompts");
     expect(all).toContain("12 approval prompt(s)");
@@ -133,13 +136,13 @@ describe("buildRecommendations", () => {
     expect(quiet.some(r => r.metric === "permissions")).toBe(false);
   });
 
-  it("reports avoided nudges when autopilot is on", () => {
+  it("labels aggregate nudges across projects when autopilot is on here", () => {
     const recommendations = buildRecommendations(metrics, {
       autopilotMode: "nudge",
       avoided: 7,
       unusedArtifacts: [],
     });
-    expect(recommendations.map(recommendation => recommendation.line).join("\n")).toContain("7 nudge(s) avoided");
+    expect(recommendations.map(recommendation => recommendation.line).join("\n")).toContain("7 nudge(s) sent across projects (7d)");
   });
 
   it("routes effort churn even without model switches", () => {

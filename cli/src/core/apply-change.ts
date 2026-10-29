@@ -1,8 +1,10 @@
 import { sep } from "node:path";
 import type { Change } from "./findings.js";
 import { type Run, sha256, snapshot } from "./run.js";
-import { safeReadFile, safeUnlink, safeWriteFile } from "./safeFs.js";
+import { safeReadFile, safeWriteFile } from "./safeFs.js";
 import { assertInside, redact } from "./security.js";
+import { importsAgentsMd } from "./instructions.js";
+import { managedMemoryGuard } from "./discovery.js";
 
 /**
  * Execute one `Change` against a file gradient does not own.
@@ -83,7 +85,7 @@ export interface ChangeContext {
 export interface ChangeOutcome {
   path: string;
   /** sha256 of the file as this change left it; recorded for undo. */
-  sha256: string;
+  sha256: string | null;
 }
 
 function assertContained(context: ChangeContext, path: string): void {
@@ -111,8 +113,7 @@ async function write(context: ChangeContext, path: string, content: string): Pro
  *
  * - a line edit must find the exact text it was proposed for, at that line;
  * - `prepend-import` is idempotent — the import is either absent or already there;
- * - `create` refuses to overwrite;
- * - `delete-file` refuses a file gradient did not generate.
+ * - `create` refuses to overwrite.
  *
  * That is what makes concurrent sessions safe, and `board` finds five live
  * sessions in this repository as a matter of course. There used to be a
@@ -124,13 +125,18 @@ async function write(context: ChangeContext, path: string, content: string): Pro
  */
 export async function applyChange(context: ChangeContext, change: Change): Promise<ChangeOutcome> {
   assertContained(context, change.path);
+  const managedMemory = await managedMemoryGuard(context.projectDir, { home: context.run.home });
+  if (await managedMemory(change.path)) throw new Error("assistant-managed memory is read-only; Gradient will not edit or delete it");
   const current = await read(context, change.path);
 
   switch (change.op) {
     case "prepend-import": {
       const line = (change.after ?? "").trim();
       if (!/^@[A-Za-z0-9._/-]+$/.test(line)) throw new Error(`refusing to prepend a non-import line: ${line}`);
-      if (current !== null && current.includes(line)) return { path: change.path, sha256: sha256(current) };
+      const alreadyImported = current !== null && (line === "@AGENTS.md"
+        ? importsAgentsMd(current)
+        : current.split("\n").some(existing => existing.trim() === line));
+      if (alreadyImported) return { path: change.path, sha256: sha256(current!) };
       return write(context, change.path, current === null ? `${line}\n` : `${line}\n\n${current}`);
     }
 
@@ -170,33 +176,11 @@ export async function applyChange(context: ChangeContext, change: Change): Promi
       return write(context, change.path, content);
     }
 
-    case "delete-file": {
-      if (current === null) return { path: change.path, sha256: sha256("") };
-      // Only ever a file gradient generated. Without this an id collision, or a
-      // manifest a repository committed, could point removal at anything.
-      if (!current.slice(0, 2_000).includes("<!-- gradient:")) {
-        throw new Error(`refusing to delete a file gradient did not generate: ${change.path}`);
-      }
-      await snapshot(context.run, change.path, context.base);
-      await safeUnlink(context.base, change.path);
-      return { path: change.path, sha256: sha256("") };
-    }
-
     case "splice-line":
       // Tagged-line insertion into a shared file goes through applySuggestion,
       // which owns the manifest entry that makes the line removable.
       throw new Error("splice-line changes are applied through applySuggestion");
   }
-}
-
-/** Whether `--auto` may apply this change without a human looking at it. */
-export function autoApplicable(change: Change): { ok: boolean; reason?: string } {
-  if (change.op === "replace-line" || change.op === "delete-line") {
-    return { ok: false, reason: "edits prose a person wrote" };
-  }
-  if (change.op === "delete-file") return { ok: true };
-  if (change.op === "prepend-import" || change.op === "create") return { ok: true };
-  return { ok: false, reason: `op ${change.op} is not applied unattended` };
 }
 
 /** Re-derive a change's trusted root. A finding names a path; only this decides

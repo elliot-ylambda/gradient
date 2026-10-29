@@ -1,5 +1,9 @@
 import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import type { Suggestion } from "./types.js";
+import type { Finding } from "./findings.js";
+import { projectCacheDir } from "../config.js";
 import { gradientDir } from "./manifest.js";
 import { safeReadFile, safeWriteFile } from "./safeFs.js";
 import { redact, sanitizeName, stripUnsafeControls } from "./security.js";
@@ -107,4 +111,53 @@ export async function addDismissal(
     throw new Error(`dismissal state exceeds ${DISMISSAL_MAX_BYTES} byte cap`);
   }
   await safeWriteFile(projectDir, dismissedPath(projectDir), data, { mode: 0o600 });
+}
+
+export interface FindingDismissal {
+  id: string;
+  evidenceHash: string;
+  dismissedAt: string;
+}
+
+function findingDismissalPath(projectDir: string, home: string): string {
+  return join(projectCacheDir(projectDir, home), "finding-dismissals.json");
+}
+
+/** Evidence and the proposed effect form the decision. A materially changed
+ * proposal with the same stable id should be reviewable again; counts, sizes
+ * and dates in the evidence drift on every run and are not a material change,
+ * and neither is the assistant selection a run happened to use. */
+export function findingEvidenceHash(finding: Finding): string {
+  return createHash("sha256").update(JSON.stringify({
+    evidence: finding.evidence.replace(/\d+/g, "#"),
+    changes: finding.changes,
+    payload: finding.suggestion?.payload,
+  })).digest("hex");
+}
+
+export async function loadFindingDismissals(projectDir: string, home = homedir()): Promise<FindingDismissal[]> {
+  try {
+    const entries: unknown = JSON.parse(await safeReadFile(home, findingDismissalPath(projectDir, home), {
+      maxBytes: DISMISSAL_MAX_BYTES,
+    }));
+    if (!Array.isArray(entries) || entries.length > DISMISSAL_MAX_ENTRIES) return [];
+    return entries.filter((entry): entry is FindingDismissal =>
+      entry && typeof entry.id === "string" && /^[a-f0-9]{12}$/.test(entry.id) &&
+      typeof entry.evidenceHash === "string" && /^[a-f0-9]{64}$/.test(entry.evidenceHash) &&
+      typeof entry.dismissedAt === "string" && Number.isFinite(Date.parse(entry.dismissedAt)));
+  } catch {
+    return [];
+  }
+}
+
+export function isFindingDismissed(finding: Finding, entries: FindingDismissal[]): boolean {
+  return entries.some(entry => entry.id === finding.id && entry.evidenceHash === findingEvidenceHash(finding));
+}
+
+export async function dismissFinding(projectDir: string, finding: Finding, home = homedir()): Promise<void> {
+  const entries = (await loadFindingDismissals(projectDir, home)).filter(entry => entry.id !== finding.id);
+  entries.push({ id: finding.id, evidenceHash: findingEvidenceHash(finding), dismissedAt: new Date().toISOString() });
+  await safeWriteFile(home, findingDismissalPath(projectDir, home), JSON.stringify(entries.slice(-DISMISSAL_MAX_ENTRIES)), {
+    mode: 0o600,
+  });
 }

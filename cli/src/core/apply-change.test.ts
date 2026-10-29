@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyChange, autoApplicable, baseFor, screenInstruction } from "./apply-change.js";
+import { applyChange, baseFor, screenInstruction } from "./apply-change.js";
 import { beginRun, type Run } from "./run.js";
 import type { Change } from "./findings.js";
 
@@ -150,45 +150,9 @@ describe("applyChange", () => {
     }))).rejects.toThrow(/shell or network command/);
   });
 
-  it("deletes only a file gradient generated", async () => {
-    const ctx = await context();
-    const mine = join(ctx.projectDir, "mine.md");
-    const theirs = join(ctx.projectDir, "theirs.md");
-    await writeFile(mine, "<!-- gradient:generated id=1 name=mine -->\nbody\n");
-    await writeFile(theirs, "hand written\n");
-
-    await applyChange(ctx, change({ op: "delete-file", path: mine }));
-    await expect(readFile(mine, "utf8")).rejects.toThrow();
-
-    await expect(applyChange(ctx, change({ op: "delete-file", path: theirs })))
-      .rejects.toThrow(/did not generate/);
-    expect(await readFile(theirs, "utf8")).toBe("hand written\n");
-  });
-
   it("refuses a path outside its trusted root", async () => {
     const ctx = await context();
     await expect(applyChange(ctx, change({ op: "delete-line", path: "/etc/passwd", line: 1 })))
       .rejects.toThrow();
-  });
-});
-
-describe("autoApplicable", () => {
-  it("never edits prose a person wrote", () => {
-    expect(autoApplicable(change({ op: "replace-line", path: "/p/CLAUDE.md" })).ok).toBe(false);
-    expect(autoApplicable(change({ op: "delete-line", path: "/p/CLAUDE.md" })).ok).toBe(false);
-  });
-
-  it("allows additive and gradient-owned operations", () => {
-    expect(autoApplicable(change({ op: "prepend-import", path: "/p/CLAUDE.md" })).ok).toBe(true);
-    expect(autoApplicable(change({ op: "delete-file", path: "/p/.claude/skills/x/SKILL.md" })).ok).toBe(true);
-  });
-});
-
-describe("baseFor", () => {
-  it("routes a home path to home and everything else to the project", () => {
-    expect(baseFor(change({ op: "create", path: "/home/u/.claude/rules/x.md" }), "/proj", "/home/u")).toBe("/home/u");
-    expect(baseFor(change({ op: "create", path: "/proj/CLAUDE.md" }), "/proj", "/home/u")).toBe("/proj");
-    // A sibling directory sharing the home prefix is not inside home.
-    expect(baseFor(change({ op: "create", path: "/home/user2/x.md" }), "/proj", "/home/u")).toBe("/proj");
   });
 });

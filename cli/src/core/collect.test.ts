@@ -42,6 +42,15 @@ describe("collect helpers", () => {
 });
 
 describe("collect", () => {
+  it("reads the configured Claude home while keeping an explicit fixture home isolated", async () => {
+    const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+    const claudeHome = await mkdtemp(join(tmpdir(), "grad-custom-claude-"));
+    const project = join(claudeHome, "projects", encodeProjectDir("/p/x"));
+    await mkdir(project, { recursive: true });
+    await writeFile(join(project, "custom.jsonl"), "{}");
+    expect(await collect({ scope: "project", projectPath: "/p/x", home })).toEqual([]);
+    expect((await collect({ scope: "project", projectPath: "/p/x", home, claudeHome })).map(p => p.split("/").pop())).toEqual(["custom.jsonl"]);
+  });
   it("project scope sweeps the project's claude-worktrees sibling dirs", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-"));
     const root = join(home, ".claude", "projects");

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FEATURES, isFeatureName, setFeature } from "./features.js";
-import { loadConfig, projectKey } from "../config.js";
+import { loadConfig, projectKey, saveConfig } from "../config.js";
 import { hookInstalled, installHook } from "../core/settings.js";
 import { isGradientHookFor } from "../core/hookBinary.js";
 
@@ -63,12 +63,14 @@ describe("setFeature: optimize", () => {
     const on = await setFeature("optimize", true, dir, { home });
     expect(on.on).toBe(true);
     expect(await hookInstalled(dir, "SessionStart", cmd => isGradientHookFor(cmd, "session-start"))).toBe(true);
-    expect((await loadConfig(home)).scanOnSessionStart).toBe(true);
+    expect((await loadConfig(home)).optimizeProjects).toEqual([projectKey(dir)]);
+    // Which assistants to check stays the user's first-checkup choice.
+    expect((await loadConfig(home)).targets).toBeUndefined();
 
     const off = await setFeature("optimize", false, dir, { home });
     expect(off.on).toBe(false);
     expect(await hookInstalled(dir, "SessionStart", cmd => isGradientHookFor(cmd, "session-start"))).toBe(false);
-    expect((await loadConfig(home)).scanOnSessionStart).toBe(false);
+    expect((await loadConfig(home)).optimizeProjects).toEqual([]);
   });
 
   // The pre-0.5 form names a flag the CLI no longer parses, so leaving it beside
@@ -85,6 +87,30 @@ describe("setFeature: optimize", () => {
       entry.hooks.map(hook => hook.command));
     expect(commands).toHaveLength(1);
     expect(commands[0]).not.toContain("--detach");
+  });
+});
+
+describe("assistant support and project consent", () => {
+  it.each(FEATURES)("refuses Codex-only %s activation before changing files", async feature => {
+    const dir = await temp("grad-feat-codex-");
+    const home = await temp("grad-feat-home-");
+    await saveConfig({ targets: ["codex"] }, home);
+    await expect(setFeature(feature, true, dir, { home })).rejects.toThrow(/currently use Claude Code hooks only/);
+    await expect(access(join(dir, ".claude"))).rejects.toThrow();
+    expect(await loadConfig(home)).toEqual({ targets: ["codex"] });
+  });
+
+  it("keeps optimize consent independent between projects and allows off after changing assistants", async () => {
+    const a = await temp("grad-feat-a-");
+    const b = await temp("grad-feat-b-");
+    const home = await temp("grad-feat-home-");
+    await setFeature("optimize", true, a, { home });
+    await setFeature("optimize", true, b, { home });
+    await saveConfig({ ...await loadConfig(home), targets: ["codex"] }, home);
+    await setFeature("optimize", false, a, { home });
+    expect((await loadConfig(home)).optimizeProjects).toEqual([projectKey(b)]);
+    expect(await hookInstalled(a, "SessionEnd", cmd => isGradientHookFor(cmd, "session-end"))).toBe(false);
+    expect(await hookInstalled(b, "SessionEnd", cmd => isGradientHookFor(cmd, "session-end"))).toBe(true);
   });
 });
 

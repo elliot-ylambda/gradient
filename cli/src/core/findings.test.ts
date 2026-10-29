@@ -103,55 +103,34 @@ describe("buildFindings", () => {
     expect(found.detail).toContain("scripts/build.sh");
   });
 
-  it("separates a skill that cannot load from one that merely will not be picked", async () => {
+  it("reports metadata observations without claiming a skill cannot load or be selected", async () => {
     const home = await tree({});
     // Unterminated frontmatter is the only case that genuinely stops a load.
     const broken = await tree({
       ".claude/skills/a/SKILL.md": "---\nname: a\ndescription: d\nBody with no close\n",
     });
     const [blocking] = buildFindings(await inputFor(broken, home));
-    expect(blocking.severity).toBe("high");
-    expect(blocking.title).toContain("will not load");
+    expect(blocking.severity).toBe("low");
+    expect(blocking.title).toContain("frontmatter")
+    expect(blocking.detail).toContain("still load");
 
-    // A non-standard key is a portability problem, never a high-severity one.
+    // Unknown metadata is ignored by the assistant; it is not a setup defect.
     const nonStandard = await tree({
       ".claude/skills/c/SKILL.md": "---\nname: c\ndescription: d\nversion: 1.0.0\n---\nBody\n",
     });
-    const [portability] = buildFindings(await inputFor(nonStandard, home));
-    expect(portability.severity).toBe("medium");
-    expect(portability.detail).toContain("Agent Skills spec");
-    // The severity was already right; the headline was not. An extra key does
-    // not affect selection at all, and "unlikely to be selected" is the same
-    // false alarm the severity was lowered to avoid — moved into the one line
-    // most readers actually read.
-    expect(portability.title).not.toContain("unlikely to be selected");
-    expect(portability.title).toContain("frontmatter outside the spec");
-    // Evidence must cite the thing the finding is about. Reporting a healthy
-    // description length as the evidence for a key problem points the reader
-    // at the wrong number to fix.
-    expect(portability.evidence).toContain("version");
-    expect(portability.evidence).not.toContain("description chars");
-
-    // Two offending keys, one explanation. The per-problem map repeated the
-    // whole 30-word sentence once per key.
-    const twoKeys = await tree({
-      ".claude/skills/d/SKILL.md": "---\nname: d\ndescription: d\nversion: 1.0.0\nrequires: x\n---\nBody\n",
-    });
-    const [grouped] = buildFindings(await inputFor(twoKeys, home));
-    expect(grouped.detail).toContain("`version` and `requires` are outside");
-    expect(grouped.detail.match(/Agent Skills spec/g)).toHaveLength(1);
+    expect(buildFindings(await inputFor(nonStandard, home))).toEqual([]);
 
     const vague = await tree({
       ".claude/skills/b/SKILL.md": `---\nname: b\ndescription: ${"y".repeat(2000)}\n---\nBody\n`,
     });
     const [soft] = buildFindings(await inputFor(vague, home));
-    expect(soft.severity).toBe("medium");
-    expect(soft.title).toContain("unlikely to be selected");
+    expect(soft.severity).toBe("low");
+    expect(soft.title).toContain("description");
     // A description problem is the case where the char count IS the evidence.
     expect(soft.evidence).toContain("description chars");
   });
 
-  it("proposes deleting a generated skill nothing has ever invoked", async () => {
+  it("reports absent observed invocations without proposing deletion", async () => {
     const dir = await tree({
       ".claude/skills/ship-it/SKILL.md": "---\nname: ship-it\ndescription: Ship the thing\n---\n<!-- gradient:generated id=1 name=ship-it -->\nBody\n",
     });
@@ -160,8 +139,9 @@ describe("buildFindings", () => {
       uses: 0, realizedMinutesSaved: 0, suggestRemoval: true,
     }];
     const found = buildFindings(await inputFor(dir, await tree({}), { adoption }));
-    const unused = found.find(f => f.title.includes("never been invoked"));
-    expect(unused?.changes[0]).toMatchObject({ op: "delete-file", path: join(dir, ".claude/skills/ship-it/SKILL.md") });
+    const unused = found.find(f => f.title.includes("No explicit invocation"));
+    expect(unused?.changes).toEqual([]);
+    expect(unused?.detail).toContain("Automatic selection");
   });
 
   /**
@@ -182,13 +162,13 @@ describe("buildFindings", () => {
       uses: 0, realizedMinutesSaved: 0, suggestRemoval: true,
     }];
     const found = buildFindings(await inputFor(dir, await tree({}), { adoption }));
-    const unused = found.find(f => f.title.includes("never been invoked"))!;
+    const unused = found.find(f => f.title.includes("No explicit invocation"))!;
     // Still reported — it is still unused and still costing context.
     expect(unused).toBeDefined();
     // ...but with no change gradient would refuse to carry out.
     expect(unused.changes).toEqual([]);
-    expect(unused.detail).toContain("will not delete it for you");
-    expect(unused.detail).toContain("rm ");
+    expect(unused.detail).toContain("never removes it automatically");
+    expect(unused.detail).not.toContain("rm ");
   });
 
   // The one thing neither assistant can tell you about your own instructions.
@@ -243,7 +223,7 @@ describe("buildFindings", () => {
       ".claude/rules/testing.md": "- Always run the full test suite before committing\n",
     });
     const found = buildFindings(await inputFor(dir, await tree({})));
-    const duplicate = found.find(f => f.title.includes("more than one loaded file"));
+    const duplicate = found.find(f => f.title.includes("multiple inspected files"));
     expect(duplicate).toBeDefined();
     expect(duplicate!.evidence).toContain("CLAUDE.md:1");
   });

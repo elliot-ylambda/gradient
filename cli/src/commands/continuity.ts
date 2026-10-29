@@ -1,6 +1,6 @@
 import { hookInstalled, installHook, removeHook } from "../core/settings.js";
 import { homedir } from "node:os";
-import { loadConfig, projectKey, saveConfig } from "../config.js";
+import { assertClaudeHooks, loadConfig, projectKey, saveConfig, supportsClaudeHooks } from "../config.js";
 import { safeUnlink } from "../core/safeFs.js";
 import { progressPath } from "./checkpoint.js";
 import { gradientHookCommand, isGradientHookFor } from "../core/hookBinary.js";
@@ -20,6 +20,7 @@ export async function setContinuity(
   const projects = new Set(config.continuityProjects ?? []);
   const key = projectKey(projectDir);
   if (on) {
+    assertClaudeHooks(config);
     try {
       await installHook(projectDir, "PreCompact", gradientHookCommand(CHECKPOINT_SUB),
         { replacing: [cmd => isGradientHookFor(cmd, CHECKPOINT_SUB)] });
@@ -57,7 +58,7 @@ export async function continuityStatus(
   opts: { home?: string } = {},
 ): Promise<{ checkpoint: boolean; recap: boolean }> {
   const config = await loadConfig(opts.home);
-  const consented = (config.continuityProjects ?? []).includes(projectKey(projectDir));
+  const consented = supportsClaudeHooks(config) && (config.continuityProjects ?? []).includes(projectKey(projectDir));
   if (!consented) return { checkpoint: false, recap: false };
   return {
     checkpoint: await hookInstalled(projectDir, "PreCompact", cmd => isGradientHookFor(cmd, CHECKPOINT_SUB)),

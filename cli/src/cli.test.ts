@@ -163,7 +163,7 @@ describe("optimize dispatch", () => {
     const lines: string[] = [];
     expect(await main(["optimize"], { log: line => lines.push(line) })).toBe(0);
     const out = lines.join("\n");
-    expect(out).toContain("drift");
+    expect(out).toContain("choose a fix");
     expect(out).toContain("AGENTS.md is not reaching Claude Code");
     expect(out).toContain(`${displayCommand()} optimize --apply abc123`);
   });
@@ -174,7 +174,7 @@ describe("optimize dispatch", () => {
     });
     const lines: string[] = [];
     await main(["optimize"], { log: line => lines.push(line) });
-    expect(lines.join("\n")).toContain("nothing to change");
+    expect(lines.join("\n")).toContain("no findings");
   });
 
   it("emits JSON with no banner so an agent can parse stdout", async () => {
@@ -182,7 +182,7 @@ describe("optimize dispatch", () => {
     expect(await main(["optimize", "--json"], { log: line => lines.push(line) })).toBe(0);
     const parsed = JSON.parse(lines.join("\n"));
     expect(parsed.findings[0].id).toBe("abc123");
-    expect(parsed.findings[0].autoEligible).toBe(true);
+    expect(parsed.findings[0].autoEligible).toBeUndefined();
   });
 
   it("passes the target flag through", async () => {
@@ -191,12 +191,21 @@ describe("optimize dispatch", () => {
     expect(vi.mocked(optimize).mock.calls[0][1]).toMatchObject({ target: "both" });
   });
 
+  /** `--auto` is a propose-only compatibility flag: alone it applies nothing,
+   *  and beside `--apply` it must not swallow the ids the user named. */
+  it("treats --auto as propose-only without dropping named fixes", async () => {
+    vi.mocked(optimize).mockClear();
+    await main(["optimize", "--auto"], { log: () => {} });
+    await main(["optimize", "--auto", "--apply", "abc123"], { log: () => {} });
+    expect(vi.mocked(optimize).mock.calls.map(call => call[1]!.apply)).toEqual([[], ["abc123"]]);
+  });
+
   it("reports what a run restored, and what it refused to touch", async () => {
     vi.mocked(undo).mockResolvedValueOnce({
       restored: ["/repo/CLAUDE.md"], conflicted: ["/repo/AGENTS.md"],
     });
     const lines: string[] = [];
-    expect(await main(["optimize", "--undo", "20260813-000000-abcdef"], { log: line => lines.push(line) })).toBe(0);
+    expect(await main(["optimize", "--undo", "20260813-000000-abcdef"], { log: line => lines.push(line) })).toBe(1);
     const out = lines.join("\n");
     expect(out).toContain("restored");
     expect(out).toContain("changed since the run, left alone");
@@ -293,7 +302,7 @@ describe("the apply line", () => {
     commandBearing: false,
     changes,
   });
-  const change = [{ op: "delete-file" as const, path: "/tmp/x", assistant: "claude-code" as const }];
+  const change = [{ op: "create" as const, path: "/tmp/x", assistant: "claude-code" as const }];
 
   /**
    * `findings.slice(0, 3)` took the first three regardless of whether they
@@ -318,7 +327,7 @@ describe("the apply line", () => {
     renderFindings([finding("aaa", []), finding("bbb", [])], line => lines.push(line));
     const all = lines.join("\n");
     expect(all).not.toContain("--apply");
-    expect(all).toContain("nothing here applies automatically");
+    expect(all).toContain("these observations need review");
     // The report is still useful, so the json hand-off must survive.
     expect(all).toContain("optimize --json");
   });
@@ -331,17 +340,12 @@ describe("the features block in optimize", () => {
    * a different command. The person acting on findings is the person deciding
    * what to automate.
    */
-  it("names each feature, and sells only the ones that are off", async () => {
-    const home = await mkdtemp(join(tmpdir(), "gradient-feat-"));
+  it("keeps the checkup focused and shows only enabled optional hooks", async () => {
     const lines: string[] = [];
-    await main(["optimize", "--target", "both"], { log: l => lines.push(l), home });
+    await main(["optimize"], { log: line => lines.push(line) });
     const out = lines.join("\n");
-    expect(out).toContain("continuity");
-    expect(out).toContain("board");
-    // An `off` row with no purpose is a switch nobody can evaluate...
-    expect(out).toContain("cross-session digest on start and on prompt");
-    // ...and an `on` row is already doing its job, so it needs no pitch.
-    expect(out).not.toContain("checkpoint before compaction, recap on resume");
-    expect(out).toContain("on <feature>");
+    expect(out).toContain("optional Claude hooks enabled: continuity");
+    expect(out).not.toContain("cross-session digest on start and on prompt");
+    expect(out).not.toContain("on <feature>");
   });
 });

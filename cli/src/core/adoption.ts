@@ -1,5 +1,5 @@
 import type { ArtifactType, CommandEvent, Suggestion } from "./types.js";
-import { loadManifest } from "./manifest.js";
+import { loadManifest, manifestTarget } from "./manifest.js";
 import { countArtifactUses } from "./usage.js";
 import { perOccurrenceSeconds, type LeverageKind } from "./leverage.js";
 
@@ -50,6 +50,9 @@ export async function adoptionFromEvents(
       }) / 60,
     );
     const age = now - Date.parse(entry.createdAt);
+    const explicitInvocationsObservable = manifest.some(candidate =>
+      candidate.name === entry.name && manifestTarget(candidate) === "claude-code" &&
+      (candidate.type === "skill" || candidate.type === "command"));
     return {
       name: entry.name,
       type: entry.type,
@@ -57,7 +60,7 @@ export async function adoptionFromEvents(
       uses: usage.uses,
       lastUsed: usage.lastUsed,
       realizedMinutesSaved,
-      suggestRemoval: usage.uses === 0 && Number.isFinite(age) && age >= UNUSED_REMOVAL_DAYS * DAY_MS,
+      suggestRemoval: explicitInvocationsObservable && usage.uses === 0 && Number.isFinite(age) && age >= UNUSED_REMOVAL_DAYS * DAY_MS,
     };
   });
 }

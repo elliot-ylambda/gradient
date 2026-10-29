@@ -34,7 +34,7 @@ export function renderReport(report: Report): string[] {
   );
 
   if (insights.costs.length > 0) {
-    lines.push(`\n${c.bold("cost of unautomated habits")}`);
+    lines.push(`\n${c.bold("observed habits")}`);
     for (const cost of insights.costs) lines.push(`  ${c.violet("→")} ${cost.line}`);
   }
 
@@ -53,7 +53,9 @@ export function renderReport(report: Report): string[] {
   lines.push(...renderAutopilot(report));
 
   const featureLine = report.features
-    .map(feature => `${feature.name} ${feature.on ? c.ok(feature.detail ?? "on") : c.muted("off")}`)
+    .map(feature => `${feature.name} ${feature.supported === false
+      ? c.muted("unavailable (Gradient uses Claude Code hooks)")
+      : feature.on ? c.ok(feature.detail ?? "on") : c.muted(feature.detail ? `off (${feature.detail})` : "off")}`)
     .join("  ");
   lines.push(`\n${c.dim("features:")} ${featureLine}`);
 
@@ -66,14 +68,13 @@ function renderInstalled(report: Report): string[] {
   if (report.adoption.length === 0) return [];
   const lines = [`\n${c.bold("installed")}`];
   for (const artifact of report.adoption) {
-    const lastUsed = artifact.lastUsed ? artifact.lastUsed.slice(0, 10) : "never";
-    const realized = artifact.realizedMinutesSaved > 0 ? ` · ≈${artifact.realizedMinutesSaved}m saved` : "";
+    const lastUsed = artifact.lastUsed ? `last recorded ${artifact.lastUsed.slice(0, 10)}` : "no invocation recorded";
     const removal = artifact.suggestRemoval
-      ? c.coral(`  → unused 30d+, consider: gradient remove ${oneLine(artifact.name)}`)
+      ? c.coral(`  → review before removing: gradient remove ${oneLine(artifact.name)}`)
       : "";
     lines.push(
       `  ${c.bold(oneLine(artifact.name))}  ` +
-      c.dim(`${artifact.uses} use(s)${realized} · last ${lastUsed}`) + removal,
+      c.dim(`${artifact.uses} recorded explicit invocation(s) · ${lastUsed}`) + removal,
     );
   }
   return lines;
@@ -116,6 +117,7 @@ function renderAutopilot(report: Report): string[] {
     lines.push(c.coral("  project gradient.md is malformed — autopilot is off here"));
   }
   if (!status.hookInstalled) lines.push(c.dim("  stop hook not installed in this project"));
+  if (status.recent.length) lines.push(c.dim("  recent decisions from the latest recorded session across projects:"));
   for (const entry of status.recent.slice(0, 3)) {
     lines.push(
       `  ${c.dim(oneLine(entry.ts))} ` +

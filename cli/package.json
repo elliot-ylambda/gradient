@@ -1,6 +1,6 @@
 {
   "name": "gradient.md",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "private": true,
   "description": "Keep your Claude Code and Codex setup honest: mine your own history, check the configuration they load, and apply the changes you approve.",
   "homepage": "https://gradient.md",
@@ -33,9 +33,9 @@
     "@anthropic-ai/sdk": "^0.112.3"
   },
   "devDependencies": {
+    "@types/node": "^20.16.0",
     "esbuild": "0.28.1",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10",
-    "@types/node": "^20.16.0"
+    "vitest": "^4.1.12"
   }
 }

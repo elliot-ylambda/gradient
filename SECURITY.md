@@ -2,12 +2,9 @@
 
 ## Supported versions
 
-Only the latest published release receives security fixes. The current
-supported release is `0.4.0`. Upgrade to `0.4.0` or newer: `0.1.0` has known
-isolation and installed-entrypoint defects; the
-older `0.2.x`/`0.3.0` releases lack the complete cross-target
-filesystem, process-isolation, approval, clarification, attention-mining, and
-notification hardening present in `0.3.1`.
+Only the [latest published release](https://github.com/elliot-ylambda/gradient/releases/latest)
+receives security fixes. The source branch may contain changes that have not
+been released; reinstall from the release after upgrading.
 
 ## Reporting a vulnerability
 
@@ -21,12 +18,13 @@ Do not include real credentials, private transcripts, or customer data.
 
 ## Security boundaries
 
-Gradient reads enabled local Claude Code and Codex transcript data and can send
-bounded excerpts to a trusted local `claude`/`codex` CLI or the Anthropic API.
+The setup checkup and reports read enabled local Claude Code and Codex transcript
+data without model calls or network requests. Separately enabled autopilot can
+send bounded excerpts to a trusted local `claude`/`codex` CLI or the Anthropic API.
 Codex subagent rollouts are excluded. Project-only preference mining can include
 bounded assistant questions. Common credential and PII formats are redacted,
 but redaction is not a complete data-loss-prevention system. Users should not
-scan or enable autopilot for material they are unwilling to send to the
+enable autopilot for material they are unwilling to send to the
 configured model.
 
 Local model CLIs are resolved from the user's `PATH` and are part of the trusted

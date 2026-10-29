@@ -15,7 +15,6 @@ import {
   extractEditedFiles,
   landedLine,
   locateRepo,
-  openPrs,
   refreshDelta,
   renderDigest,
   resolveBoardRoot,
@@ -265,34 +264,6 @@ describe("collectRepoState", () => {
   });
 });
 
-describe("openPrs", () => {
-  const payload = JSON.stringify([
-    { number: 18, headRefName: "codex/release-cleanup", baseRefName: "main" },
-  ]);
-
-  it("fetches, caches, then serves the fresh cache without re-running gh", async () => {
-    const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
-    let calls = 0;
-    const gh = async () => { calls++; return payload; };
-    const now = 1_000_000_000_000;
-    expect(await openPrs("/repo/a", { home, now, gh }))
-      .toEqual({ lines: ["#18 codex/release-cleanup → main"] });
-    expect(await openPrs("/repo/a", { home, now: now + 60_000, gh }))
-      .toEqual({ lines: ["#18 codex/release-cleanup → main"] });
-    expect(calls).toBe(1);
-  });
-
-  it("labels a stale cache when gh fails, and reports unavailable with no cache", async () => {
-    const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
-    const now = 1_000_000_000_000;
-    const failing = async () => { throw new Error("gh missing"); };
-    expect(await openPrs("/repo/a", { home, now, gh: failing })).toBe("unavailable");
-    await openPrs("/repo/a", { home, now, gh: async () => payload });
-    const later = await openPrs("/repo/a", { home, now: now + 12 * 60_000, gh: failing });
-    expect(later).toEqual({ lines: ["#18 codex/release-cleanup → main"], staleMs: 12 * 60_000 });
-  });
-});
-
 function stateFixture(overrides: Partial<BoardState> = {}): BoardState {
   return {
     root: "/repo",
@@ -309,7 +280,6 @@ function stateFixture(overrides: Partial<BoardState> = {}): BoardState {
     landed: ["PR #16 spec/plugin"],
     ahead: 0,
     behind: 2,
-    prs: { lines: ["#18 codex/release-cleanup → main"] },
     ...overrides,
   };
 }
@@ -322,7 +292,6 @@ describe("renderDigest", () => {
       "  editing: cli/package.json, Makefile",
       "• claude · spec/plugin · main checkout · idle (41m)",
       "landed on main (24h): PR #16 spec/plugin",
-      "open PRs: #18 codex/release-cleanup → main",
       "heads-up: your branch is 2 commits behind main",
     ].join("\n"));
   });
@@ -337,13 +306,6 @@ describe("renderDigest", () => {
     expect(renderDigest(withSelf)).toContain("(you) claude · spec/gradient-board · main checkout");
   });
 
-  it("states PR unavailability and stale-cache age instead of omitting", () => {
-    expect(renderDigest(stateFixture({ prs: "unavailable", behind: 0 })))
-      .toContain("open PRs: (PR info unavailable)");
-    expect(renderDigest(stateFixture({ prs: { lines: ["#18 x → main"], staleMs: 12 * 60_000 } })))
-      .toContain("open PRs (12m ago): #18 x → main");
-  });
-
   it("caps output at 25 lines", () => {
     const many = Array.from({ length: 30 }, (_, i) => ({
       agent: "claude" as const, sessionId: `s${i}`, branch: `b${i}`,
@@ -354,7 +316,13 @@ describe("renderDigest", () => {
 });
 
 describe("fingerprint and refresh", () => {
-  it("ignores mtimes and editing lists but catches merges, sessions, and PR changes", () => {
+  it("ignores legacy PR cache fields without a phantom refresh", () => {
+    const current = seenFromBoard(stateFixture(), 2000);
+    const legacy = { ...current, checkedAt: 1000, prs: ["#42 old cached PR"] };
+    expect(seenEqual(legacy, current)).toBe(true);
+  });
+
+  it("ignores mtimes and editing lists but catches merges and sessions", () => {
     const base = seenFromBoard(stateFixture(), 1000);
     const churn = seenFromBoard(stateFixture({
       sessions: stateFixture().sessions.map(s => ({ ...s, ageMs: s.ageMs + 60_000, editing: [] })),
@@ -378,35 +346,33 @@ describe("fingerprint and refresh", () => {
     const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
     const repo = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-repo-")));
     await initRepo(repo);
-    const gh = async () => "[]";
     const now = Date.now();
 
     await claudeTranscript(home, repo, "me");
-    const digest = await digestForSession(repo, "me", { home, now, gh });
+    const digest = await digestForSession(repo, "me", { home, now });
     expect(digest).toContain("gradient board — 0 other sessions in this repo");
 
     // Inside the floor: silent even though state will change below.
     await claudeTranscript(home, repo, "peer", { branch: "feature" });
-    expect(await refreshDelta(repo, "me", { home, now: now + 10_000, gh })).toBeNull();
+    expect(await refreshDelta(repo, "me", { home, now: now + 10_000 })).toBeNull();
     // Past the floor: the new session is announced once, then silence again.
-    expect(await refreshDelta(repo, "me", { home, now: now + 40_000, gh }))
+    expect(await refreshDelta(repo, "me", { home, now: now + 40_000 }))
       .toBe("board: claude session on feature joined");
-    expect(await refreshDelta(repo, "me", { home, now: now + 80_000, gh })).toBeNull();
+    expect(await refreshDelta(repo, "me", { home, now: now + 80_000 })).toBeNull();
   });
 
   it("garbage-collects seen files older than 7 days", async () => {
     const home = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-home-")));
     const repo = await realpath(await mkdtemp(join(tmpdir(), "gradient-board-repo-")));
     await initRepo(repo);
-    const gh = async () => "[]";
     const now = Date.now();
     await claudeTranscript(home, repo, "me");
-    await digestForSession(repo, "departed", { home, now, gh });
-    await digestForSession(repo, "me", { home, now, gh });
+    await digestForSession(repo, "departed", { home, now });
+    await digestForSession(repo, "me", { home, now });
     const departedSeen = join(boardStateDir(await realpath(repo), home), "seen", "departed");
     const eightDaysAgo = new Date(now - 8 * 24 * 3_600_000);
     await utimes(departedSeen, eightDaysAgo, eightDaysAgo);
-    await refreshDelta(repo, "me", { home, now: now + 40_000, gh });
+    await refreshDelta(repo, "me", { home, now: now + 40_000 });
     expect(existsSync(departedSeen)).toBe(false);
   });
 });
