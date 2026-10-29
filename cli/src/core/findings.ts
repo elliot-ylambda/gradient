@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
+import { basename } from "node:path";
 import type { Assistant, Suggestion } from "./types.js";
 import type { AdoptionRow } from "./adoption.js";
-import type { InstructionLine, InstructionSet } from "./instructions.js";
+import type { InstructionLine, InstructionSet, InstructionSource } from "./instructions.js";
 import { displayPath } from "./instructions.js";
 import type { StaleRef } from "./staleness.js";
 import type { InstalledSkill, Surface } from "./surface.js";
@@ -183,31 +184,60 @@ function driftFindings(input: FindingsInput): Finding[] {
   return out;
 }
 
+/** Group by the real file, so a CLAUDE.md symlinked to AGENTS.md is reported
+ *  — and edited — once; prefer the name that is not the link. */
+function byRealFile<T>(items: readonly T[], sourceOf: (item: T) => InstructionSource, key = (_item: T) => ""): Array<{ source: InstructionSource; items: T[] }> {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const source = sourceOf(item);
+    const id = `${source.realPath ?? source.path}\0${key(item)}`;
+    const group = groups.get(id);
+    if (group) group.push(item);
+    else groups.set(id, [item]);
+  }
+  return [...groups.values()].map(group => {
+    const sources = group.map(sourceOf);
+    // By name: an ancestor directory may be a link too (macOS /var), so the
+    // real file is the one whose own name matches what it resolves to.
+    const real = sources.find(source => source.realPath !== undefined && basename(source.realPath) === basename(source.path));
+    return { source: real ?? sources[0], items: group };
+  });
+}
+
+/** One finding per line: every gone reference on it, and the one deletion
+ *  that would answer them all. */
 function staleFindings(input: FindingsInput): Finding[] {
-  return input.stale.map(ref => ({
-    id: findingId("stale", ref.ref, [ref.line.source.path]),
-    family: "stale" as const,
-    severity: "high" as const,
-    title: `${displayPath(ref.line.source.path, input.projectDir)}:${ref.line.line} refers to something that is gone`,
-    detail:
-      `The instruction names ${JSON.stringify(ref.ref)}, and ${ref.detail}. ` +
-      (ref.line.source.readOnly
-        ? "This is assistant-managed memory. Review it with the assistant that owns it; Gradient will not edit or delete it."
-        : "The reference may be outdated or intentionally describe a missing file. Review the full instruction before choosing to remove this line."),
-    evidence: oneLine(ref.line.text),
-    targets: [ref.line.source.assistant],
-    deterministic: true,
-    // Rewriting prose is a judgment call, so the change is proposed as an
-    // outright deletion and anything better comes from the skill.
-    commandBearing: COMMAND_BEARING.test(ref.line.text),
-    changes: ref.line.source.readOnly ? [] : [{
-      op: "delete-line" as const,
-      path: ref.line.source.path,
-      assistant: ref.line.source.assistant,
-      line: ref.line.line,
-      before: ref.line.text,
-    }],
-  }));
+  return byRealFile(input.stale, ref => ref.line.source, ref => String(ref.line.line)).map(({ source, items }) => {
+    const line = items.find(ref => ref.line.source === source)!.line;
+    const named = [...new Map(items.map(ref => [ref.ref, ref])).values()];
+    const readOnly = items.some(ref => ref.line.source.readOnly);
+    return {
+      id: findingId("stale", named.map(ref => ref.ref).join(" "), [source.path]),
+      family: "stale" as const,
+      severity: "high" as const,
+      title: `${displayPath(source.path, input.projectDir)}:${line.line} refers to something that is gone`,
+      detail:
+        (named.length === 1
+          ? `The instruction names ${JSON.stringify(named[0].ref)}, and ${named[0].detail}. `
+          : `The instruction names ${named.map(ref => `${JSON.stringify(ref.ref)} (${ref.detail})`).join(", ")}. `) +
+        (readOnly
+          ? "This is assistant-managed memory. Review it with the assistant that owns it; Gradient will not edit or delete it."
+          : "The reference may be outdated or intentionally describe a missing file. Review the full instruction before choosing to remove this line."),
+      evidence: oneLine(line.text),
+      targets: [...new Set(items.map(ref => ref.line.source.assistant))],
+      deterministic: true,
+      // Rewriting prose is a judgment call, so the change is proposed as an
+      // outright deletion and anything better comes from the skill.
+      commandBearing: COMMAND_BEARING.test(line.text),
+      changes: readOnly ? [] : [{
+        op: "delete-line" as const,
+        path: source.path,
+        assistant: source.assistant,
+        line: line.line,
+        before: line.text,
+      }],
+    };
+  });
 }
 
 function skillProblemFinding(
@@ -376,10 +406,23 @@ function deadLetterFindings(input: FindingsInput): { findings: Finding[]; restat
   return { findings: out, restated };
 }
 
+/** Codex receives commands and rules; hooks, skills, and agents are Claude
+ *  Code artifacts, so only Claude Code is a target for them (see apply). */
+function appliesTo(suggestion: Suggestion, targets: readonly Assistant[]): Assistant[] {
+  const portable = suggestion.payload.type === "command" || suggestion.payload.type === "rule";
+  return targets.filter(target => target === "claude-code" || portable);
+}
+
 function workflowFindings(input: FindingsInput, restated: Set<string>): Finding[] {
+  const hooked = new Set(input.surface.hookEvents ?? []);
   return input.suggestions
     .filter(suggestion => !restated.has(suggestion.id))
-    .map(suggestion => ({
+    // A Notification or PreCompact hook already installed — by the user or a
+    // plugin — answers the same need; a second one only fires twice.
+    .filter(suggestion => suggestion.payload.type !== "hook" || !hooked.has(suggestion.payload.event))
+    .map(suggestion => ({ suggestion, targets: appliesTo(suggestion, input.targets) }))
+    .filter(({ targets }) => targets.length > 0)
+    .map(({ suggestion, targets }) => ({
       id: findingId("workflow", suggestion.id, []),
       family: "workflow" as const,
       severity: isMeasured(suggestion) ? ("medium" as const) : ("low" as const),
@@ -390,7 +433,7 @@ function workflowFindings(input: FindingsInput, restated: Set<string>): Finding[
       // labelled the most-measured item in the list as inferred.
       evidence: `seen ${suggestion.evidence.count}× across ${suggestion.evidence.sessions} session(s)` +
         (isMeasured(suggestion) ? " · counted from tool events" : " · inferred from repeated prompts"),
-      targets: input.targets,
+      targets,
       deterministic: false,
       commandBearing: false,
       changes: [],
@@ -401,19 +444,20 @@ function workflowFindings(input: FindingsInput, restated: Set<string>): Finding[
 function practiceFindings(input: FindingsInput): Finding[] {
   const out: Finding[] = [];
 
-  for (const source of input.instructions.sources) {
-    if (source.kind === "rule" || source.lineCount <= CLAUDE_MD_MAX_LINES) continue;
+  const long = input.instructions.sources.filter(source => source.kind !== "rule" && source.lineCount > CLAUDE_MD_MAX_LINES);
+  for (const { source, items } of byRealFile(long, source => source)) {
+    const assistants = [...new Set(items.map(item => item.assistant))];
     out.push({
       id: findingId("practice", "length", [source.path]),
       family: "practice",
       severity: "low",
       title: `${displayPath(source.path, input.projectDir)} is ${source.lineCount} lines`,
       detail:
-        source.assistant === "claude-code"
+        assistants.includes("claude-code")
         ? "Claude recommends concise instruction files. Review repeated or outdated guidance; path-scoped rules can move specialized instructions closer to their use."
         : "Review whether these instructions are concise and still relevant. Codex instruction loading is subject to its configured byte budget; line count alone does not prove truncation.",
       evidence: `${source.lineCount} lines · ${source.bytes} bytes, loaded every session`,
-      targets: [source.assistant],
+      targets: assistants,
       deterministic: true,
       commandBearing: false,
       changes: [],

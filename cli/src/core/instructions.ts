@@ -36,6 +36,9 @@ export interface InstructionSource {
   pathScoped?: boolean;
   /** Assistant-managed memory remains read-only even when explicitly imported. */
   readOnly?: boolean;
+  /** The file behind `path`: a CLAUDE.md symlinked to AGENTS.md is one file
+   *  that both assistants load. */
+  realPath?: string;
 }
 
 export interface InstructionLine {
@@ -246,8 +249,9 @@ export async function loadInstructions(
     if (depth > 5 || sources.length >= 500) { warnings.push(`Instruction inspection limit reached at ${path}`); return; }
     if (depth === 0) confine ??= await confineFor(project, dirname(path));
     let raw: string;
+    let canonical: string;
     try {
-      const canonical = await realpath(path);
+      canonical = await realpath(path);
       const key = `${assistant}:${canonical}`;
       if (seen.has(key)) return;
       raw = await readDiscovered(path, MAX_FILE_BYTES, confine);
@@ -261,7 +265,7 @@ export async function loadInstructions(
     }
     const frontmatter: Frontmatter = parseFrontmatter(raw);
     const source: InstructionSource = {
-      path, scope, assistant, kind,
+      path, scope, assistant, kind, realPath: canonical,
       lineCount: raw.split("\n").length,
       bytes: Buffer.byteLength(raw, "utf8"),
       ...(kind === "rule" ? { pathScoped: list(frontmatter, "paths").length > 0 } : {}),

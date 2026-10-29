@@ -22,12 +22,12 @@ const DISCOVERY_FILE_CAP = 500;
 const execFileP = promisify(execFile);
 
 /** Trimmed stdout, or null on any failure (no git, not a repo, timeout). */
-export async function git(args: string[], cwd: string): Promise<string | null> {
+export async function git(args: string[], cwd: string, maxBuffer = 1_000_000): Promise<string | null> {
   try {
     const { stdout } = await execFileP("git", args, {
       cwd,
       timeout: GIT_TIMEOUT_MS,
-      maxBuffer: 1_000_000,
+      maxBuffer,
     });
     return stdout.trim();
   } catch {
