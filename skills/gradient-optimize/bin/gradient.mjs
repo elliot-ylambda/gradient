@@ -21938,7 +21938,9 @@ function scheduleSnippet(platform, cwd, invocation = gradientCommand(), windowsR
   }
   return [
     "# cron \u2014 add with `crontab -e`:",
-    `0 9 * * 1 ${command.replace(/%/g, "\\%")}`,
+    // `\%` is cron's only escape and a backslash means nothing else to it, so
+    // a path holding `\%` becomes `\\%` and cron hands the shell `\%` back.
+    `0 9 * * 1 ${command.split("%").join("\\%")}`,
     "",
     "# or a systemd user timer, if you prefer:",
     "#   ~/.config/systemd/user/gradient-optimize.service",

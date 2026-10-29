@@ -29,7 +29,7 @@ Node 20, 22, and 24 on Linux when the branch is submitted. That remote matrix
 has not run for these local changes.
 
 Bundle SHA-256:
-`8b188627a08d48b5b5164ce63b8b2284e7b100035f473b3ee6db9dd42afa6df9` (v0.10.0).
+`c1be952a9854d3d00343ba71359ee0dd6bcdd2381732d2114f27b400c1392b61` (v0.10.0).
 
 ## Independent review — October 29, 2026
 

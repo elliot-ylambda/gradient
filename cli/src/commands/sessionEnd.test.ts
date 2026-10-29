@@ -95,7 +95,8 @@ describe("scheduleSnippet", () => {
 
   it("quotes a cron working directory and escapes cron's percent metacharacter", async () => {
     const { project } = await dirs(false);
-    const path = join(project, "owner's notes & 100% done");
+    // A literal backslash before a percent must survive cron's unescaping too.
+    const path = join(project, "owner's notes & 100% done \\% kept");
     await mkdir(path);
     const snippet = scheduleSnippet("linux", path, `${shellQuote(process.execPath)} -e 'console.log(process.cwd())' --`);
     const command = snippet.split("\n").find(line => line.startsWith("0 9 "))!.replace(/^0 9 \* \* 1 /, "");
