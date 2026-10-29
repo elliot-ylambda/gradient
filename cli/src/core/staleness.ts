@@ -146,10 +146,15 @@ export function extractRefs(text: string): string[] {
   return out;
 }
 
+/** The checkup reads repositories it did not write. A repository's own
+ *  `.git/config` can name a `core.fsmonitor` command that an untracked-file
+ *  listing runs; never let it. */
+const UNTRUSTED_REPO = ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false"];
+
 /** Every file git would show for this checkout, tracked or not, minus ignored
  *  ones; null outside a repository or when the listing is unavailable. */
 export async function repoIndex(projectDir: string): Promise<string[] | null> {
-  const listed = await git(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], projectDir, MAX_INDEX_BYTES);
+  const listed = await git([...UNTRUSTED_REPO, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], projectDir, MAX_INDEX_BYTES);
   return listed === null ? null : listed.split("\0").filter(Boolean);
 }
 
@@ -284,7 +289,7 @@ export async function findStaleRefs(
     const paths = [...new Set(gone.flatMap(item => hasFileExtension(item.path) ? [item.path] : [item.path, `${item.path}/`]))];
     // `-z` needs --stdin, which this helper cannot feed; unquoted paths instead.
     const ignored = paths.length === 0 ? null
-      : await git(["-c", "core.quotePath=false", "check-ignore", "--no-index", "--", ...paths], resolvedProject);
+      : await git([...UNTRUSTED_REPO, "-c", "core.quotePath=false", "check-ignore", "--no-index", "--", ...paths], resolvedProject);
     const skip = new Set((ignored ?? "").split("\n").filter(Boolean));
     gone = gone.filter(item => !skip.has(item.path) && !skip.has(`${item.path}/`));
   }

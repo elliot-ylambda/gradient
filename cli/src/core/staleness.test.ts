@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { extractRefs, findStaleRefs, readRepoFacts } from "./staleness.js";
@@ -251,6 +251,14 @@ describe("real instruction files", () => {
     });
     expect(await flagged(dir, "After changing the API, run `bun run generate` from `packages/client`.")).toEqual([]);
     expect(await flagged(dir, "Then `npm run gone`.")).toEqual(["npm run gone"]);
+  });
+
+  it("never runs a command the repository's git config names", async () => {
+    const dir = await checkout({ "src/a.ts": "x" });
+    const marker = join(dir, "..", "fsmonitor-ran");
+    execFileSync("git", ["config", "core.fsmonitor", `touch '${marker}'; false`], { cwd: dir });
+    await flagged(dir, "See `src/gone.ts`.");
+    await expect(lstat(marker)).rejects.toThrow();
   });
 
   it("still catches a directory that moved", async () => {

@@ -6596,7 +6596,7 @@ function extractRefs(text) {
   return out;
 }
 async function repoIndex(projectDir) {
-  const listed = await git(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], projectDir, MAX_INDEX_BYTES);
+  const listed = await git([...UNTRUSTED_REPO, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], projectDir, MAX_INDEX_BYTES);
   return listed === null ? null : listed.split("\0").filter(Boolean);
 }
 async function readRepoFacts(projectDir, index = null) {
@@ -6681,14 +6681,14 @@ async function findStaleRefs(lines, projectDir, opts = {}) {
   if (index) {
     gone = gone.filter((item) => !namedSomewhere(item.path, index));
     const paths = [...new Set(gone.flatMap((item) => hasFileExtension(item.path) ? [item.path] : [item.path, `${item.path}/`]))];
-    const ignored = paths.length === 0 ? null : await git(["-c", "core.quotePath=false", "check-ignore", "--no-index", "--", ...paths], resolvedProject);
+    const ignored = paths.length === 0 ? null : await git([...UNTRUSTED_REPO, "-c", "core.quotePath=false", "check-ignore", "--no-index", "--", ...paths], resolvedProject);
     const skip = new Set((ignored ?? "").split("\n").filter(Boolean));
     gone = gone.filter((item) => !skip.has(item.path) && !skip.has(`${item.path}/`));
   }
   out.push(...gone.map((item) => item.ref));
   return out;
 }
-var MAX_MANIFEST_BYTES, MAX_MANIFESTS, MAX_INDEX_BYTES, MAX_REFS_PER_LINE, IGNORED_ROOTS, PLACEHOLDER, EXAMPLE_LINE;
+var MAX_MANIFEST_BYTES, MAX_MANIFESTS, MAX_INDEX_BYTES, MAX_REFS_PER_LINE, IGNORED_ROOTS, PLACEHOLDER, EXAMPLE_LINE, UNTRUSTED_REPO;
 var init_staleness = __esm({
   "src/core/staleness.ts"() {
     "use strict";
@@ -6714,6 +6714,7 @@ var init_staleness = __esm({
     ]);
     PLACEHOLDER = /(^|\/)path\/to\/|(^|[/_.-])(your|example|specific|sample|placeholder)([/_.-]|$)|yyyy|\bmm-dd\b/i;
     EXAMPLE_LINE = /\be\.g\.|\bfor (?:example|instance)\b|\bexample:/i;
+    UNTRUSTED_REPO = ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false"];
   }
 });
 
