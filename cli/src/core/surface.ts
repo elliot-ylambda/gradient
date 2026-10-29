@@ -102,6 +102,9 @@ export interface Surface {
   contextChars: number;
   /** Known limits, skipped locations, and unreadable configuration. */
   warnings?: string[];
+  /** Claude Code hook events something already handles, from settings or an
+   *  enabled plugin. */
+  hookEvents?: string[];
 }
 
 interface SkillDir {
@@ -114,7 +117,14 @@ interface SkillDir {
   namespace?: string;
 }
 
-async function skillDirs(projectDir: string, opts: DiscoveryOptions, targets: Assistant[], warnings: string[]): Promise<{ dirs: SkillDir[]; disabled: Set<string>; overrides: Record<string, unknown>; claudeSettings: Record<string, any> }> {
+/** A plugin manifest field that names one path or a list of them. */
+function manifestPaths(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.filter((path: unknown): path is string => typeof path === "string");
+  return [];
+}
+
+async function skillDirs(projectDir: string, opts: DiscoveryOptions, targets: Assistant[], warnings: string[]): Promise<{ dirs: SkillDir[]; disabled: Set<string>; overrides: Record<string, unknown>; claudeSettings: Record<string, any>; hookEvents: Set<string> }> {
   const roots = assistantHomes(opts);
   const repoDirs = await repositoryDirs(projectDir);
   const project = await projectRoot(projectDir);
@@ -122,6 +132,11 @@ async function skillDirs(projectDir: string, opts: DiscoveryOptions, targets: As
   const disabled = new Set<string>();
   const overrides: Record<string, unknown> = {};
   const claudeSettings: Record<string, any> = {};
+  const hookEvents = new Set<string>();
+  const addHooks = (hooks: unknown): void => {
+    if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return;
+    for (const [event, entries] of Object.entries(hooks)) if (Array.isArray(entries) && entries.length > 0) hookEvents.add(event);
+  };
   if (targets.includes("claude-code")) {
     for (const [dir, scope] of [[roots.claude, "user"], ...ancestorDirs(projectDir).map(dir => [join(dir, ".claude"), "project"])] as Array<[string, "user" | "project"]>) {
       out.push({ dir: join(dir, "skills"), base: dir, assistant: "claude-code", scope });
@@ -131,6 +146,7 @@ async function skillDirs(projectDir: string, opts: DiscoveryOptions, targets: As
     for (const path of [join(roots.claude, "settings.json"), ...repoDirs.flatMap(dir => [join(dir, ".claude", "settings.json"), join(dir, ".claude", "settings.local.json")])]) {
       const settings = await readSettings(path, warnings, await confineFor(project, dirname(path)));
       Object.assign(claudeSettings, settings);
+      addHooks(settings.hooks);
       if (settings.enabledPlugins && typeof settings.enabledPlugins === "object") Object.assign(enabled, settings.enabledPlugins);
       if (settings.skillOverrides && typeof settings.skillOverrides === "object") Object.assign(overrides, settings.skillOverrides);
     }
@@ -148,8 +164,13 @@ async function skillDirs(projectDir: string, opts: DiscoveryOptions, targets: As
       const root = record.installPath as string;
       const manifest = await readSettings(join(root, ".claude-plugin", "plugin.json"), warnings);
       const namespace = typeof manifest.name === "string" ? manifest.name : id.split("@")[0];
-      const extra = typeof manifest.skills === "string" ? [manifest.skills] : Array.isArray(manifest.skills) ? manifest.skills.filter((p: unknown): p is string => typeof p === "string") : [];
-      for (const relative of ["skills", ...extra].slice(0, 32)) {
+      // `hooks` is a path, a list of paths, or the hooks config inline.
+      if (manifest.hooks && typeof manifest.hooks === "object" && !Array.isArray(manifest.hooks)) addHooks(manifest.hooks.hooks);
+      for (const relative of ["hooks/hooks.json", ...manifestPaths(manifest.hooks)].slice(0, 8)) {
+        const file = resolve(root, relative);
+        if (within(root, file)) addHooks((await readSettings(file, warnings)).hooks);
+      }
+      for (const relative of ["skills", ...manifestPaths(manifest.skills)].slice(0, 32)) {
         const dir = resolve(root, relative);
         if (!within(root, dir)) { warnings.push(`Plugin ${id} skill path leaves its installation: ${relative}`); continue; }
         out.push({ dir, base: root, assistant: "claude-code", scope: record.scope === "user" ? "user" : "project", namespace });
@@ -180,7 +201,7 @@ async function skillDirs(projectDir: string, opts: DiscoveryOptions, targets: As
     }
     warnings.push("Codex bundled/plugin skills, managed/profile overrides, and dynamically supplied skill locations are outside this inventory.");
   }
-  return { dirs: out, disabled, overrides, claudeSettings };
+  return { dirs: out, disabled, overrides, claudeSettings, hookEvents };
 }
 
 async function entries(dir: string, warnings: string[]): Promise<string[]> {
@@ -383,6 +404,7 @@ export async function loadSurface(
       ? await loadMemory(projectDir, roots.home, roots.claude, memoryDirectory) : null,
     contextChars: skills.reduce((total, skill) => total + skill.descriptionChars, 0),
     warnings: [...new Set(warnings)],
+    hookEvents: [...inventory.hookEvents],
   };
 }
 

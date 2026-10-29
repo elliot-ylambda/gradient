@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildFindings, type Family, type FindingsInput } from "./findings.js";
@@ -246,6 +246,56 @@ describe("buildFindings", () => {
     const first = buildFindings(await inputFor(dir, await tree({})));
     const second = buildFindings(await inputFor(dir, await tree({})));
     expect(first.map(f => f.id)).toEqual(second.map(f => f.id));
+  });
+
+  it("reports a line once, however many gone references it names", async () => {
+    const dir = await tree({ "CLAUDE.md": "- Helpers live in `src/a.ts` and `src/b.ts`\n", "src/keep.ts": "" });
+    const stale = buildFindings(await inputFor(dir, await tree({}))).filter(f => f.family === "stale");
+    expect(stale).toHaveLength(1);
+    expect(stale[0].detail).toContain('"src/a.ts"');
+    expect(stale[0].detail).toContain('"src/b.ts"');
+    expect(stale[0].changes).toHaveLength(1);
+  });
+
+  // CLAUDE.md -> AGENTS.md is the usual way to share one file; both assistants
+  // load it, and two findings proposed deleting the same physical line.
+  it("reports a CLAUDE.md symlinked to AGENTS.md once, against the real file", async () => {
+    const long = ["# Project", "- Run `scripts/gone.sh` first", ...Array.from({ length: 210 }, (_, i) => `- Rule ${i}`)].join("\n");
+    const dir = await tree({ "AGENTS.md": long, "scripts/keep.sh": "" });
+    await symlink("AGENTS.md", join(dir, "CLAUDE.md"));
+    const found = buildFindings(await inputFor(dir, await tree({})));
+    const stale = found.filter(f => f.family === "stale");
+    expect(stale).toHaveLength(1);
+    expect(stale[0].targets.sort()).toEqual(["claude-code", "codex"]);
+    expect(stale[0].changes[0].path).toBe(join(dir, "AGENTS.md"));
+    expect(found.filter(f => f.family === "practice" && f.title.includes("lines"))).toHaveLength(1);
+  });
+
+  it("drops a hook suggestion for an event something already handles", async () => {
+    const dir = await tree({ "CLAUDE.md": "- unrelated guidance for this repo\n" });
+    const ping = suggestion({
+      id: "n1", name: "notify", title: "Desktop ping", sourceSignatures: [],
+      payload: { type: "hook", event: "Notification", subcommand: "notify", description: "d" },
+    });
+    const input = await inputFor(dir, await tree({}), { suggestions: [ping] });
+    expect(families(buildFindings(input))).toContain("workflow");
+    const hooked = { ...input, surface: { ...input.surface, hookEvents: ["Notification"] } };
+    expect(families(buildFindings(hooked))).not.toContain("workflow");
+  });
+
+  // Codex receives commands and rules only (see apply), so a Claude lifecycle
+  // hook must not claim Codex — and is no finding at all for a Codex-only run.
+  it("targets a hook at Claude Code alone", async () => {
+    const dir = await tree({ "AGENTS.md": "- unrelated guidance for this repo\n" });
+    const ping = suggestion({
+      id: "n1", name: "notify", title: "Desktop ping", sourceSignatures: [],
+      payload: { type: "hook", event: "Notification", subcommand: "notify", description: "d" },
+    });
+    const both = buildFindings(await inputFor(dir, await tree({}), { suggestions: [ping, suggestion()] }));
+    expect(both.find(f => f.suggestion?.id === "n1")?.targets).toEqual(["claude-code"]);
+    expect(both.find(f => f.suggestion?.id === "s1")?.targets).toEqual(["claude-code", "codex"]);
+    const codexOnly = buildFindings(await inputFor(dir, await tree({}), { targets: ["codex"], suggestions: [ping] }));
+    expect(codexOnly.find(f => f.suggestion?.id === "n1")).toBeUndefined();
   });
 
   it("sorts high severity before low and never repeats an id", async () => {

@@ -116,6 +116,25 @@ describe("loadSurface", () => {
     expect(result.warnings?.join("\n")).toContain("elsewhere@test has no applicable installation");
   });
 
+  // A suggested Notification hook duplicated one an enabled plugin already
+  // ran, so it pinged twice. The inventory records what is already hooked.
+  it("records the hook events settings and enabled plugins already handle", async () => {
+    const plugin = await tree({ "hooks/hooks.json": JSON.stringify({ hooks: { Notification: [{ hooks: [{ type: "command", command: "ping" }] }] } }) });
+    const idle = await tree({ "hooks/hooks.json": JSON.stringify({ hooks: { PreCompact: [{ hooks: [] }] } }) });
+    const claudeHome = await tree({
+      "settings.json": JSON.stringify({
+        hooks: { Stop: [{ hooks: [{ type: "command", command: "x" }] }], SessionEnd: [] },
+        enabledPlugins: { "pinger@test": true, "idle@test": false },
+      }),
+      "plugins/installed_plugins.json": JSON.stringify({ version: 2, plugins: {
+        "pinger@test": [{ scope: "user", installPath: plugin }],
+        "idle@test": [{ scope: "user", installPath: idle }],
+      } }),
+    });
+    const result = await loadSurface(await tree({}), ["claude-code"], { home: await tree({}), claudeHome });
+    expect(result.hookEvents?.sort()).toEqual(["Notification", "Stop"]);
+  });
+
   it("follows named skill symlinks once and honors disabled skills", async () => {
     const home = await tree({ ".agents/skills/shared/SKILL.md": skill("A shared symlinked workflow"), ".codex/config.toml": "" });
     await mkdir(join(home, ".codex", "skills"), { recursive: true });

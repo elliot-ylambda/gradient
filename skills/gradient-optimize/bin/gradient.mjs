@@ -411,7 +411,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.10.0" : require2("../package.json").version;
+    VERSION = true ? "0.10.1" : require2("../package.json").version;
     BUNDLED = true;
   }
 });
@@ -5364,12 +5364,12 @@ import { promisify as promisify2 } from "node:util";
 import { lstat as lstat6, readdir, realpath as realpath3 } from "node:fs/promises";
 import { homedir as homedir10 } from "node:os";
 import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute7, join as join15, relative as relative5, resolve as resolve8 } from "node:path";
-async function git(args, cwd) {
+async function git(args, cwd, maxBuffer = 1e6) {
   try {
     const { stdout } = await execFileP2("git", args, {
       cwd,
       timeout: GIT_TIMEOUT_MS,
-      maxBuffer: 1e6
+      maxBuffer
     });
     return stdout.trim();
   } catch {
@@ -6084,8 +6084,9 @@ async function loadInstructions(projectDir, targets, opts = {}) {
     }
     if (depth === 0) confine ??= await confineFor(project2, dirname5(path5));
     let raw;
+    let canonical2;
     try {
-      const canonical2 = await realpath5(path5);
+      canonical2 = await realpath5(path5);
       const key = `${assistant}:${canonical2}`;
       if (seen.has(key)) return;
       raw = await readDiscovered(path5, MAX_FILE_BYTES, confine);
@@ -6103,6 +6104,7 @@ async function loadInstructions(projectDir, targets, opts = {}) {
       scope,
       assistant,
       kind,
+      realPath: canonical2,
       lineCount: raw.split("\n").length,
       bytes: Buffer.byteLength(raw, "utf8"),
       ...kind === "rule" ? { pathScoped: list(frontmatter, "paths").length > 0 } : {},
@@ -6216,6 +6218,11 @@ var init_instructions = __esm({
 import { homedir as homedir11 } from "node:os";
 import { join as join18, basename as basename3, dirname as dirname6, isAbsolute as isAbsolute9, resolve as resolve11 } from "node:path";
 import { opendir as opendir6, realpath as realpath6 } from "node:fs/promises";
+function manifestPaths(value) {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.filter((path5) => typeof path5 === "string");
+  return [];
+}
 async function skillDirs(projectDir, opts, targets, warnings) {
   const roots = assistantHomes(opts);
   const repoDirs = await repositoryDirs(projectDir);
@@ -6224,6 +6231,11 @@ async function skillDirs(projectDir, opts, targets, warnings) {
   const disabled = /* @__PURE__ */ new Set();
   const overrides = {};
   const claudeSettings = {};
+  const hookEvents = /* @__PURE__ */ new Set();
+  const addHooks = (hooks) => {
+    if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return;
+    for (const [event, entries2] of Object.entries(hooks)) if (Array.isArray(entries2) && entries2.length > 0) hookEvents.add(event);
+  };
   if (targets.includes("claude-code")) {
     for (const [dir, scope] of [[roots.claude, "user"], ...ancestorDirs(projectDir).map((dir2) => [join18(dir2, ".claude"), "project"])]) {
       out.push({ dir: join18(dir, "skills"), base: dir, assistant: "claude-code", scope });
@@ -6233,6 +6245,7 @@ async function skillDirs(projectDir, opts, targets, warnings) {
     for (const path5 of [join18(roots.claude, "settings.json"), ...repoDirs.flatMap((dir) => [join18(dir, ".claude", "settings.json"), join18(dir, ".claude", "settings.local.json")])]) {
       const settings = await readSettings(path5, warnings, await confineFor(project2, dirname6(path5)));
       Object.assign(claudeSettings, settings);
+      addHooks(settings.hooks);
       if (settings.enabledPlugins && typeof settings.enabledPlugins === "object") Object.assign(enabled, settings.enabledPlugins);
       if (settings.skillOverrides && typeof settings.skillOverrides === "object") Object.assign(overrides, settings.skillOverrides);
     }
@@ -6252,8 +6265,12 @@ async function skillDirs(projectDir, opts, targets, warnings) {
       const root = record.installPath;
       const manifest = await readSettings(join18(root, ".claude-plugin", "plugin.json"), warnings);
       const namespace = typeof manifest.name === "string" ? manifest.name : id.split("@")[0];
-      const extra = typeof manifest.skills === "string" ? [manifest.skills] : Array.isArray(manifest.skills) ? manifest.skills.filter((p) => typeof p === "string") : [];
-      for (const relative9 of ["skills", ...extra].slice(0, 32)) {
+      if (manifest.hooks && typeof manifest.hooks === "object" && !Array.isArray(manifest.hooks)) addHooks(manifest.hooks.hooks);
+      for (const relative9 of ["hooks/hooks.json", ...manifestPaths(manifest.hooks)].slice(0, 8)) {
+        const file = resolve11(root, relative9);
+        if (within(root, file)) addHooks((await readSettings(file, warnings)).hooks);
+      }
+      for (const relative9 of ["skills", ...manifestPaths(manifest.skills)].slice(0, 32)) {
         const dir = resolve11(root, relative9);
         if (!within(root, dir)) {
           warnings.push(`Plugin ${id} skill path leaves its installation: ${relative9}`);
@@ -6292,7 +6309,7 @@ async function skillDirs(projectDir, opts, targets, warnings) {
     }
     warnings.push("Codex bundled/plugin skills, managed/profile overrides, and dynamically supplied skill locations are outside this inventory.");
   }
-  return { dirs: out, disabled, overrides, claudeSettings };
+  return { dirs: out, disabled, overrides, claudeSettings, hookEvents };
 }
 async function entries(dir, warnings) {
   try {
@@ -6469,7 +6486,8 @@ async function loadSurface(projectDir, targets, opts = {}) {
     skills,
     memory: targets.includes("claude-code") && inventory.claudeSettings.autoMemoryEnabled !== false && (memorySetting === void 0 || memoryDirectory) ? await loadMemory(projectDir, roots.home, roots.claude, memoryDirectory) : null,
     contextChars: skills.reduce((total, skill) => total + skill.descriptionChars, 0),
-    warnings: [...new Set(warnings)]
+    warnings: [...new Set(warnings)],
+    hookEvents: [...inventory.hookEvents]
   };
 }
 var MAX_SKILL_BYTES, MAX_SKILLS, MAX_MEMORY_BYTES, DESCRIPTION_CAP, MEMORY_INDEX_MAX_LINES, MEMORY_INDEX_MAX_BYTES, DUPLICATE_DESCRIPTION_THRESHOLD, CLAUDE_CODE_KEYS, PORTABLE_KEYS;
@@ -6521,10 +6539,20 @@ var init_surface = __esm({
 });
 
 // src/core/staleness.ts
-import { join as join19, resolve as resolve12 } from "node:path";
+import { basename as basename4, dirname as dirname7, join as join19, resolve as resolve12 } from "node:path";
 import { lstat as lstat8 } from "node:fs/promises";
 function isIllustrative(ref) {
-  return /[*?<>${}]/.test(ref) || /^[a-z][a-z0-9+.-]*:\/\//i.test(ref) || ref.includes("...");
+  return /[*?<>${}]/.test(ref) || /^[a-z][a-z0-9+.-]*:\/\//i.test(ref) || /^mailto:/i.test(ref) || ref.includes("...") || PLACEHOLDER.test(ref);
+}
+function hasFileExtension(ref) {
+  const extension = /[^/.]\.([A-Za-z0-9]{1,8})$/.exec(ref)?.[1];
+  return extension !== void 0 && /[A-Za-z]/.test(extension);
+}
+function onDisk(ref) {
+  return ref.replace(/^@/, "").replace(/[#?].*$/, "").replace(/:\d+(?::\d+)?$/, "").replace(/^\.\//, "").replace(/\/$/, "");
+}
+function unwrap(token) {
+  return token.replace(/^["'(]+/, "").replace(/[.,;:)"']+$/, "");
 }
 function isPathShaped(ref) {
   if (!ref.includes("/") || ref.startsWith("~") || ref.startsWith("/")) return false;
@@ -6542,13 +6570,16 @@ function extractRefs(text) {
   const out = [];
   const seen = /* @__PURE__ */ new Set();
   const push = (value) => {
-    const ref = value.trim().replace(/[.,;:)]+$/, "");
+    const ref = unwrap(value.trim());
     if (!ref || isIllustrative(ref) || seen.has(ref) || out.length >= MAX_REFS_PER_LINE) return;
     seen.add(ref);
     out.push(ref);
   };
-  let rest = text;
-  for (const match of text.matchAll(/`([^`]+)`/g)) {
+  let rest = text.replace(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_link, target) => {
+    push(target);
+    return " ";
+  });
+  for (const match of rest.matchAll(/`([^`]+)`/g)) {
     const span = match[1];
     push(span);
     if (/\s/.test(span)) {
@@ -6559,26 +6590,36 @@ function extractRefs(text) {
     rest = rest.replace(match[0], " ");
   }
   for (const token of rest.split(/\s+/)) {
-    if (isPathShaped(token)) push(token);
+    const ref = unwrap(token);
+    if (isPathShaped(ref) && hasFileExtension(onDisk(ref))) push(ref);
   }
   return out;
 }
-async function readRepoFacts(projectDir) {
+async function repoIndex(projectDir) {
+  const listed = await git([...UNTRUSTED_REPO, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], projectDir, MAX_INDEX_BYTES);
+  return listed === null ? null : listed.split("\0").filter(Boolean);
+}
+async function readRepoFacts(projectDir, index = null) {
   const scripts = /* @__PURE__ */ new Set();
   const makeTargets = /* @__PURE__ */ new Set();
-  try {
-    const raw = await safeReadFile(projectDir, join19(projectDir, "package.json"), { maxBytes: MAX_MANIFEST_BYTES });
-    const parsed = JSON.parse(raw);
-    for (const key of Object.keys(parsed.scripts ?? {})) scripts.add(key);
-  } catch {
-  }
-  try {
-    const raw = await safeReadFile(projectDir, join19(projectDir, "Makefile"), { maxBytes: MAX_MANIFEST_BYTES });
-    for (const line of raw.split("\n")) {
-      const target = /^([A-Za-z0-9_.-]+)[ \t]*:(?!=)/.exec(line);
-      if (target && target[1] !== ".PHONY") makeTargets.add(target[1]);
+  const nested = (name) => (index ?? []).filter((file) => file !== name && basename4(file) === name).slice(0, MAX_MANIFESTS);
+  for (const file of ["package.json", ...nested("package.json")]) {
+    try {
+      const raw = await safeReadFile(projectDir, join19(projectDir, file), { maxBytes: MAX_MANIFEST_BYTES });
+      const parsed = JSON.parse(raw);
+      for (const key of Object.keys(parsed.scripts ?? {})) scripts.add(key);
+    } catch {
     }
-  } catch {
+  }
+  for (const file of ["Makefile", ...nested("Makefile")]) {
+    try {
+      const raw = await safeReadFile(projectDir, join19(projectDir, file), { maxBytes: MAX_MANIFEST_BYTES });
+      for (const line of raw.split("\n")) {
+        const target = /^([A-Za-z0-9_.-]+)[ \t]*:(?!=)/.exec(line);
+        if (target && target[1] !== ".PHONY") makeTargets.add(target[1]);
+      }
+    } catch {
+    }
   }
   return { scripts, makeTargets };
 }
@@ -6590,18 +6631,29 @@ async function exists(path5) {
     return false;
   }
 }
-async function isConcretePath(ref, projectDir) {
-  const extension = /\.([A-Za-z0-9]{1,8})$/.exec(ref)?.[1];
-  if (extension !== void 0 && /[A-Za-z]/.test(extension)) return true;
-  const root = ref.split("/")[0];
-  return root.length > 0 && await exists(join19(projectDir, root));
+async function isConcretePath(ref, bases) {
+  if (hasFileExtension(ref)) return true;
+  const parent = dirname7(ref);
+  if (parent === ".") return false;
+  for (const base of bases) if (await exists(join19(base, parent))) return true;
+  return false;
+}
+function namedSomewhere(ref, index) {
+  const slashed = `/${ref}`;
+  return index.some((file) => {
+    const path5 = `/${file}`;
+    return path5.endsWith(slashed) || path5.includes(`${slashed}/`);
+  });
 }
 async function findStaleRefs(lines, projectDir, opts = {}) {
-  const facts = opts.facts ?? await readRepoFacts(projectDir);
-  const out = [];
   const resolvedProject = resolve12(projectDir);
+  const index = opts.index !== void 0 ? opts.index : await repoIndex(resolvedProject);
+  const facts = opts.facts ?? await readRepoFacts(projectDir, index);
+  const out = [];
+  const missing = [];
   for (const line of lines) {
     if (line.source.scope !== "project") continue;
+    const example = EXAMPLE_LINE.test(line.text);
     for (const ref of extractRefs(line.text)) {
       const script2 = scriptRef(ref);
       if (script2) {
@@ -6615,23 +6667,37 @@ async function findStaleRefs(lines, projectDir, opts = {}) {
         });
         continue;
       }
-      if (!isPathShaped(ref)) continue;
-      if (IGNORED_ROOTS.has(ref.split("/")[0])) continue;
-      const full = join19(resolvedProject, ref);
-      if (!resolve12(full).startsWith(resolvedProject)) continue;
-      if (await exists(full)) continue;
-      if (!await isConcretePath(ref, resolvedProject)) continue;
-      out.push({ line, ref, kind: "path", detail: `no such file or directory in this repository` });
+      if (example || !isPathShaped(ref)) continue;
+      const path5 = onDisk(ref);
+      if (!path5 || IGNORED_ROOTS.has(path5.split("/")[0])) continue;
+      const bases = [.../* @__PURE__ */ new Set([resolvedProject, dirname7(resolve12(line.source.path))])].filter((base) => within(resolvedProject, resolve12(base, path5)));
+      if (bases.length === 0) continue;
+      if ((await Promise.all(bases.map((base) => exists(resolve12(base, path5))))).some(Boolean)) continue;
+      if (!await isConcretePath(path5, bases)) continue;
+      missing.push({ ref: { line, ref, kind: "path", detail: `no such file or directory in this repository` }, path: path5 });
     }
   }
+  let gone = missing;
+  if (index) {
+    gone = gone.filter((item) => !namedSomewhere(item.path, index));
+    const paths = [...new Set(gone.flatMap((item) => hasFileExtension(item.path) ? [item.path] : [item.path, `${item.path}/`]))];
+    const ignored = paths.length === 0 ? null : await git([...UNTRUSTED_REPO, "-c", "core.quotePath=false", "check-ignore", "--no-index", "--", ...paths], resolvedProject);
+    const skip = new Set((ignored ?? "").split("\n").filter(Boolean));
+    gone = gone.filter((item) => !skip.has(item.path) && !skip.has(`${item.path}/`));
+  }
+  out.push(...gone.map((item) => item.ref));
   return out;
 }
-var MAX_MANIFEST_BYTES, MAX_REFS_PER_LINE, IGNORED_ROOTS;
+var MAX_MANIFEST_BYTES, MAX_MANIFESTS, MAX_INDEX_BYTES, MAX_REFS_PER_LINE, IGNORED_ROOTS, PLACEHOLDER, EXAMPLE_LINE, UNTRUSTED_REPO;
 var init_staleness = __esm({
   "src/core/staleness.ts"() {
     "use strict";
+    init_board();
+    init_discovery();
     init_safeFs();
     MAX_MANIFEST_BYTES = 2e6;
+    MAX_MANIFESTS = 200;
+    MAX_INDEX_BYTES = 32e6;
     MAX_REFS_PER_LINE = 6;
     IGNORED_ROOTS = /* @__PURE__ */ new Set([
       "node_modules",
@@ -6646,11 +6712,15 @@ var init_staleness = __esm({
       ".venv",
       "__pycache__"
     ]);
+    PLACEHOLDER = /(^|\/)path\/to\/|(^|[/_.-])(your|example|specific|sample|placeholder)([/_.-]|$)|yyyy|\bmm-dd\b/i;
+    EXAMPLE_LINE = /\be\.g\.|\bfor (?:example|instance)\b|\bexample:/i;
+    UNTRUSTED_REPO = ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false"];
   }
 });
 
 // src/core/findings.ts
 import { createHash as createHash9 } from "node:crypto";
+import { basename as basename5 } from "node:path";
 function findingActionability(finding) {
   const proposal = finding.suggestion;
   if (!proposal) return finding.changes.length > 0 ? { actionable: true } : { actionable: false, reason: "This observation needs review; Gradient has no file change to apply." };
@@ -6712,27 +6782,47 @@ function driftFindings(input) {
   }
   return out;
 }
+function byRealFile(items, sourceOf, key = (_item) => "") {
+  const groups = /* @__PURE__ */ new Map();
+  for (const item of items) {
+    const source = sourceOf(item);
+    const id = `${source.realPath ?? source.path}\0${key(item)}`;
+    const group = groups.get(id);
+    if (group) group.push(item);
+    else groups.set(id, [item]);
+  }
+  return [...groups.values()].map((group) => {
+    const sources = group.map(sourceOf);
+    const real = sources.find((source) => source.realPath !== void 0 && basename5(source.realPath) === basename5(source.path));
+    return { source: real ?? sources[0], items: group };
+  });
+}
 function staleFindings(input) {
-  return input.stale.map((ref) => ({
-    id: findingId("stale", ref.ref, [ref.line.source.path]),
-    family: "stale",
-    severity: "high",
-    title: `${displayPath(ref.line.source.path, input.projectDir)}:${ref.line.line} refers to something that is gone`,
-    detail: `The instruction names ${JSON.stringify(ref.ref)}, and ${ref.detail}. ` + (ref.line.source.readOnly ? "This is assistant-managed memory. Review it with the assistant that owns it; Gradient will not edit or delete it." : "The reference may be outdated or intentionally describe a missing file. Review the full instruction before choosing to remove this line."),
-    evidence: oneLine2(ref.line.text),
-    targets: [ref.line.source.assistant],
-    deterministic: true,
-    // Rewriting prose is a judgment call, so the change is proposed as an
-    // outright deletion and anything better comes from the skill.
-    commandBearing: COMMAND_BEARING.test(ref.line.text),
-    changes: ref.line.source.readOnly ? [] : [{
-      op: "delete-line",
-      path: ref.line.source.path,
-      assistant: ref.line.source.assistant,
-      line: ref.line.line,
-      before: ref.line.text
-    }]
-  }));
+  return byRealFile(input.stale, (ref) => ref.line.source, (ref) => String(ref.line.line)).map(({ source, items }) => {
+    const line = items.find((ref) => ref.line.source === source).line;
+    const named = [...new Map(items.map((ref) => [ref.ref, ref])).values()];
+    const readOnly = items.some((ref) => ref.line.source.readOnly);
+    return {
+      id: findingId("stale", named.map((ref) => ref.ref).join(" "), [source.path]),
+      family: "stale",
+      severity: "high",
+      title: `${displayPath(source.path, input.projectDir)}:${line.line} refers to something that is gone`,
+      detail: (named.length === 1 ? `The instruction names ${JSON.stringify(named[0].ref)}, and ${named[0].detail}. ` : `The instruction names ${named.map((ref) => `${JSON.stringify(ref.ref)} (${ref.detail})`).join(", ")}. `) + (readOnly ? "This is assistant-managed memory. Review it with the assistant that owns it; Gradient will not edit or delete it." : "The reference may be outdated or intentionally describe a missing file. Review the full instruction before choosing to remove this line."),
+      evidence: oneLine2(line.text),
+      targets: [...new Set(items.map((ref) => ref.line.source.assistant))],
+      deterministic: true,
+      // Rewriting prose is a judgment call, so the change is proposed as an
+      // outright deletion and anything better comes from the skill.
+      commandBearing: COMMAND_BEARING.test(line.text),
+      changes: readOnly ? [] : [{
+        op: "delete-line",
+        path: source.path,
+        assistant: source.assistant,
+        line: line.line,
+        before: line.text
+      }]
+    };
+  });
 }
 function skillProblemFinding(skill, input) {
   if (skill.problems.length === 0) return null;
@@ -6843,8 +6933,13 @@ function deadLetterFindings(input) {
   }
   return { findings: out, restated };
 }
+function appliesTo(suggestion, targets) {
+  const portable = suggestion.payload.type === "command" || suggestion.payload.type === "rule";
+  return targets.filter((target) => target === "claude-code" || portable);
+}
 function workflowFindings(input, restated) {
-  return input.suggestions.filter((suggestion) => !restated.has(suggestion.id)).map((suggestion) => ({
+  const hooked = new Set(input.surface.hookEvents ?? []);
+  return input.suggestions.filter((suggestion) => !restated.has(suggestion.id)).filter((suggestion) => suggestion.payload.type !== "hook" || !hooked.has(suggestion.payload.event)).map((suggestion) => ({ suggestion, targets: appliesTo(suggestion, input.targets) })).filter(({ targets }) => targets.length > 0).map(({ suggestion, targets }) => ({
     id: findingId("workflow", suggestion.id, []),
     family: "workflow",
     severity: isMeasured(suggestion) ? "medium" : "low",
@@ -6854,7 +6949,7 @@ function workflowFindings(input, restated) {
     // and its builders do not set the flag, so reading the field directly
     // labelled the most-measured item in the list as inferred.
     evidence: `seen ${suggestion.evidence.count}\xD7 across ${suggestion.evidence.sessions} session(s)` + (isMeasured(suggestion) ? " \xB7 counted from tool events" : " \xB7 inferred from repeated prompts"),
-    targets: input.targets,
+    targets,
     deterministic: false,
     commandBearing: false,
     changes: [],
@@ -6863,16 +6958,17 @@ function workflowFindings(input, restated) {
 }
 function practiceFindings(input) {
   const out = [];
-  for (const source of input.instructions.sources) {
-    if (source.kind === "rule" || source.lineCount <= CLAUDE_MD_MAX_LINES) continue;
+  const long = input.instructions.sources.filter((source) => source.kind !== "rule" && source.lineCount > CLAUDE_MD_MAX_LINES);
+  for (const { source, items } of byRealFile(long, (source2) => source2)) {
+    const assistants = [...new Set(items.map((item) => item.assistant))];
     out.push({
       id: findingId("practice", "length", [source.path]),
       family: "practice",
       severity: "low",
       title: `${displayPath(source.path, input.projectDir)} is ${source.lineCount} lines`,
-      detail: source.assistant === "claude-code" ? "Claude recommends concise instruction files. Review repeated or outdated guidance; path-scoped rules can move specialized instructions closer to their use." : "Review whether these instructions are concise and still relevant. Codex instruction loading is subject to its configured byte budget; line count alone does not prove truncation.",
+      detail: assistants.includes("claude-code") ? "Claude recommends concise instruction files. Review repeated or outdated guidance; path-scoped rules can move specialized instructions closer to their use." : "Review whether these instructions are concise and still relevant. Codex instruction loading is subject to its configured byte budget; line count alone does not prove truncation.",
       evidence: `${source.lineCount} lines \xB7 ${source.bytes} bytes, loaded every session`,
-      targets: [source.assistant],
+      targets: assistants,
       deterministic: true,
       commandBearing: false,
       changes: []
@@ -8553,7 +8649,7 @@ var init_sessionStart = __esm({
 
 // src/commands/remove.ts
 import { rmdir } from "node:fs/promises";
-import { dirname as dirname7, join as join23 } from "node:path";
+import { dirname as dirname8, join as join23 } from "node:path";
 function isLegacyGradientHook(hook) {
   return LEGACY_GRADIENT_HOOKS.some(
     (known) => known.event === hook.event && known.command === hook.command && known.matcher === hook.matcher
@@ -8608,9 +8704,9 @@ async function remove(projectDir, name, opts = {}) {
   for (const artifact of existing) {
     await safeUnlink(projectDir, artifact.path);
     if (artifact.skill) {
-      await assertNoSymlinkPath(projectDir, dirname7(artifact.path));
+      await assertNoSymlinkPath(projectDir, dirname8(artifact.path));
       try {
-        await rmdir(dirname7(artifact.path));
+        await rmdir(dirname8(artifact.path));
       } catch {
       }
     }
@@ -14452,10 +14548,10 @@ async function setupSkills(ctx) {
     try {
       const versionId = await resolveSkillVersion(client, skill.skill_id, skill.version);
       const version = await client.beta.skills.versions.retrieve(versionId, { skill_id: skill.skill_id });
-      let dirname11 = path3.basename(version.name.trim());
-      if (dirname11 === "" || dirname11 === "." || dirname11 === "..")
-        dirname11 = skill.skill_id;
-      const dest = path3.resolve(skillsRoot, dirname11);
+      let dirname12 = path3.basename(version.name.trim());
+      if (dirname12 === "" || dirname12 === "." || dirname12 === "..")
+        dirname12 = skill.skill_id;
+      const dest = path3.resolve(skillsRoot, dirname12);
       if (dest !== skillsRoot && !dest.startsWith(skillsRoot + path3.sep)) {
         log.warn("skill name escapes the skills dir; skipping", {
           component: "agent-tool-context",
