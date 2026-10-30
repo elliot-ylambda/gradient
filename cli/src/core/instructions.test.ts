@@ -242,7 +242,7 @@ describe("loadInstructions", () => {
     const dir = await project({ "AGENTS.md": "- More than twelve bytes of instructions\n" });
     const set = await loadInstructions(dir, ["codex"], { home });
     expect(set.sources).toEqual([]);
-    expect(set.warnings?.join("\n")).toContain("instruction budget (12 bytes)");
+    expect(set.codexBudget).toEqual({ path: join(dir, "AGENTS.md"), bytes: 41, budget: 12, loaded: 12 });
   });
 
   it("is a no-op on a project with no instruction files at all", async () => {

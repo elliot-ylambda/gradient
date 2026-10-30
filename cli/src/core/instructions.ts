@@ -72,6 +72,9 @@ export interface InstructionSet {
   unreadable: string[];
   /** Bounds and runtime-specific configuration the inventory cannot establish. */
   warnings?: string[];
+  /** Codex stops reading instruction files at `project_doc_max_bytes`; the
+   *  file where it stopped, and how much of it was read. */
+  codexBudget?: { path: string; bytes: number; budget: number; loaded: number };
 }
 
 /** Bounded rules traversal, including documented symlink folders. */
@@ -220,6 +223,7 @@ export async function loadInstructions(
   const lines: InstructionLine[] = [];
   const unreadable: string[] = [];
   const warnings: string[] = [];
+  let codexBudget: InstructionSet["codexBudget"];
   const seen = new Set<string>();
   const ancestors = ancestorDirs(projectDir);
   const repoDirs = await repositoryDirs(projectDir);
@@ -328,12 +332,15 @@ export async function loadInstructions(
         const path = join(dir, name);
         const raw = await readBounded(project, path, unreadable);
         if (raw === null || !raw.trim()) continue;
-        if (consumed + Buffer.byteLength(raw) > budget) {
-          warnings.push(`Codex instruction budget (${budget} bytes) reached at ${path}; this file and later guidance were not inspected as fully loaded.`);
+        const size = Buffer.byteLength(raw);
+        if (consumed + size > budget) {
+          // Not audited as loaded: Codex never sees the rest. Reported as a
+          // finding, because it is a fact about the setup, not about this check.
+          codexBudget ??= { path, bytes: size, budget, loaded: budget - consumed };
           consumed = budget;
         } else if (consumed < budget) {
           await ingest(path, scope, "codex", "agents-md");
-          consumed += Buffer.byteLength(raw);
+          consumed += size;
         }
         break;
       }
@@ -356,7 +363,10 @@ export async function loadInstructions(
     mode, blockedBy,
   };
 
-  return { sources, lines, bridge, unreadable: [...new Set(unreadable)], warnings: [...new Set(warnings)] };
+  return {
+    sources, lines, bridge, unreadable: [...new Set(unreadable)], warnings: [...new Set(warnings)],
+    ...(codexBudget ? { codexBudget } : {}),
+  };
 }
 
 /** Project-relative display path, falling back to the absolute path when the

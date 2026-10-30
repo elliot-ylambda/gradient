@@ -411,7 +411,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.10.1" : require2("../package.json").version;
+    VERSION = true ? "0.10.2" : require2("../package.json").version;
     BUNDLED = true;
   }
 });
@@ -5246,7 +5246,7 @@ async function scan(opts, deps = {}) {
   markLoops(allCandidates);
   if (opts.scope === "project") markCorrections(allCandidates);
   const beforeGate = allCandidates.length;
-  const dayGated = allCandidates.filter((candidate) => !CLUSTERED_PROMPT_KINDS.has(candidate.kind) || activeWindows(candidate.occurrences) >= MIN_ACTIVE_WINDOWS);
+  const dayGated = allCandidates.filter((candidate) => !CLUSTERED_PROMPT_KINDS.has(candidate.kind) || activeWindows(candidate.occurrences) >= MIN_ACTIVE_WINDOWS && candidate.sessions >= MIN_SESSIONS);
   if (dayGated.length < beforeGate) {
     log(`recurrence gate \u2192 ${beforeGate - dayGated.length} prompt-derived candidate(s) held back as project history`);
   }
@@ -5322,7 +5322,7 @@ async function scan(opts, deps = {}) {
   log(`found ${valid.length} suggestions \u2192 cached`);
   return valid;
 }
-var CLUSTERED_PROMPT_KINDS, MIN_ACTIVE_WINDOWS, MAX_MINED_PROMPT_CHARS, MAX_TOOL_EVENTS;
+var CLUSTERED_PROMPT_KINDS, MIN_ACTIVE_WINDOWS, MIN_SESSIONS, MAX_MINED_PROMPT_CHARS, MAX_TOOL_EVENTS;
 var init_scan = __esm({
   "src/commands/scan.ts"() {
     "use strict";
@@ -5353,6 +5353,7 @@ var init_scan = __esm({
     init_toolmine();
     CLUSTERED_PROMPT_KINDS = /* @__PURE__ */ new Set(["unknown", "loop", "correction"]);
     MIN_ACTIVE_WINDOWS = 2;
+    MIN_SESSIONS = 2;
     MAX_MINED_PROMPT_CHARS = 4e3;
     MAX_TOOL_EVENTS = 2e4;
   }
@@ -6059,6 +6060,7 @@ async function loadInstructions(projectDir, targets, opts = {}) {
   const lines = [];
   const unreadable = [];
   const warnings = [];
+  let codexBudget;
   const seen = /* @__PURE__ */ new Set();
   const ancestors = ancestorDirs(projectDir);
   const repoDirs = await repositoryDirs(projectDir);
@@ -6165,12 +6167,13 @@ async function loadInstructions(projectDir, targets, opts = {}) {
         const path5 = join17(dir, name);
         const raw = await readBounded(project2, path5, unreadable);
         if (raw === null || !raw.trim()) continue;
-        if (consumed + Buffer.byteLength(raw) > budget) {
-          warnings.push(`Codex instruction budget (${budget} bytes) reached at ${path5}; this file and later guidance were not inspected as fully loaded.`);
+        const size = Buffer.byteLength(raw);
+        if (consumed + size > budget) {
+          codexBudget ??= { path: path5, bytes: size, budget, loaded: budget - consumed };
           consumed = budget;
         } else if (consumed < budget) {
           await ingest(path5, scope, "codex", "agents-md");
-          consumed += Buffer.byteLength(raw);
+          consumed += size;
         }
         break;
       }
@@ -6193,7 +6196,14 @@ async function loadInstructions(projectDir, targets, opts = {}) {
     mode,
     blockedBy
   };
-  return { sources, lines, bridge, unreadable: [...new Set(unreadable)], warnings: [...new Set(warnings)] };
+  return {
+    sources,
+    lines,
+    bridge,
+    unreadable: [...new Set(unreadable)],
+    warnings: [...new Set(warnings)],
+    ...codexBudget ? { codexBudget } : {}
+  };
 }
 function displayPath(path5, projectDir) {
   const rel = relative7(projectDir, path5);
@@ -6597,7 +6607,9 @@ function extractRefs(text) {
 }
 async function repoIndex(projectDir) {
   const listed = await git([...UNTRUSTED_REPO, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], projectDir, MAX_INDEX_BYTES);
-  return listed === null ? null : listed.split("\0").filter(Boolean);
+  if (listed === null) return null;
+  const nested = await git([...UNTRUSTED_REPO, "ls-files", "-z", "--cached", "--recurse-submodules"], projectDir, MAX_INDEX_BYTES);
+  return [...new Set(`${listed}\0${nested ?? ""}`.split("\0").filter(Boolean))];
 }
 async function readRepoFacts(projectDir, index = null) {
   const scripts = /* @__PURE__ */ new Set();
@@ -6969,6 +6981,23 @@ function practiceFindings(input) {
       detail: assistants.includes("claude-code") ? "Claude recommends concise instruction files. Review repeated or outdated guidance; path-scoped rules can move specialized instructions closer to their use." : "Review whether these instructions are concise and still relevant. Codex instruction loading is subject to its configured byte budget; line count alone does not prove truncation.",
       evidence: `${source.lineCount} lines \xB7 ${source.bytes} bytes, loaded every session`,
       targets: assistants,
+      deterministic: true,
+      commandBearing: false,
+      changes: []
+    });
+  }
+  const budget = input.instructions.codexBudget;
+  if (budget && input.targets.includes("codex")) {
+    const file = displayPath(budget.path, input.projectDir);
+    const kib = (bytes) => `${Math.round(bytes / 1024)} KiB`;
+    out.push({
+      id: findingId("practice", "codex-budget", [budget.path]),
+      family: "practice",
+      severity: "medium",
+      title: budget.loaded > 0 ? `Codex stops reading ${file} after ${kib(budget.loaded)} of ${kib(budget.bytes)}` : `Codex never reads ${file}: earlier instructions use its whole budget`,
+      detail: `Codex loads instruction files up to project_doc_max_bytes (${budget.budget} bytes here) and leaves out the rest, so guidance past that point never reaches a Codex session. Raise project_doc_max_bytes in ~/.codex/config.toml, or move detail into skills or nested AGENTS.md files.`,
+      evidence: `${budget.bytes} bytes \xB7 Codex budget ${budget.budget} bytes`,
+      targets: ["codex"],
       deterministic: true,
       commandBearing: false,
       changes: []

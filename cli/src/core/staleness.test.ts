@@ -261,6 +261,15 @@ describe("real instruction files", () => {
     await expect(lstat(marker)).rejects.toThrow();
   });
 
+  it("looks inside submodules", async () => {
+    const fork = await checkout({ "src/agents/run/attempt.ts": "x" }, "fork");
+    execFileSync("git", ["add", "-A"], { cwd: fork });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fork"], { cwd: fork });
+    const dir = await checkout({ "src/a.ts": "x" });
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "add", "-q", fork, "fork"], { cwd: dir });
+    expect(await flagged(dir, "The fork applies it in `run/attempt.ts`.")).toEqual([]);
+  });
+
   it("still catches a directory that moved", async () => {
     const dir = await checkout({ "packages/frontend/editor-ui/src/main.ts": "x" });
     expect(await flagged(dir, "- **`packages/editor-ui`**: Vue 3 frontend application")).toEqual(["packages/editor-ui"]);

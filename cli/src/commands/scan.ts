@@ -50,6 +50,7 @@ import { failureLoops, rituals } from "../core/toolmine.js";
  */
 const CLUSTERED_PROMPT_KINDS: ReadonlySet<string> = new Set(["unknown", "loop", "correction"]);
 const MIN_ACTIVE_WINDOWS = 2;
+const MIN_SESSIONS = 2;
 
 const MAX_MINED_PROMPT_CHARS = 4_000;
 export const MAX_TOOL_EVENTS = 20_000;
@@ -325,11 +326,13 @@ export async function scan(opts: ScanOptions, deps: ScanDeps = {}): Promise<Sugg
   // candidates are interpretations: the same phrasing recurs both because it is
   // a ritual and because one hard feature was iterated on in a single sitting,
   // and clustering cannot tell those apart. A pattern confined to one sitting is
-  // project history, so require two occasions at least 24h apart.
+  // project history, so require two occasions at least 24h apart — in two
+  // sessions: a `/loop` session runs for days, and its own prompt repeated 48
+  // times in it was offered as a habit.
   const beforeGate = allCandidates.length;
   const dayGated = allCandidates.filter(candidate =>
     !CLUSTERED_PROMPT_KINDS.has(candidate.kind) ||
-    activeWindows(candidate.occurrences) >= MIN_ACTIVE_WINDOWS);
+    (activeWindows(candidate.occurrences) >= MIN_ACTIVE_WINDOWS && candidate.sessions >= MIN_SESSIONS));
   if (dayGated.length < beforeGate) {
     log(`recurrence gate → ${beforeGate - dayGated.length} prompt-derived candidate(s) held back as project history`);
   }

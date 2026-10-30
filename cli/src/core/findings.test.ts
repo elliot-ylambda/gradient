@@ -298,6 +298,19 @@ describe("buildFindings", () => {
     expect(codexOnly.find(f => f.suggestion?.id === "n1")).toBeUndefined();
   });
 
+  // A 68 KB AGENTS.md against Codex's 32 KiB default: half the guidance never
+  // reached Codex, and the checkup said so only as an inspection limit.
+  it("reports an AGENTS.md longer than Codex reads", async () => {
+    const dir = await tree({ "AGENTS.md": `${"- A line of guidance for this repository\n".repeat(2000)}` });
+    const found = buildFindings(await inputFor(dir, await tree({})));
+    const budget = found.find(f => f.title.startsWith("Codex stops reading"));
+    expect(budget?.title).toBe("Codex stops reading AGENTS.md after 32 KiB of 80 KiB");
+    expect(budget?.targets).toEqual(["codex"]);
+    expect(budget?.changes).toEqual([]);
+    const claudeOnly = buildFindings(await inputFor(dir, await tree({}), { targets: ["claude-code"] }));
+    expect(claudeOnly.some(f => f.title.startsWith("Codex stops reading"))).toBe(false);
+  });
+
   it("sorts high severity before low and never repeats an id", async () => {
     const dir = await tree({
       "AGENTS.md": "- Shared guidance for every agent in this repo\n",

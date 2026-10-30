@@ -467,6 +467,34 @@ describe("scan", () => {
     expect(cached.length).toBe(1);
   });
 
+  // `/loop` re-sends its prompt for days inside one session; 48 sends across
+  // several days still came from one sitting and are not a habit.
+  it("holds back a prompt repeated across days inside a single session", async () => {
+    const gated = async (sessions: string[]) => {
+      const logs: string[] = [];
+      const projectDir = await mkdtemp(join(tmpdir(), "grad-"));
+      const home = await mkdtemp(join(tmpdir(), "grad-home-"));
+      await scan(
+        { scope: "project", projectPath: projectDir, home },
+        {
+          backend: null,
+          collectFn: async () => ["fake.jsonl"],
+          parseFn: async () => ({
+            turns: sessions.map((sessionId, i) => ({
+              ts: `2026-07-0${i + 1}T10:00:00.000Z`, project: "x", role: "user" as const,
+              text: "check the deploy status and summarize what changed since yesterday", sessionId,
+            })),
+            events: [],
+          }),
+          log: m => logs.push(m),
+        },
+      );
+      return logs.some(line => line.startsWith("recurrence gate"));
+    };
+    expect(await gated(["s1", "s1", "s1"])).toBe(true);
+    expect(await gated(["s1", "s2", "s3"])).toBe(false);
+  });
+
   it("reports coverage gaps: husk transcripts and trailer sessions missing locally", async () => {
     const projectDir = await mkdtemp(join(tmpdir(), "grad-"));
     const home = await mkdtemp(join(tmpdir(), "grad-home-"));

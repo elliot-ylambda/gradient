@@ -152,10 +152,15 @@ export function extractRefs(text: string): string[] {
 const UNTRUSTED_REPO = ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false"];
 
 /** Every file git would show for this checkout, tracked or not, minus ignored
- *  ones; null outside a repository or when the listing is unavailable. */
+ *  ones, and the files of its submodules — an instruction about a vendored fork
+ *  names `run/attempt.ts` inside it. Null outside a repository or when the
+ *  listing is unavailable. */
 export async function repoIndex(projectDir: string): Promise<string[] | null> {
   const listed = await git([...UNTRUSTED_REPO, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], projectDir, MAX_INDEX_BYTES);
-  return listed === null ? null : listed.split("\0").filter(Boolean);
+  if (listed === null) return null;
+  // `--recurse-submodules` only combines with `--cached`, hence a second listing.
+  const nested = await git([...UNTRUSTED_REPO, "ls-files", "-z", "--cached", "--recurse-submodules"], projectDir, MAX_INDEX_BYTES);
+  return [...new Set(`${listed}\0${nested ?? ""}`.split("\0").filter(Boolean))];
 }
 
 /** Scripts and targets from the root manifests and, in a workspace, every

@@ -464,6 +464,31 @@ function practiceFindings(input: FindingsInput): Finding[] {
     });
   }
 
+  // Codex reads project instructions up to `project_doc_max_bytes` and stops;
+  // a long AGENTS.md is half-loaded with no sign of it in the session.
+  const budget = input.instructions.codexBudget;
+  if (budget && input.targets.includes("codex")) {
+    const file = displayPath(budget.path, input.projectDir);
+    const kib = (bytes: number): string => `${Math.round(bytes / 1024)} KiB`;
+    out.push({
+      id: findingId("practice", "codex-budget", [budget.path]),
+      family: "practice",
+      severity: "medium",
+      title: budget.loaded > 0
+        ? `Codex stops reading ${file} after ${kib(budget.loaded)} of ${kib(budget.bytes)}`
+        : `Codex never reads ${file}: earlier instructions use its whole budget`,
+      detail:
+        `Codex loads instruction files up to project_doc_max_bytes (${budget.budget} bytes here) and leaves out the rest, ` +
+        "so guidance past that point never reaches a Codex session. Raise project_doc_max_bytes in ~/.codex/config.toml, " +
+        "or move detail into skills or nested AGENTS.md files.",
+      evidence: `${budget.bytes} bytes · Codex budget ${budget.budget} bytes`,
+      targets: ["codex"],
+      deterministic: true,
+      commandBearing: false,
+      changes: [],
+    });
+  }
+
   // The same instruction in two loaded files is two chances to be followed
   // inconsistently, and the docs call out contradiction as a real failure mode.
   const byNormalized = new Map<string, InstructionLine[]>();
