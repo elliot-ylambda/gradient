@@ -97,6 +97,33 @@ describe("restore points", () => {
     expect(await exists(join(dir, ".claude/skills/big/notes.md"))).toBe(true);
   });
 
+  it("refuses to restore through a directory that became a link after the point", async () => {
+    const home = await tree({});
+    const outside = await tree({ "CLAUDE.md": "- outside, must stay\n" });
+    const dir = await project({ "CLAUDE.md": "- root\n", ".claude/notes.md": "x" });
+    await symlink("../CLAUDE.md", join(dir, ".claude/CLAUDE.md"));
+    const point = await createRestorePoint(dir, { home });
+    // The repository's .claude is swapped for a link to somewhere else.
+    await rm(join(dir, ".claude"), { recursive: true });
+    await symlink(outside, join(dir, ".claude"));
+
+    const outcome = await restoreTo(point.id, dir, { home });
+    expect(outcome.failed).toContain(".claude/CLAUDE.md");
+    expect(await readFile(join(outside, "CLAUDE.md"), "utf8")).toBe("- outside, must stay\n");
+    expect((await lstat(join(outside, "CLAUDE.md"))).isSymbolicLink()).toBe(false);
+  });
+
+  it("redacts secrets in the diffs it shows", async () => {
+    const home = await tree({});
+    const dir = await project({ ".claude/settings.local.json": "{}\n" });
+    const point = await createRestorePoint(dir, { home });
+    await writeFile(join(dir, ".claude/settings.local.json"), '{ "env": { "API_KEY": "sk-ant-abcdef1234567890" } }\n');
+    const { changes } = await changesSince(point.id, dir, { home });
+    const diff = changes.find(change => change.label === ".claude/settings.local.json")!.diff;
+    expect(diff).toContain("[REDACTED]");
+    expect(diff).not.toContain("sk-ant-abcdef1234567890");
+  });
+
   it("is kept apart from read-only runs when old runs are pruned", async () => {
     const home = await tree({});
     const dir = await project({ "CLAUDE.md": "- a\n" });

@@ -87,6 +87,7 @@ import {
   open,
   rename,
   rm,
+  symlink,
   unlink,
   writeFile
 } from "node:fs/promises";
@@ -207,6 +208,19 @@ async function safeWriteFile(base, path5, data, opts = {}) {
 async function safeUnlink(base, path5) {
   await assertNoSymlinkPath(base, path5, { includeTarget: false });
   await unlink(path5);
+}
+async function safeSymlink(base, target, path5) {
+  const resolved = resolvedInside(base, path5);
+  await assertNoSymlinkPath(resolved.base, resolved.target, { includeTarget: false });
+  const temp = join(dirname(resolved.target), `.gradient-tmp-link-${process.pid}-${randomUUID()}`);
+  await symlink(target, temp);
+  try {
+    await rename(temp, resolved.target);
+  } catch (error) {
+    await unlink(temp).catch(() => void 0);
+    throw error;
+  }
+  await assertNoSymlinkPath(resolved.base, resolved.target, { includeTarget: false });
 }
 async function safeRemoveTree(base, path5) {
   const resolved = resolvedInside(base, path5);
@@ -8519,7 +8533,7 @@ footer{
 
 // src/core/restore.ts
 import { execFile as execFile3 } from "node:child_process";
-import { lstat as lstat10, opendir as opendir7, readlink, symlink, unlink as unlink2 } from "node:fs/promises";
+import { lstat as lstat10, opendir as opendir7, readlink, unlink as unlink2 } from "node:fs/promises";
 import { basename as basename6, extname, join as join22, relative as relative8, sep as sep4 } from "node:path";
 import { homedir as homedir16 } from "node:os";
 async function restoreTargets(projectDir, opts = {}) {
@@ -8666,9 +8680,9 @@ async function unifiedDiff(before, afterPath, labels, tmp, home) {
   });
   if (before !== null) await unlink2(left).catch(() => void 0);
   const hunks = output.slice(Math.max(0, output.indexOf("\n@@") + 1));
-  return output.includes("@@") ? `--- ${labels.before}
+  return output.includes("@@") ? redact(`--- ${labels.before}
 +++ ${labels.after}
-${hunks}` : "";
+${hunks}`) : "";
 }
 async function changesSince(id, projectDir, opts = {}) {
   const home = opts.home ?? homedir16();
@@ -8710,8 +8724,15 @@ async function changesSince(id, projectDir, opts = {}) {
   for (const [path5, target] of Object.entries(point.links)) {
     const linkedTo = await kind(path5) === "link" ? await readlink(path5) : null;
     if (linkedTo === target) continue;
-    changes.push({ path: path5, base: targets.root, label: label(path5, targets.root, displayHome), status: "modified", diff: `link ${target} \u2192 ${linkedTo ?? "(not a link now)"}
-` });
+    const base = targets.files.find((file) => file.path === path5)?.base ?? targets.root;
+    changes.push({
+      path: path5,
+      base,
+      label: label(path5, targets.root, displayHome),
+      status: "modified",
+      diff: redact(`link ${target} \u2192 ${linkedTo ?? "(not a link now)"}
+`)
+    });
   }
   return { id, takenAt: result.startedAt, changes };
 }
@@ -8727,8 +8748,7 @@ async function restoreTo(id, projectDir, opts = {}) {
     try {
       const linkTarget = point.links[change.path];
       if (linkTarget !== void 0) {
-        if (await kind(change.path) !== null) await unlink2(change.path);
-        await symlink(linkTarget, change.path);
+        await safeSymlink(change.base, linkTarget, change.path);
         restored.push(change.label);
         continue;
       }
@@ -8778,6 +8798,7 @@ var init_restore = __esm({
     init_staleness();
     init_run();
     init_safeFs();
+    init_security();
     INSTRUCTION_NAMES = /* @__PURE__ */ new Set(["CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "AGENTS.override.md"]);
     TEXT_EXTENSIONS = /* @__PURE__ */ new Set([".md", ".json", ".toml", ".yaml", ".yml", ".txt"]);
     MAX_FILES = 2e3;

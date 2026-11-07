@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { lstat, opendir, readlink, symlink, unlink } from "node:fs/promises";
+import { lstat, opendir, readlink, unlink } from "node:fs/promises";
 import { basename, extname, join, relative, sep } from "node:path";
 import { homedir } from "node:os";
 import { projectKey } from "../config.js";
@@ -22,7 +22,8 @@ import {
   type RunResult,
   type Snapshot,
 } from "./run.js";
-import { safeWriteFile } from "./safeFs.js";
+import { safeSymlink, safeWriteFile } from "./safeFs.js";
+import { redact } from "./security.js";
 
 /**
  * A restore point: the instruction surface of one project, as it was before
@@ -243,7 +244,9 @@ async function unifiedDiff(
   });
   if (before !== null) await unlink(left).catch(() => undefined);
   const hunks = output.slice(Math.max(0, output.indexOf("\n@@") + 1));
-  return output.includes("@@") ? `--- ${labels.before}\n+++ ${labels.after}\n${hunks}` : "";
+  // Settings and config files can hold tokens; a diff shown to a terminal or
+  // an assistant gets the same redaction as every other Gradient output.
+  return output.includes("@@") ? redact(`--- ${labels.before}\n+++ ${labels.after}\n${hunks}`) : "";
 }
 
 /** Everything that changed since a restore point, with diffs. */
@@ -283,7 +286,11 @@ export async function changesSince(
   for (const [path, target] of Object.entries(point.links)) {
     const linkedTo = await kind(path) === "link" ? await readlink(path) : null;
     if (linkedTo === target) continue;
-    changes.push({ path, base: targets.root, label: label(path, targets.root, displayHome), status: "modified", diff: `link ${target} → ${linkedTo ?? "(not a link now)"}\n` });
+    const base = targets.files.find(file => file.path === path)?.base ?? targets.root;
+    changes.push({
+      path, base, label: label(path, targets.root, displayHome), status: "modified",
+      diff: redact(`link ${target} → ${linkedTo ?? "(not a link now)"}\n`),
+    });
   }
   return { id, takenAt: result.startedAt, changes };
 }
@@ -306,8 +313,8 @@ export async function restoreTo(
     try {
       const linkTarget = point.links[change.path];
       if (linkTarget !== undefined) {
-        if (await kind(change.path) !== null) await unlink(change.path);
-        await symlink(linkTarget, change.path);
+        // Replaced in one rename; a linked ancestor directory is refused.
+        await safeSymlink(change.base, linkTarget, change.path);
         restored.push(change.label);
         continue;
       }
