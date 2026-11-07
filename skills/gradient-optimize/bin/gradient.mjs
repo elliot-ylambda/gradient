@@ -426,7 +426,7 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.12.0" : require2("../package.json").version;
+    VERSION = true ? "0.13.0" : require2("../package.json").version;
     BUNDLED = true;
   }
 });
@@ -2614,6 +2614,25 @@ function summarizeTools(tools) {
   const counts = /* @__PURE__ */ new Map();
   for (const t of tools) counts.set(t.name ?? "?", (counts.get(t.name ?? "?") ?? 0) + 1);
   return [...counts].map(([name, n]) => n > 1 ? `${name} \xD7${n}` : name).join(", ");
+}
+function lastAssistantTurn(lines) {
+  let apiError;
+  let sawRealMessage = false;
+  let text = "";
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const raw = parseLine(lines[index]);
+    if (!raw || raw.isSidechain || raw.type !== "assistant") continue;
+    if (raw.isApiErrorMessage === true && raw.message?.model === "<synthetic>") {
+      if (!sawRealMessage && apiError === void 0) apiError = typeof raw.error === "string" ? raw.error : "unknown";
+      continue;
+    }
+    sawRealMessage = true;
+    const content = raw.message?.content;
+    if (!Array.isArray(content)) continue;
+    text = content.filter((b) => b.type === "text").map((b) => b.text ?? "").join(" ").trim();
+    if (text) break;
+  }
+  return apiError === void 0 ? { text } : { text, apiError };
 }
 function renderTail(lines, opts = {}) {
   const maxTurns = opts.maxTurns ?? TAIL_MAX_TURNS;
@@ -9544,8 +9563,11 @@ var init_remove = __esm({
 });
 
 // src/core/judge.ts
-function buildJudgePrompt(mode, playbook, projectPlaybook, tail) {
-  const system = "You are the user's auto-responder for a Claude Code session that just stopped. Decide whether the work is actually done or Claude stopped early. If work is unfinished and Claude is not waiting on the user, reply with the nudge this user would send, in their own phrasing (see YOUR PLAYBOOK). If Claude asked the user a genuine question, or the work is done, stand down." + (mode === "full" ? " You may also answer routine questions and, when a task is complete, start this user's typical next step per the playbooks. Stand down on anything irreversible or destructive (pushes, deploys, deletions, spending) unless both playbooks' Rules explicitly allow it." : "") + ' Respond ONLY with JSON: {"action":"continue"|"stand_down","response":"<what to send>","why":"<one line>"}. action "continue" requires a non-empty response; omit response when standing down.';
+function buildJudgePrompt(playbook, projectPlaybook, tail) {
+  const system = `A Claude Code session just stopped. Decide whether to send it "Continue." on the user's behalf.
+- continue: the assistant's last message says it is about to do a specific next step itself and did not do it, or its response was cut off.
+- stand_down: everything else, and whenever unsure. In particular: the work is finished or the assistant reported results; it asked the user anything, offered options, or wants a go-ahead, information, a preference, or a review; it is waiting for the user to do something themselves (sign in, click, test, look); or the step involves pushing, deploying, releasing, merging, deleting, sending, publishing, or spending.
+Respond ONLY with JSON: {"action":"continue"|"stand_down","response":"Continue.","why":"<one line>"}. Omit response when standing down.`;
   const projectBlock = projectPlaybook.trim() ? `PROJECT PLAYBOOK (this repo):
 ${projectPlaybook}
 
@@ -22443,16 +22465,11 @@ async function respond(input, deps = {}) {
     const mode = input.cwd ? config.autopilotProjects?.[projectKey(input.cwd)] : void 0;
     if (mode !== "nudge") return allow;
     if (!input.session_id || !input.transcript_path || !input.cwd) return allow;
-    let effectiveMode = mode;
     let effectiveBudget = boundedAutopilotBudget(config.autopilotBudget);
     const project2 = await loadProjectPlaybook(input.cwd);
     if (project2) {
       if (project2.clamps.malformed) return allow;
-      if (project2.clamps.maxMode) {
-        const clamped = clampMode(effectiveMode, project2.clamps.maxMode);
-        if (clamped !== "nudge" && clamped !== "full") return allow;
-        effectiveMode = clamped;
-      }
+      if (project2.clamps.maxMode && clampMode(mode, project2.clamps.maxMode) !== "nudge") return allow;
       if (project2.clamps.budget !== void 0) {
         effectiveBudget = Math.min(effectiveBudget, project2.clamps.budget);
       }
@@ -22472,6 +22489,21 @@ async function respond(input, deps = {}) {
       await saveState(input.session_id, state, deps.home);
       return allow;
     }
+    const ts = (deps.now ?? (() => (/* @__PURE__ */ new Date()).toISOString()))();
+    const last = lastAssistantTurn(lines);
+    if (USER_DECIDES.test(last.text)) {
+      state.log.push({ ts, action: "stand_down", why: "the last message names a step the user decides", excerpt: "" });
+      await saveState(input.session_id, state, deps.home);
+      return allow;
+    }
+    if (last.apiError !== void 0 && RETRYABLE_API_ERRORS.has(last.apiError)) {
+      state.attempts += 1;
+      state.count += 1;
+      state.lastFingerprint = fp;
+      state.log.push({ ts, action: "continue", why: "the response was cut off", excerpt: SAFE_NUDGE });
+      await saveState(input.session_id, state, deps.home);
+      return { decision: "block", reason: SAFE_NUDGE };
+    }
     const backend = deps.backend !== void 0 ? deps.backend : await autopilotBackend(config);
     if (!backend) return allow;
     const tail = redact(renderTail(lines));
@@ -22483,10 +22515,9 @@ async function respond(input, deps = {}) {
     await saveState(input.session_id, state, deps.home);
     const decision = await judge(
       backend,
-      buildJudgePrompt(effectiveMode, playbook, projectProse, tail),
+      buildJudgePrompt(playbook, projectProse, tail),
       { timeoutMs: deps.timeoutMs }
     );
-    const ts = (deps.now ?? (() => (/* @__PURE__ */ new Date()).toISOString()))();
     if (decision.action === "continue" && decision.response) {
       state.count += 1;
       state.log.push({ ts, action: "continue", why: decision.why, excerpt: SAFE_NUDGE });
@@ -22500,7 +22531,7 @@ async function respond(input, deps = {}) {
     return allow;
   }
 }
-var PLAYBOOK_CAP, SAFE_NUDGE, ANTHROPIC_MODEL_ALIASES;
+var PLAYBOOK_CAP, SAFE_NUDGE, RETRYABLE_API_ERRORS, USER_DECIDES, ANTHROPIC_MODEL_ALIASES;
 var init_respond = __esm({
   "src/commands/respond.ts"() {
     "use strict";
@@ -22516,6 +22547,39 @@ var init_respond = __esm({
     init_codexCli();
     PLAYBOOK_CAP = 4096;
     SAFE_NUDGE = "Continue.";
+    RETRYABLE_API_ERRORS = /* @__PURE__ */ new Set(["server_error", "overloaded_error", "overloaded"]);
+    USER_DECIDES = new RegExp("\\b(?:" + [
+      "push(?:es|ed|ing)?",
+      "deploy\\w*",
+      "releas\\w*",
+      "publish\\w*",
+      "merg(?:e|es|ed|ing)",
+      "rebas\\w*",
+      "delet\\w*",
+      "remov\\w*",
+      "rm -rf",
+      "drop(?:s|ped|ping)?",
+      "truncat\\w*",
+      "migrat\\w*",
+      "rotat\\w*",
+      "revok\\w*",
+      "send(?:s|ing)?",
+      "sent",
+      "e-?mail(?:s|ed|ing)?",
+      "post(?:s|ed|ing)?",
+      "tweet\\w*",
+      "pay(?:s|ing|ments?)?",
+      "paid",
+      "charg(?:e|es|ed|ing)",
+      "purchas\\w*",
+      "spend(?:s|ing)?",
+      "spent",
+      "refund\\w*",
+      "prod",
+      "production",
+      "ship(?:s|ped|ping)?",
+      "tag(?:s|ged|ging)?"
+    ].join("|") + ")\\b", "i");
     ANTHROPIC_MODEL_ALIASES = {
       haiku: "claude-haiku-4-5-20251001"
     };

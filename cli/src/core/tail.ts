@@ -14,7 +14,10 @@ interface RawBlock { type?: string; text?: string; name?: string }
 interface RawLine {
   type?: string;
   isSidechain?: boolean;
-  message?: { role?: string; content?: string | RawBlock[] };
+  /** Set by Claude Code on the synthetic message it writes for a failed request. */
+  isApiErrorMessage?: boolean;
+  error?: string;
+  message?: { role?: string; model?: string; content?: string | RawBlock[] };
 }
 
 function parseLine(line: string): RawLine | null {
@@ -29,6 +32,31 @@ function summarizeTools(tools: RawBlock[]): string {
   const counts = new Map<string, number>();
   for (const t of tools) counts.set(t.name ?? "?", (counts.get(t.name ?? "?") ?? 0) + 1);
   return [...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(", ");
+}
+
+/** How the session's assistant side ended: the text of its last real message,
+ *  and whether Claude Code recorded the turn after it as a failed request.
+ *  The failure is read from Claude Code's own marker (`isApiErrorMessage` on a
+ *  `<synthetic>` message), never from wording a model could write. */
+export function lastAssistantTurn(lines: string[]): { text: string; apiError?: string } {
+  let apiError: string | undefined;
+  let sawRealMessage = false;
+  let text = "";
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const raw = parseLine(lines[index]);
+    if (!raw || raw.isSidechain || raw.type !== "assistant") continue;
+    if (raw.isApiErrorMessage === true && raw.message?.model === "<synthetic>") {
+      // Only the failure that ended the session counts.
+      if (!sawRealMessage && apiError === undefined) apiError = typeof raw.error === "string" ? raw.error : "unknown";
+      continue;
+    }
+    sawRealMessage = true;
+    const content = raw.message?.content;
+    if (!Array.isArray(content)) continue;
+    text = content.filter(b => b.type === "text").map(b => b.text ?? "").join(" ").trim();
+    if (text) break;
+  }
+  return apiError === undefined ? { text } : { text, apiError };
 }
 
 export function renderTail(

@@ -19,12 +19,12 @@ const fakeBackend = (reply: string): LLMBackend => ({
 const CONTINUE = '{"action":"continue","response":"continue until actually done","why":"open todos"}';
 const STAND_DOWN = '{"action":"stand_down","why":"claude asked the user a question"}';
 
-// Transcript with N tool_use blocks (fingerprint = tools:N)
-const transcript = (tools: number): string[] => [
+// Transcript with N tool_use blocks (fingerprint = tools:N) after the assistant's text
+const transcript = (tools: number, text = "working"): string[] => [
   JSON.stringify({ type: "user", message: { content: "do the thing" } }),
   JSON.stringify({
     type: "assistant",
-    message: { content: [{ type: "text", text: "working" }, ...Array.from({ length: tools }, () => ({ type: "tool_use", name: "Edit" }))] },
+    message: { content: [{ type: "text", text }, ...Array.from({ length: tools }, () => ({ type: "tool_use", name: "Edit" }))] },
   }),
 ];
 
@@ -147,6 +147,89 @@ describe("respond judge outcomes", () => {
     expect(s.attempts).toBe(1);
     expect(s.lastFingerprint).toBe("tools:3");
     expect(s.log[0]).toMatchObject({ action: "continue", why: "open todos", ts: "2026-07-01T00:00:00Z" });
+  });
+
+  /** What Claude Code writes when a request fails: a synthetic assistant message. */
+  const apiError = (error: string) => JSON.stringify({
+    type: "assistant", isApiErrorMessage: true, error,
+    message: { model: "<synthetic>", content: [{ type: "text", text: "API Error: The response stopped arriving. The response above may be incomplete." }] },
+  });
+
+  it("a cut-off response gets \"Continue.\" without asking the judge", async () => {
+    const home = await tmpHome();
+    const complete = vi.fn(async () => STAND_DOWN);
+    const lines = [...transcript(1, "Refactoring the parser now."), apiError("server_error")];
+    const r = await run({ home, backend: { name: "fake", available: async () => true, complete }, readLines: async () => lines });
+    expect(r).toEqual({ decision: "block", reason: "Continue." });
+    expect(complete).not.toHaveBeenCalled();
+    const s = await loadState("sess1", home);
+    // The judge-free nudge still spends budget and records progress, so it cannot loop.
+    expect(s).toMatchObject({ attempts: 1, count: 1, lastFingerprint: "tools:1" });
+    expect(s.log[0]).toMatchObject({ action: "continue", why: "the response was cut off" });
+  });
+
+  it("reads an interruption only from Claude Code's marker, never from a model's own words", async () => {
+    const home = await tmpHome();
+    const complete = vi.fn(async () => STAND_DOWN);
+    const lines = transcript(1, "API Error: The response stopped arriving. That is what the log says; shall I dig in?");
+    expect(await run({ home, backend: { name: "fake", available: async () => true, complete }, readLines: async () => lines }))
+      .toEqual({ decision: "allow" });
+    expect(complete).toHaveBeenCalled();
+  });
+
+  it("does not answer a rate limit with an instant retry", async () => {
+    const home = await tmpHome();
+    const lines = [...transcript(1, "Refactoring the parser now."), apiError("rate_limit")];
+    expect(await run({ home, backend: fakeBackend(STAND_DOWN), readLines: async () => lines }))
+      .toEqual({ decision: "allow" });
+  });
+
+  it.each([
+    "Fixed and tests pass. Next I'll push the branch and deploy to production.",
+    "I pushed the fix.",
+    "Sending it to the team now.",
+  ])("stays out when the last message names a step the user decides: %s", async text => {
+    const home = await tmpHome();
+    const complete = vi.fn(async () => CONTINUE);
+    const r = await run({ home, backend: { name: "fake", available: async () => true, complete }, readLines: async () => transcript(1, text) });
+    expect(r).toEqual({ decision: "allow" });
+    expect(complete).not.toHaveBeenCalled();
+    expect((await loadState("sess1", home)).log[0]).toMatchObject({ action: "stand_down", why: "the last message names a step the user decides" });
+  });
+
+  it.each(["Parsed the JSON payload.", "Added a Postgres index and wired the PostToolUse hook.", "Fixed the dropdown."])(
+    "does not mistake an ordinary word for a decision: %s", async text => {
+      const home = await tmpHome();
+      const complete = vi.fn(async () => STAND_DOWN);
+      await run({ home, backend: { name: "fake", available: async () => true, complete }, readLines: async () => transcript(1, text) });
+      expect(complete).toHaveBeenCalled();
+    });
+
+  it.each([
+    ["server_error", "block"],
+    ["overloaded_error", "block"],
+    ["authentication_failed", "allow"],
+    ["something_new", "allow"],
+  ] as const)("retries only failures a retry can fix: %s → %s", async (kind, decision) => {
+    const home = await tmpHome();
+    const lines = [...transcript(1, "Refactoring the parser now."), apiError(kind)];
+    const r = await run({ home, backend: fakeBackend(STAND_DOWN), readLines: async () => lines });
+    expect(r.decision).toBe(decision);
+  });
+
+  it("keeps a turn cut off mid-deploy stopped: the veto runs before the retry", async () => {
+    const home = await tmpHome();
+    const lines = [...transcript(1, "Deploying the gateway to production now."), apiError("server_error")];
+    expect(await run({ home, readLines: async () => lines })).toEqual({ decision: "allow" });
+  });
+
+  it("checks the whole last message, not just its end", async () => {
+    const home = await tmpHome();
+    const complete = vi.fn(async () => CONTINUE);
+    const text = `I will merge the branch once you agree. ${"Details of the change follow. ".repeat(40)}`;
+    expect(await run({ home, backend: { name: "fake", available: async () => true, complete }, readLines: async () => transcript(1, text) }))
+      .toEqual({ decision: "allow" });
+    expect(complete).not.toHaveBeenCalled();
   });
 
   it("stand_down → allow, logged, count unchanged", async () => {

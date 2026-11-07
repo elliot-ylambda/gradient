@@ -7,27 +7,22 @@ const fake = (fn: () => Promise<string>): LLMBackend => ({
 });
 
 describe("buildJudgePrompt", () => {
-  it("embeds the personal playbook and tail; nudge has no next-step authority", () => {
-    const req = buildJudgePrompt("nudge", "PB-CONTENT", "", "TAIL-CONTENT");
+  it("embeds the personal playbook and tail, and defaults to standing down", () => {
+    const req = buildJudgePrompt("PB-CONTENT", "", "TAIL-CONTENT");
     expect(req.prompt).toContain("PB-CONTENT");
     expect(req.prompt).toContain("TAIL-CONTENT");
     expect(req.prompt).not.toContain("PROJECT PLAYBOOK");
-    expect(req.system).toContain("stand down");
-    expect(req.system).not.toContain("typical next step");
-  });
-
-  it("full mode adds next-step authority and requires both playbooks to allow", () => {
-    const req = buildJudgePrompt("full", "pb", "proj", "tail");
-    expect(req.system).toContain("typical next step");
-    expect(req.system).toContain("irreversible");
-    expect(req.system).toContain("both playbooks");
+    expect(req.system).toContain("stand_down: everything else, and whenever unsure");
+    // A go-ahead, a question, or a step the user decides is never the judge's to answer.
+    expect(req.system).toMatch(/wants a go-ahead/);
+    expect(req.system).toMatch(/pushing, deploying, releasing, merging, deleting, sending, publishing, or spending/);
   });
 
   it("renders a provenance-labeled project block only for pinned prose", () => {
-    const req = buildJudgePrompt("nudge", "PB-CONTENT", "PROJ-CONTENT", "TAIL-CONTENT");
+    const req = buildJudgePrompt("PB-CONTENT", "PROJ-CONTENT", "TAIL-CONTENT");
     expect(req.prompt).toContain("PROJECT PLAYBOOK (this repo):\nPROJ-CONTENT");
     expect(req.prompt.indexOf("PROJECT PLAYBOOK")).toBeLessThan(req.prompt.indexOf("YOUR PLAYBOOK"));
-    expect(buildJudgePrompt("nudge", "pb", "   ", "tail").prompt).not.toContain("PROJECT PLAYBOOK");
+    expect(buildJudgePrompt("pb", "   ", "tail").prompt).not.toContain("PROJECT PLAYBOOK");
   });
 });
 

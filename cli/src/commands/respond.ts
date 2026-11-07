@@ -1,7 +1,7 @@
 import type { Config } from "../core/types.js";
 import { boundedAutopilotBudget, loadConfig, DEFAULT_AUTOPILOT_MODEL, projectKey, supportsClaudeHooks } from "../config.js";
 import { loadState, saveState, cleanupStale } from "../core/state.js";
-import { renderTail, fingerprint, readTranscriptLines } from "../core/tail.js";
+import { renderTail, fingerprint, lastAssistantTurn, readTranscriptLines } from "../core/tail.js";
 import { loadPlaybook, loadProjectPlaybook, clampMode, loadPlaybookPin, pinnedProse } from "../core/playbook.js";
 import { buildJudgePrompt, judge } from "../core/judge.js";
 import { redact } from "../core/security.js";
@@ -21,6 +21,25 @@ export interface StopHookInput {
 
 const PLAYBOOK_CAP = 4096;
 export const SAFE_NUDGE = "Continue.";
+
+/** Failed requests worth retrying at once: a server-side failure or an
+ *  overloaded API. Not a rate limit (an immediate "Continue." meets the same
+ *  limit), not an authentication failure, and not a kind this list has never
+ *  seen. In 30 days of real history every cut-off response was resumed — by
+ *  the user or by a coordinator. */
+const RETRYABLE_API_ERRORS: ReadonlySet<string> = new Set(["server_error", "overloaded_error", "overloaded"]);
+
+/** Steps the user decides. When the last message names one, anywhere in it,
+ *  autopilot stays out, whatever a judge would say: a "Continue." there is a
+ *  go-ahead. Verb forms, so "pushed", "sending", and "posted" count, while
+ *  "payload", "Postgres", and "dropdown" do not. */
+const USER_DECIDES = new RegExp("\\b(?:" + [
+  "push(?:es|ed|ing)?", "deploy\\w*", "releas\\w*", "publish\\w*", "merg(?:e|es|ed|ing)", "rebas\\w*",
+  "delet\\w*", "remov\\w*", "rm -rf", "drop(?:s|ped|ping)?", "truncat\\w*", "migrat\\w*", "rotat\\w*", "revok\\w*",
+  "send(?:s|ing)?", "sent", "e-?mail(?:s|ed|ing)?", "post(?:s|ed|ing)?", "tweet\\w*",
+  "pay(?:s|ing|ments?)?", "paid", "charg(?:e|es|ed|ing)", "purchas\\w*", "spend(?:s|ing)?", "spent", "refund\\w*",
+  "prod", "production", "ship(?:s|ped|ping)?", "tag(?:s|ged|ging)?",
+].join("|") + ")\\b", "i");
 
 export interface RespondResult {
   decision: "allow" | "block";
@@ -82,16 +101,11 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
 
     // Gate 2b: project clamp (spec §4). A committed gradient.md may only
     // restrict authority. Malformed frontmatter clamps this repo to off.
-    let effectiveMode: "nudge" | "full" = mode;
     let effectiveBudget = boundedAutopilotBudget(config.autopilotBudget);
     const project = await loadProjectPlaybook(input.cwd);
     if (project) {
       if (project.clamps.malformed) return allow; // fail closed: off
-      if (project.clamps.maxMode) {
-        const clamped = clampMode(effectiveMode, project.clamps.maxMode);
-        if (clamped !== "nudge" && clamped !== "full") return allow; // clamped to off
-        effectiveMode = clamped;
-      }
+      if (project.clamps.maxMode && clampMode(mode, project.clamps.maxMode) !== "nudge") return allow; // clamped to off
       if (project.clamps.budget !== undefined) {
         effectiveBudget = Math.min(effectiveBudget, project.clamps.budget);
       }
@@ -116,6 +130,24 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
       return allow;
     }
 
+    // Gate 5: the last message, checked locally before any model call.
+    const ts = (deps.now ?? (() => new Date().toISOString()))();
+    // The veto runs first: a turn cut off mid-"I'll deploy now" stays stopped.
+    const last = lastAssistantTurn(lines);
+    if (USER_DECIDES.test(last.text)) {
+      state.log.push({ ts, action: "stand_down", why: "the last message names a step the user decides", excerpt: "" });
+      await saveState(input.session_id, state, deps.home);
+      return allow;
+    }
+    if (last.apiError !== undefined && RETRYABLE_API_ERRORS.has(last.apiError)) {
+      state.attempts += 1;
+      state.count += 1;
+      state.lastFingerprint = fp;
+      state.log.push({ ts, action: "continue", why: "the response was cut off", excerpt: SAFE_NUDGE });
+      await saveState(input.session_id, state, deps.home);
+      return { decision: "block", reason: SAFE_NUDGE };
+    }
+
     const backend = deps.backend !== undefined ? deps.backend : await autopilotBackend(config);
     if (!backend) return allow;
 
@@ -132,11 +164,10 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
     await saveState(input.session_id, state, deps.home);
     const decision = await judge(
       backend,
-      buildJudgePrompt(effectiveMode, playbook, projectProse, tail),
+      buildJudgePrompt(playbook, projectProse, tail),
       { timeoutMs: deps.timeoutMs },
     );
 
-    const ts = (deps.now ?? (() => new Date().toISOString()))();
     if (decision.action === "continue" && decision.response) {
       state.count += 1;
       state.log.push({ ts, action: "continue", why: decision.why, excerpt: SAFE_NUDGE });

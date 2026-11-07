@@ -150,7 +150,15 @@ These are secondary and opt-in, configured per repository:
   top pending finding at the next start.
 - `board`: summarize other observed sessions in the repository.
 - `continuity`: save a bounded checkpoint and read it back on resume.
-- `autopilot`: a bounded model judge may send a fixed continuation nudge.
+- `autopilot`: may send "Continue." when Claude stops before a step it said it
+  would take, or after an API error cut a response off. It never answers a
+  question for you, and stays out entirely when the last message names a push,
+  deploy, release, merge, deletion, migration, message, or spend. The judge is
+  Claude Haiku by default, or GPT-6 Luna with `"backend": "codex-cli"` and
+  `"codexModel": "gpt-6-luna"` in `~/.config/gradient/config.json`. Replayed
+  over 240 real stops (`cli/scripts/autopilot-eval.mjs`), it nudged 6 times and
+  2 matched the user's next message. It seldom helps; leave it off unless your
+  sessions often stop just short of a step they announced.
 
 The rest are **Claude Code hooks**. Use `node /path/to/gradient.mjs on|off <feature>`.
 Turning on one of them in a Codex-only setup is refused with an explanation. Existing global optimize consent requires re-enabling for
