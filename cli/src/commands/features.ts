@@ -4,6 +4,7 @@ import { installHook, removeHook } from "../core/settings.js";
 import { setAutopilotMode } from "./autopilot.js";
 import { setBoard } from "./board.js";
 import { setContinuity } from "./continuity.js";
+import { setMemory } from "./memory.js";
 
 /**
  * Everything that runs in the background and therefore needs consent.
@@ -12,7 +13,7 @@ import { setContinuity } from "./continuity.js";
  * on`, `autopilot nudge`, `board on`, `init --session-scan`. They ask the same
  * question, so they get one answer: `gradient on <feature>`.
  */
-export const FEATURES = ["continuity", "autopilot", "board", "optimize"] as const;
+export const FEATURES = ["continuity", "autopilot", "board", "optimize", "memory"] as const;
 export type FeatureName = (typeof FEATURES)[number];
 
 export function isFeatureName(value: string): value is FeatureName {
@@ -29,14 +30,19 @@ export function isFeatureName(value: string): value is FeatureName {
  */
 export const FEATURE_PURPOSE: Record<FeatureName, string> = {
   continuity: "checkpoint before compaction, recap on resume",
-  autopilot: "draft a reply when a session stalls waiting on you",
+  autopilot: "when Claude stops early, nudge it to continue",
   board: "cross-session digest on start and on prompt",
   optimize: "re-check after a session ends (at most daily), surface it at the next start",
+  memory: "load your corrections into every session, in Claude Code and Codex",
 };
 
 export interface FeatureResult {
   on: boolean;
   settingsPath: string;
+  /** Further files written, when a feature spans assistants. */
+  otherPaths?: string[];
+  /** Something the user still has to do before it runs. */
+  next?: string;
   /** What the toggle actually did, when that is not obvious from on/off alone. */
   detail?: string;
 }
@@ -47,8 +53,20 @@ export async function setFeature(
   projectDir: string,
   opts: { home?: string } = {},
 ): Promise<FeatureResult> {
-  if (on) assertClaudeHooks(await loadConfig(opts.home));
+  // Memory also serves Codex-only setups; everything else is a Claude hook.
+  if (on && name !== "memory") assertClaudeHooks(await loadConfig(opts.home));
   switch (name) {
+    case "memory": {
+      const result = await setMemory(on, projectDir, opts);
+      const [settingsPath = "", ...otherPaths] = result.paths;
+      return {
+        on: result.on,
+        settingsPath,
+        ...(otherPaths.length > 0 ? { otherPaths } : {}),
+        detail: FEATURE_PURPOSE.memory,
+        ...(result.codexNeedsReview ? { next: "Codex runs a new hook only after review: type /hooks in Codex once and trust it." } : {}),
+      };
+    }
     case "continuity": {
       const result = await setContinuity(on, projectDir, opts);
       return { on: result.on, settingsPath: result.settingsPath, detail: FEATURE_PURPOSE.continuity };

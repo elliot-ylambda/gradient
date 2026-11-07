@@ -196,13 +196,19 @@ describe("the feature rows", () => {
     expect((await featureStatus(a, config, home)).every(row => row.on)).toBe(true);
     expect((await featureStatus(b, config, home)).every(row => !row.on)).toBe(true);
     await rm(join(a, ".claude", "settings.local.json"));
-    expect((await featureStatus(a, config, home)).every(row => !row.on)).toBe(true);
+    // Memory's hooks are user-level, so a checkout's own settings do not hold them.
+    const rows = await featureStatus(a, config, home);
+    expect(rows.filter(row => row.name !== "memory").every(row => !row.on)).toBe(true);
+    expect(rows.find(row => row.name === "memory")?.on).toBe(true);
   });
 
   it("labels unsupported Codex-only features instead of displaying false activation", async () => {
     const home = await mkdtemp(join(tmpdir(), "grad-feature-home-"));
     const rows = await featureStatus("/repo", { targets: ["codex"] }, home);
-    expect(rows.every(row => !row.on && row.supported === false)).toBe(true);
+    expect(rows.filter(row => row.name !== "memory").every(row => !row.on && row.supported === false)).toBe(true);
+    // Memory loads into Codex too, so it is offered rather than marked unavailable.
+    expect(rows.find(row => row.name === "memory")).toMatchObject({ on: false });
+    expect(rows.find(row => row.name === "memory")?.supported).toBeUndefined();
     const out = renderReport({ insights: emptyInsights(), adoption: [], pending: [], features: rows, board: null, autopilot: null }).join("\n");
     expect(out).toContain("unavailable (Gradient uses Claude Code hooks)");
     expect(out).not.toContain("optimize on");

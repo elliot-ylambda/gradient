@@ -272,6 +272,25 @@ describe("buildFindings", () => {
     expect(found.flatMap(f => f.changes).some(change => change.path.includes("/memory/"))).toBe(false);
   });
 
+  it("says how many of the user's corrections never load, and which notes are logs, without proposing an edit", async () => {
+    const dir = await tree({});
+    const encoded = dir.replace(/\//g, "-");
+    const memory = `.claude/projects/${encoded}/memory`;
+    const home = await tree({
+      [`${memory}/MEMORY.md`]: "# Memory\n- [Linked](feedback_linked.md)\n",
+      [`${memory}/feedback_linked.md`]: '---\ndescription: "Run make test first"\n---\n',
+      [`${memory}/feedback_hidden.md`]: '---\ndescription: "Never pipe to tail when the exit code matters"\n---\n',
+      [`${memory}/project_log.md`]: `---\ndescription: "Release log"\n---\n${"x".repeat(30_000)}`,
+    });
+    const found = buildFindings(await inputFor(dir, home, { targets: ["claude-code"] }));
+    const unlinked = found.find(f => f.title.includes("corrections in Claude's memory are never loaded"))!;
+    expect(unlinked.title).toMatch(/^1 of your corrections/);
+    expect(unlinked.severity).toBe("medium");
+    expect(unlinked.evidence).toContain("feedback_hidden.md");
+    expect(found.find(f => f.title.includes("over 25 KB"))?.evidence).toBe("project_log.md");
+    expect(found.flatMap(f => f.changes).some(change => change.path.includes("/memory/"))).toBe(false);
+  });
+
   it("gives a finding the same id across runs so a denial can stick", async () => {
     const dir = await tree({ "CLAUDE.md": "- Build the project with `scripts/build.sh` first\n" });
     const first = buildFindings(await inputFor(dir, await tree({})));

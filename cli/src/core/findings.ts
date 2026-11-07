@@ -11,6 +11,7 @@ import { containment, normalize, similarity } from "./cluster.js";
 import { redact } from "./security.js";
 import { within } from "./discovery.js";
 import { isMeasured } from "./classify.js";
+import { MEMORY_NOTE_LOG_BYTES, NOTE_TYPES, type MemoryNote, type MemoryNotes } from "./memory-tidy.js";
 
 /**
  * One reviewable proposal, whatever produced it.
@@ -554,6 +555,7 @@ const HOOK_FEATURE: Record<string, string> = {
   checkpoint: "continuity", recap: "continuity",
   respond: "autopilot",
   "session-start": "optimize", "session-end": "optimize",
+  memory: "memory",
 };
 
 const DUPLICATE_EXAMPLES = 5;
@@ -590,11 +592,74 @@ function duplicateFinding(sets: InstructionLine[][], projectDir: string): Findin
   };
 }
 
-/** Read-only. Nothing here ever proposes a change inside the memory directory. */
+const NOTE_EXAMPLES = 5;
+
+function noteList(notes: readonly MemoryNote[]): string {
+  const shown = notes.slice(0, NOTE_EXAMPLES).map(note => note.name).join(", ");
+  return notes.length > NOTE_EXAMPLES ? `${shown}, and ${notes.length - NOTE_EXAMPLES} more` : shown;
+}
+
+/** Topic notes the index never links, and notes grown into logs. */
+function memoryNoteFindings({ dir, notes }: MemoryNotes): Finding[] {
+  const out: Finding[] = [];
+
+  const unlinked = notes.filter(note => !note.linked);
+  if (unlinked.length > 0) {
+    const feedback = unlinked.filter(note => note.type === "feedback");
+    const byType = NOTE_TYPES
+      .map(type => [type, unlinked.filter(note => note.type === type).length] as const)
+      .filter(([, count]) => count > 0)
+      .map(([type, count]) => `${count} ${type}`);
+    out.push({
+      id: findingId("memory", "unlinked", [dir]),
+      family: "memory",
+      severity: feedback.length > 0 ? "medium" : "low",
+      title: feedback.length > 0
+        ? `${feedback.length} of your corrections in Claude's memory are never loaded`
+        : `${unlinked.length} of ${notes.length} memory notes are never loaded`,
+      detail:
+        "Claude Code loads MEMORY.md at session start and reads a topic note only when the index points to it, " +
+        "so an unlinked note's lesson is in practice lost. " +
+        (feedback.length > 0
+          ? "The feedback notes record corrections you gave Claude. Ask Claude to add a one-line pointer for each, " +
+            "or to merge them into one note the index links."
+          : "Ask Claude to link the ones that still matter."),
+      evidence: `${unlinked.length} of ${notes.length} notes unlinked (${byType.join(", ")})` +
+        (feedback.length > 0 ? ` · ${noteList(feedback)}` : ""),
+      targets: ["claude-code"],
+      deterministic: true,
+      commandBearing: false,
+      changes: [],
+    });
+  }
+
+  const logs = notes.filter(note => note.bytes > MEMORY_NOTE_LOG_BYTES);
+  if (logs.length > 0) {
+    out.push({
+      id: findingId("memory", "log-notes", [dir]),
+      family: "memory",
+      severity: "low",
+      title: `${logs.length} memory note${logs.length === 1 ? " is" : "s are"} over ${Math.round(MEMORY_NOTE_LOG_BYTES / 1000)} KB`,
+      detail: "A note that size is a log, not something to remember: a session that reads it pays for all of it. " +
+        "Ask Claude to keep the rule it taught and archive the rest.",
+      evidence: noteList(logs.sort((a, b) => b.bytes - a.bytes)),
+      targets: ["claude-code"],
+      deterministic: true,
+      commandBearing: false,
+      changes: [],
+    });
+  }
+
+  return out;
+}
+
+/** The auto-memory index and its notes. Read-only: Claude Code owns this
+ *  directory, many sessions write it at once, and an archive rule tested on a
+ *  real one would have buried lessons — so nothing here proposes a change. */
 function memoryFindings(input: FindingsInput): Finding[] {
   const memory = input.surface.memory;
   if (!memory) return [];
-  const out: Finding[] = [];
+  const out: Finding[] = memory.notes ? memoryNoteFindings(memory.notes) : [];
 
   if (memory.overLineLimit || memory.overByteLimit) {
     const beyond = memory.lines.filter(line => line.beyondLimit).length;

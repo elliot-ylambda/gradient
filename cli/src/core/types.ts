@@ -155,6 +155,9 @@ export interface Config {
   continuityProjects?: string[];
   /** Canonical board-root paths (git common-dir roots) where cross-session board hooks are consented. */
   boardProjects?: string[];
+  /** Repositories (main-checkout realpaths) whose memory loads into every
+   *  Claude Code and Codex session started in them. */
+  memoryProjects?: string[];
   /** Max paid judge attempts per session. Defaults to 10. */
   autopilotBudget?: number;
   /** Judge model (fast by design; the judge sits in the user's stop path). Defaults to "haiku". */
