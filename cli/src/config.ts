@@ -103,6 +103,7 @@ function validateConfig(value: unknown): Config {
   validateAutopilotProjects(config.autopilotProjects);
   validateProjectList(config.continuityProjects, "continuityProjects");
   validateProjectList(config.boardProjects, "boardProjects");
+  validateProjectList(config.memoryProjects, "memoryProjects");
   validateProjectList(config.optimizeProjects, "optimizeProjects");
   if (config.ignorePatterns !== undefined && (
     !Array.isArray(config.ignorePatterns) || config.ignorePatterns.length > 20 ||
@@ -171,7 +172,7 @@ export function supportsClaudeHooks(config: Config): boolean {
 
 export function assertClaudeHooks(config: Config): void {
   if (!supportsClaudeHooks(config)) {
-    throw new Error("Gradient's background features currently use Claude Code hooks only. Codex users can run optimize and the report manually; no hooks were installed.");
+    throw new Error("This feature uses Claude Code hooks, and no hooks were installed. In a Codex-only setup, memory is the feature Gradient can turn on; the checkup and report run manually.");
   }
 }
 

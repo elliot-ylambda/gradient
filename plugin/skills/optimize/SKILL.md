@@ -82,8 +82,8 @@ network call on this path, and does not require an API key.
    was kept. Do not claim restoration until it succeeds.
 
 Optional feature status is context, not a reason to enable more automation.
-Gradient currently installs hooks only for Claude Code; Codex has its own native
-hook system. Never enable a background feature without the user's choice.
+Gradient's memory feature installs hooks for Claude Code and Codex; its other
+features install Claude Code hooks only. Never enable a background feature without the user's choice.
 
 Gradient never changes assistant-managed auto memory. Generated workflows record
 observed habits and grant no standing permission for consequential actions.

@@ -55,8 +55,9 @@ $skill-installer install gradient-optimize, gradient-report and gradient-feature
 | Manage optional Claude hooks | `/gradient:features` | `$gradient-features` |
 
 Each skill uses its own bundled runner, including custom install locations.
-Codex can run the checkup and report; Gradient's optional hook installer currently
-targets Claude Code. Codex has native hooks, but Gradient does not install them.
+Codex can run the checkup and report. Of the optional hooks, memory installs
+for Claude Code and Codex; continuity, autopilot, board, and periodic checkups
+install for Claude Code only.
 
 To update Claude Code: `claude plugin update gradient@gradient`, then restart.
 For Codex, remove only the three installed Gradient skill directories and rerun
@@ -113,6 +114,7 @@ default; `--user` or `--all` explicitly includes cross-project history.
 | Instruction loading | Which inspected files apply to which assistant, including precedence and explicit imports |
 | Skill health | Installed locations, descriptions, and compatibility observations |
 | Repeated behavior | Counts from observed events or clearly labeled interpretations of repeated prompts |
+| Auto memory | Which notes `MEMORY.md` links (only those load), how many of your corrections it leaves out, and notes too large to be memories |
 
 Claude Code can now read `AGENTS.md` directly in supported configurations.
 Gradient proposes an import only when the inspected configuration needs one.
@@ -135,16 +137,23 @@ productivity gains. See the [dated comparison and primary sources](docs/native-t
 
 ## Optional background features
 
-These are secondary, opt-in **Claude Code hooks**, configured per repository:
+These are secondary and opt-in, configured per repository:
 
+- `memory` (Claude Code and Codex): start every session in the repository, in
+  either assistant, with a short list of your corrections from Claude Code's
+  auto memory. In Claude Code that means the ones `MEMORY.md` doesn't load;
+  Codex, which can't read Claude's memory, gets them all. The hooks are user-level
+  (`~/.claude/settings.json`, `~/.codex/hooks.json`) so every worktree is
+  covered, and consent is per repository. Codex runs the hook after you
+  review it once with `/hooks`.
 - `optimize`: propose a fresh checkup after a session, at most daily, and show the
   top pending finding at the next start.
 - `board`: summarize other observed sessions in the repository.
 - `continuity`: save a bounded checkpoint and read it back on resume.
 - `autopilot`: a bounded model judge may send a fixed continuation nudge.
 
-Use `node /path/to/gradient.mjs on|off <feature>`. Codex-only activation is refused
-with an explanation. Existing global optimize consent requires re-enabling for
+The rest are **Claude Code hooks**. Use `node /path/to/gradient.mjs on|off <feature>`.
+Turning on one of them in a Codex-only setup is refused with an explanation. Existing global optimize consent requires re-enabling for
 the intended project. Native memory, scheduling, and continuation should be your
 first choice when they meet the need.
 
@@ -158,7 +167,9 @@ redacted; inferred habits are evidence for review, never standing permission.
 Continuity saves a local checkpoint and feeds it into the existing Claude
 session. Autopilot calls a separate model judge through the configured backend
 and may incur usage charges. Board and reports use local session and Git data;
-they do not fetch GitHub context.
+they do not fetch GitHub context. Memory reads the one-line descriptions of
+Claude Code's auto-memory notes, writes nothing there, and adds its list only to
+sessions in repositories you turned it on for, marked as untrusted reference.
 
 Changes use exact preconditions, snapshots, and an advisory lock. Writes refuse
 symlinked paths. Gradient never modifies assistant-managed auto memory and never

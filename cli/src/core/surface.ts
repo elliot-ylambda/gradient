@@ -7,6 +7,7 @@ import { normalize, similarity } from "./cluster.js";
 import { parseFrontmatter, scalar } from "./frontmatter.js";
 import { locateRepo } from "./board.js";
 import { isVersionedNode } from "./hookBinary.js";
+import { loadMemoryNotes, type MemoryNotes } from "./memory-tidy.js";
 
 /**
  * What is actually installed, as opposed to what the manifest thinks is
@@ -89,6 +90,8 @@ export interface MemoryLine {
 export interface MemoryState {
   indexPath: string;
   lines: MemoryLine[];
+  /** The topic notes beside the index, as evidence. */
+  notes?: MemoryNotes;
   totalLines: number;
   bytes: number;
   overLineLimit: boolean;
@@ -319,9 +322,9 @@ async function memoryIndexPath(projectDir: string, home: string, claudeHome = jo
 }
 
 /**
- * Read the auto-memory index. Read-only by design: Claude Code owns this
- * directory and manages it well, so gradient reports what it sees and never
- * edits or deletes a memory file.
+ * Read the auto-memory index and its notes. Read-only by design: Claude Code
+ * owns this directory, so gradient reports what it sees and never edits or
+ * deletes a memory file.
  */
 export async function loadMemory(projectDir: string, home: string, claudeHome = join(home, ".claude"), memoryDirectory?: string): Promise<MemoryState | null> {
   const indexPath = memoryDirectory ? join(memoryDirectory, "MEMORY.md") : await memoryIndexPath(projectDir, home, claudeHome);
@@ -354,9 +357,11 @@ export async function loadMemory(projectDir: string, home: string, claudeHome = 
     lines.push({ line: index + 1, text, normalized, beyondLimit: index >= cutoff });
   }
 
+  const notes = await loadMemoryNotes(indexPath, raw);
   return {
     indexPath,
     lines,
+    ...(notes ? { notes } : {}),
     totalLines: all.length,
     bytes,
     overLineLimit: all.length > MEMORY_INDEX_MAX_LINES,

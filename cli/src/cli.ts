@@ -7,6 +7,7 @@ import { FEATURES, isFeatureName, setFeature } from "./commands/features.js";
 import { listChanges, optimize, optimizeJson, restoreChanges, takeRestorePoint, undo, type OptimizeResult } from "./commands/optimize.js";
 import { banner, c, severityChip } from "./core/ui.js";
 import { boardDigest, boardRefresh } from "./commands/board.js";
+import { memoryDigest } from "./commands/memory.js";
 import { recap } from "./commands/recap.js";
 import { notify } from "./commands/notify.js";
 import { buildReport } from "./commands/report.js";
@@ -384,7 +385,9 @@ export async function main(
             ? `${c.ok(`${feature} on`)}${result.detail ? c.dim(` — ${result.detail}`) : ""}`
             : c.muted(`${feature} off`),
         );
-        log(`  ${c.dim(terminalSafeLine(result.settingsPath))}`);
+        const paths = [result.settingsPath, ...(result.otherPaths ?? [])].filter(Boolean);
+        for (const path of paths) log(`  ${c.dim(terminalSafeLine(path))}`);
+        if (result.next) log(c.violet(terminalSafeLine(result.next)));
         return 0;
       }
       // Hook targets, namespaced. Accepting this form means a settings file can
@@ -393,6 +396,14 @@ export async function main(
         const target = positionals[0] ?? "";
         if (target === "board-digest") return boardHook("digest", projectDir, io, log, readStdin);
         if (target === "board-refresh") return boardHook("refresh", projectDir, io, log, readStdin);
+        if (target === "memory") {
+          // A hook failure must never block a session; empty output adds nothing.
+          try {
+            const text = await memoryDigest(await readStdin(), projectDir, positionals[1] === "codex" ? "codex" : "claude", { home: io.home });
+            if (text) log(text);
+          } catch { /* fail open */ }
+          return 0;
+        }
         // Silent on an unknown target: a hook that prints a usage error feeds it
         // straight into the session it was meant to help.
         if (!HOOK_TARGETS.has(target)) return 0;

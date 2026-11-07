@@ -91,11 +91,11 @@ describe("setFeature: optimize", () => {
 });
 
 describe("assistant support and project consent", () => {
-  it.each(FEATURES)("refuses Codex-only %s activation before changing files", async feature => {
+  it.each(FEATURES.filter(feature => feature !== "memory"))("refuses Codex-only %s activation before changing files", async feature => {
     const dir = await temp("grad-feat-codex-");
     const home = await temp("grad-feat-home-");
     await saveConfig({ targets: ["codex"] }, home);
-    await expect(setFeature(feature, true, dir, { home })).rejects.toThrow(/currently use Claude Code hooks only/);
+    await expect(setFeature(feature, true, dir, { home })).rejects.toThrow(/uses Claude Code hooks, and no hooks were installed/);
     await expect(access(join(dir, ".claude"))).rejects.toThrow();
     expect(await loadConfig(home)).toEqual({ targets: ["codex"] });
   });

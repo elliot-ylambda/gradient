@@ -7,6 +7,7 @@ import { insights, type InsightsReport } from "./insights.js";
 import { loadSuggestions } from "./apply.js";
 import { boardShow, DIGEST_SUB, REFRESH_SUB } from "./board.js";
 import { continuityStatus } from "./continuity.js";
+import { memoryStatus } from "./memory.js";
 import { autopilotStatus, type AutopilotStatus } from "./autopilot.js";
 import { isMeasured } from "../core/classify.js";
 import { resolveBoardRoot } from "../core/board.js";
@@ -108,8 +109,10 @@ export async function featureStatus(
   config: Config,
   home?: string,
 ): Promise<FeatureStatus[]> {
+  const memory = { name: "memory", ...await memoryStatus(projectDir, { home }).catch(() => ({ on: false })) };
   if (!supportsClaudeHooks(config)) {
-    return FEATURES.map(name => ({ name, on: false, supported: false, detail: "Gradient currently uses Claude Code hooks only" }));
+    return FEATURES.map(name => name === "memory" ? memory
+      : { name, on: false, supported: false, detail: "This feature uses Claude Code hooks" });
   }
   const continuity = await continuityStatus(projectDir, { home }).catch(() => ({ checkpoint: false, recap: false }));
   const mode = config.autopilotProjects?.[projectKey(projectDir)];
@@ -143,5 +146,6 @@ export async function featureStatus(
     { name: "optimize", on: (config.optimizeProjects ?? []).includes(projectKey(projectDir)) && start && end,
       ...(config.scanOnSessionStart === true && !config.optimizeProjects?.includes(projectKey(projectDir))
         ? { detail: "enable again for this project; legacy global consent is inactive" } : {}) },
+    memory,
   ];
 }
