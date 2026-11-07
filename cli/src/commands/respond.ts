@@ -1,7 +1,7 @@
 import type { Config } from "../core/types.js";
 import { boundedAutopilotBudget, loadConfig, DEFAULT_AUTOPILOT_MODEL, projectKey, supportsClaudeHooks } from "../config.js";
 import { loadState, saveState, cleanupStale } from "../core/state.js";
-import { renderTail, fingerprint, lastAssistantText, readTranscriptLines } from "../core/tail.js";
+import { renderTail, fingerprint, lastAssistantTurn, readTranscriptLines } from "../core/tail.js";
 import { loadPlaybook, loadProjectPlaybook, clampMode, loadPlaybookPin, pinnedProse } from "../core/playbook.js";
 import { buildJudgePrompt, judge } from "../core/judge.js";
 import { redact } from "../core/security.js";
@@ -22,16 +22,24 @@ export interface StopHookInput {
 const PLAYBOOK_CAP = 4096;
 export const SAFE_NUDGE = "Continue.";
 
-/** A response that was cut off: an API error, or a stream that stopped. In 30
- *  days of real history every one of these was resumed — by the user or by a
- *  coordinator — so this needs no judge. */
-const INTERRUPTED = /^(?:API Error:|Request timed out)|response stopped arriving|overloaded_error/i;
-const INTERRUPTED_WINDOW = 200;
+/** Failed requests worth retrying at once: a server-side failure or an
+ *  overloaded API. Not a rate limit (an immediate "Continue." meets the same
+ *  limit), not an authentication failure, and not a kind this list has never
+ *  seen. In 30 days of real history every cut-off response was resumed — by
+ *  the user or by a coordinator. */
+const RETRYABLE_API_ERRORS: ReadonlySet<string> = new Set(["server_error", "overloaded_error", "overloaded"]);
 
-/** Steps the user decides. When the last message names one, autopilot stays
- *  out, whatever a judge would say: a "Continue." there is a go-ahead. */
-const USER_DECIDES = /\b(?:push|deploy\w*|releas\w*|publish\w*|merg\w*|rebase|delet\w*|remov\w*|rm -rf|drop|truncat\w*|migrat\w*|rotat\w*|revok\w*|send|email|post|tweet|pay|charg\w*|purchas\w*|spend|refund|prod|production|ship|tag)\b/i;
-const USER_DECIDES_WINDOW = 600;
+/** Steps the user decides. When the last message names one, anywhere in it,
+ *  autopilot stays out, whatever a judge would say: a "Continue." there is a
+ *  go-ahead. Verb forms, so "pushed", "sending", and "posted" count, while
+ *  "payload", "Postgres", and "dropdown" do not. */
+const USER_DECIDES = new RegExp("\\b(?:" + [
+  "push(?:es|ed|ing)?", "deploy\\w*", "releas\\w*", "publish\\w*", "merg(?:e|es|ed|ing)", "rebas\\w*",
+  "delet\\w*", "remov\\w*", "rm -rf", "drop(?:s|ped|ping)?", "truncat\\w*", "migrat\\w*", "rotat\\w*", "revok\\w*",
+  "send(?:s|ing)?", "sent", "e-?mail(?:s|ed|ing)?", "post(?:s|ed|ing)?", "tweet\\w*",
+  "pay(?:s|ing|ments?)?", "paid", "charg(?:e|es|ed|ing)", "purchas\\w*", "spend(?:s|ing)?", "spent", "refund\\w*",
+  "prod", "production", "ship(?:s|ped|ping)?", "tag(?:s|ged|ging)?",
+].join("|") + ")\\b", "i");
 
 export interface RespondResult {
   decision: "allow" | "block";
@@ -124,19 +132,20 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
 
     // Gate 5: the last message, checked locally before any model call.
     const ts = (deps.now ?? (() => new Date().toISOString()))();
-    const last = lastAssistantText(lines);
-    if (INTERRUPTED.test(last.slice(0, INTERRUPTED_WINDOW))) {
+    // The veto runs first: a turn cut off mid-"I'll deploy now" stays stopped.
+    const last = lastAssistantTurn(lines);
+    if (USER_DECIDES.test(last.text)) {
+      state.log.push({ ts, action: "stand_down", why: "the last message names a step the user decides", excerpt: "" });
+      await saveState(input.session_id, state, deps.home);
+      return allow;
+    }
+    if (last.apiError !== undefined && RETRYABLE_API_ERRORS.has(last.apiError)) {
       state.attempts += 1;
       state.count += 1;
       state.lastFingerprint = fp;
       state.log.push({ ts, action: "continue", why: "the response was cut off", excerpt: SAFE_NUDGE });
       await saveState(input.session_id, state, deps.home);
       return { decision: "block", reason: SAFE_NUDGE };
-    }
-    if (USER_DECIDES.test(last.slice(-USER_DECIDES_WINDOW))) {
-      state.log.push({ ts, action: "stand_down", why: "the last message names a step the user decides", excerpt: "" });
-      await saveState(input.session_id, state, deps.home);
-      return allow;
     }
 
     const backend = deps.backend !== undefined ? deps.backend : await autopilotBackend(config);

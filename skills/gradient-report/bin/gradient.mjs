@@ -2615,16 +2615,24 @@ function summarizeTools(tools) {
   for (const t of tools) counts.set(t.name ?? "?", (counts.get(t.name ?? "?") ?? 0) + 1);
   return [...counts].map(([name, n]) => n > 1 ? `${name} \xD7${n}` : name).join(", ");
 }
-function lastAssistantText(lines) {
+function lastAssistantTurn(lines) {
+  let apiError;
+  let sawRealMessage = false;
+  let text = "";
   for (let index = lines.length - 1; index >= 0; index--) {
     const raw = parseLine(lines[index]);
     if (!raw || raw.isSidechain || raw.type !== "assistant") continue;
+    if (raw.isApiErrorMessage === true && raw.message?.model === "<synthetic>") {
+      if (!sawRealMessage && apiError === void 0) apiError = typeof raw.error === "string" ? raw.error : "unknown";
+      continue;
+    }
+    sawRealMessage = true;
     const content = raw.message?.content;
     if (!Array.isArray(content)) continue;
-    const text = content.filter((b) => b.type === "text").map((b) => b.text ?? "").join(" ").trim();
-    if (text) return text;
+    text = content.filter((b) => b.type === "text").map((b) => b.text ?? "").join(" ").trim();
+    if (text) break;
   }
-  return "";
+  return apiError === void 0 ? { text } : { text, apiError };
 }
 function renderTail(lines, opts = {}) {
   const maxTurns = opts.maxTurns ?? TAIL_MAX_TURNS;
@@ -22482,19 +22490,19 @@ async function respond(input, deps = {}) {
       return allow;
     }
     const ts = (deps.now ?? (() => (/* @__PURE__ */ new Date()).toISOString()))();
-    const last = lastAssistantText(lines);
-    if (INTERRUPTED.test(last.slice(0, INTERRUPTED_WINDOW))) {
+    const last = lastAssistantTurn(lines);
+    if (USER_DECIDES.test(last.text)) {
+      state.log.push({ ts, action: "stand_down", why: "the last message names a step the user decides", excerpt: "" });
+      await saveState(input.session_id, state, deps.home);
+      return allow;
+    }
+    if (last.apiError !== void 0 && RETRYABLE_API_ERRORS.has(last.apiError)) {
       state.attempts += 1;
       state.count += 1;
       state.lastFingerprint = fp;
       state.log.push({ ts, action: "continue", why: "the response was cut off", excerpt: SAFE_NUDGE });
       await saveState(input.session_id, state, deps.home);
       return { decision: "block", reason: SAFE_NUDGE };
-    }
-    if (USER_DECIDES.test(last.slice(-USER_DECIDES_WINDOW))) {
-      state.log.push({ ts, action: "stand_down", why: "the last message names a step the user decides", excerpt: "" });
-      await saveState(input.session_id, state, deps.home);
-      return allow;
     }
     const backend = deps.backend !== void 0 ? deps.backend : await autopilotBackend(config);
     if (!backend) return allow;
@@ -22523,7 +22531,7 @@ async function respond(input, deps = {}) {
     return allow;
   }
 }
-var PLAYBOOK_CAP, SAFE_NUDGE, INTERRUPTED, INTERRUPTED_WINDOW, USER_DECIDES, USER_DECIDES_WINDOW, ANTHROPIC_MODEL_ALIASES;
+var PLAYBOOK_CAP, SAFE_NUDGE, RETRYABLE_API_ERRORS, USER_DECIDES, ANTHROPIC_MODEL_ALIASES;
 var init_respond = __esm({
   "src/commands/respond.ts"() {
     "use strict";
@@ -22539,10 +22547,39 @@ var init_respond = __esm({
     init_codexCli();
     PLAYBOOK_CAP = 4096;
     SAFE_NUDGE = "Continue.";
-    INTERRUPTED = /^(?:API Error:|Request timed out)|response stopped arriving|overloaded_error/i;
-    INTERRUPTED_WINDOW = 200;
-    USER_DECIDES = /\b(?:push|deploy\w*|releas\w*|publish\w*|merg\w*|rebase|delet\w*|remov\w*|rm -rf|drop|truncat\w*|migrat\w*|rotat\w*|revok\w*|send|email|post|tweet|pay|charg\w*|purchas\w*|spend|refund|prod|production|ship|tag)\b/i;
-    USER_DECIDES_WINDOW = 600;
+    RETRYABLE_API_ERRORS = /* @__PURE__ */ new Set(["server_error", "overloaded_error", "overloaded"]);
+    USER_DECIDES = new RegExp("\\b(?:" + [
+      "push(?:es|ed|ing)?",
+      "deploy\\w*",
+      "releas\\w*",
+      "publish\\w*",
+      "merg(?:e|es|ed|ing)",
+      "rebas\\w*",
+      "delet\\w*",
+      "remov\\w*",
+      "rm -rf",
+      "drop(?:s|ped|ping)?",
+      "truncat\\w*",
+      "migrat\\w*",
+      "rotat\\w*",
+      "revok\\w*",
+      "send(?:s|ing)?",
+      "sent",
+      "e-?mail(?:s|ed|ing)?",
+      "post(?:s|ed|ing)?",
+      "tweet\\w*",
+      "pay(?:s|ing|ments?)?",
+      "paid",
+      "charg(?:e|es|ed|ing)",
+      "purchas\\w*",
+      "spend(?:s|ing)?",
+      "spent",
+      "refund\\w*",
+      "prod",
+      "production",
+      "ship(?:s|ped|ping)?",
+      "tag(?:s|ged|ging)?"
+    ].join("|") + ")\\b", "i");
     ANTHROPIC_MODEL_ALIASES = {
       haiku: "claude-haiku-4-5-20251001"
     };
