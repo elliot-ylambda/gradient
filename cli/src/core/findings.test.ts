@@ -220,12 +220,43 @@ describe("buildFindings", () => {
   it("flags the same instruction written into two files that both load", async () => {
     const dir = await tree({
       "CLAUDE.md": "- Always run the full test suite before committing\n",
-      ".claude/rules/testing.md": "- Always run the full test suite before committing\n",
+      ".claude/rules/testing.md": "- Always run the full test suite before committing\n- Name test files after the module\n",
     });
     const found = buildFindings(await inputFor(dir, await tree({})));
-    const duplicate = found.find(f => f.title.includes("multiple inspected files"));
+    const duplicate = found.find(f => f.title.includes("written in both"));
     expect(duplicate).toBeDefined();
     expect(duplicate!.evidence).toContain("CLAUDE.md:1");
+  });
+
+  it("warns when gradient's own hooks run a node an upgrade will delete, naming the feature to re-enable", async () => {
+    const command = `/opt/homebrew/Cellar/node/20.1.0/bin/node "$(ls -d /x/plugins/cache/gradient/gradient/*/bin/gradient.mjs 2>/dev/null | sort -V | tail -1)" hook board-digest`;
+    const dir = await tree({
+      ".claude/settings.local.json": JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command }] }] } }),
+    });
+    const found = buildFindings(await inputFor(dir, await tree({}), { targets: ["claude-code"] }));
+    const finding = found.find(f => f.title === "Gradient's hooks will stop running when node is upgraded");
+    expect(finding).toBeDefined();
+    expect(finding!.detail).toContain("`gradient on board`");
+  });
+
+  it("reports a worktree nested in its main checkout as one identical-copy finding with the exclusion", async () => {
+    const body = Array.from({ length: 30 }, (_, i) => `- Keep the release checklist step ${i} in order`).join("\n") + "\n";
+    const outer = await tree({ "CLAUDE.md": body, ".worktrees/demo/CLAUDE.md": body });
+    const found = buildFindings(await inputFor(join(outer, ".worktrees/demo"), await tree({})));
+    const duplicates = found.filter(f => f.family === "practice" && /identical|written in both/.test(f.title));
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].title).toContain("are identical, so the same instructions load twice");
+    expect(duplicates[0].detail).toContain(`"claudeMdExcludes": [${JSON.stringify(join(outer, "CLAUDE.md"))}]`);
+  });
+
+  it("reports many shared lines between two files as one finding, not one per line", async () => {
+    const rules = Array.from({ length: 40 }, (_, i) => `- Always keep invariant number ${i} intact when editing`).join("\n");
+    const dir = await tree({ "CLAUDE.md": `${rules}\n`, ".claude/rules/all.md": `${rules}\n- One extra rule only here please\n` });
+    const found = buildFindings(await inputFor(dir, await tree({})));
+    const duplicates = found.filter(f => f.title.includes("written in both"));
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].title).toMatch(/^40 instructions are written in both/);
+    expect(duplicates[0].evidence).toContain("and 35 more");
   });
 
   it("reports an oversized memory index and never proposes a change inside it", async () => {

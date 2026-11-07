@@ -9,6 +9,12 @@ Quote that path for the shell. Run only this directory's `bin/gradient.mjs`; nev
 search default skill folders or select another installed copy. The placeholder
 is not a literal path or an environment variable.
 
+Gradient keeps its run records, review page, and undo snapshots in
+`~/.config/gradient`, outside the workspace. When the sandbox blocks writes
+outside the workspace, ask to run these commands with escalated permissions the
+first time, explaining that Gradient stores its local checkup records there,
+instead of letting the first run fail.
+
 These optional features currently install **Claude Code hooks only**. Codex has
 native hooks, but Gradient does not install them. A Codex-only setup must receive
 an unsupported explanation, never a claim that a feature was enabled. Prefer the

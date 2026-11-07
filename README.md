@@ -74,6 +74,8 @@ node /path/to/gradient.mjs optimize --target both
 node /path/to/gradient.mjs optimize --json
 node /path/to/gradient.mjs optimize --apply <id>,<id> --deny <id>
 node /path/to/gradient.mjs optimize
+node /path/to/gradient.mjs optimize --changes
+node /path/to/gradient.mjs optimize --restore
 node /path/to/gradient.mjs optimize --undo <runId>
 ```
 
@@ -82,10 +84,22 @@ default; `--user` or `--all` explicitly includes cross-project history.
 
 - **Apply** is offered only when Gradient has a concrete change. Informational
   findings require review, and cannot claim a successful repair.
+- **Restore point.** The first `--apply` of a session first saves every
+  instruction file both assistants load: CLAUDE.md, CLAUDE.local.md, AGENTS.md
+  and AGENTS.override.md anywhere in the repository and at user level, project
+  settings, `~/.codex/config.toml`, and the text files under `.claude/rules`,
+  `skills`, `commands`, `agents`, `.agents/skills`, and `.codex`. Take one
+  yourself with `--checkpoint` before editing by hand, or before your assistant
+  rewrites an instruction file for you.
+- **Changes** shows every change since the restore point as a diff — applied
+  fixes and hand edits alike, including files created or deleted since.
+- **Restore** puts all of it back, removes files created since, and keeps
+  symbolic links as links. It saves the state it replaces first and prints the
+  command that reverses it.
 - **Deny** remembers any finding while its evidence is unchanged.
-- **Undo** restores generated artifacts and associated state. If a later edit
+- **Undo** reverses one `--apply`: generated artifacts and associated state. If a later edit
   conflicts, the run is left intact and the conflict is reported. The latest ten applied
-  runs are retained independently of read-only reports.
+  runs and ten restore points are retained independently of read-only reports.
 - **Remove** explicitly uninstalls one Gradient-owned artifact:
   `node /path/to/gradient.mjs remove <name>`.
 - **Automatic mode** and periodic checks only propose changes. The legacy

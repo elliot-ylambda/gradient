@@ -49,6 +49,10 @@ export interface Snapshot {
   mode?: number;
 }
 
+export function isRunId(name: string): boolean {
+  return RUN_ID_PATTERN.test(name);
+}
+
 export function runsDir(home?: string): string {
   return join(home ?? homedir(), ".config", "gradient", "runs");
 }
@@ -176,7 +180,7 @@ export async function snapshot(run: Run, path: string, base: string): Promise<vo
   await safeWriteFile(run.home, destination, encoded, { mode: 0o600 });
 }
 
-async function captureFile(path: string, base: string): Promise<Snapshot> {
+export async function captureFile(path: string, base: string): Promise<Snapshot> {
   try {
     const content = await safeReadFile(base, path, { maxBytes: SNAPSHOT_MAX_BYTES });
     const mode = (await lstat(path)).mode & 0o777;
@@ -187,7 +191,7 @@ async function captureFile(path: string, base: string): Promise<Snapshot> {
   }
 }
 
-async function restoreFile(record: Snapshot): Promise<void> {
+export async function restoreFile(record: Snapshot): Promise<void> {
   if (record.existed) {
     await safeWriteFile(record.base, record.path, record.content, { mode: record.mode ?? 0o600 });
   } else {
@@ -195,6 +199,26 @@ async function restoreFile(record: Snapshot): Promise<void> {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     });
   }
+}
+
+/** The snapshot a run recorded for one path, verified against its own hash;
+ *  null when the run captured nothing for it. */
+export async function loadSnapshot(runId: string, path: string, home?: string): Promise<Snapshot | null> {
+  const userHome = home ?? homedir();
+  let raw: string;
+  try {
+    raw = await safeReadFile(runsDir(userHome), join(runDir(runId, userHome), "snapshots", snapshotName(path)), { maxBytes: SNAPSHOT_MAX_BYTES });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const record = JSON.parse(raw) as Snapshot;
+  if (record.path !== path || typeof record.base !== "string" || typeof record.content !== "string" ||
+    typeof record.existed !== "boolean" || record.sha256 !== sha256(record.content) ||
+    (record.mode !== undefined && (!Number.isInteger(record.mode) || record.mode < 0 || record.mode > 0o777))) {
+    throw new Error(`invalid snapshot for ${path}`);
+  }
+  return record;
 }
 
 /** Capture the complete effect of one finding, including its private bookkeeping.
@@ -252,6 +276,27 @@ export interface RunResult {
   /** Manifest entries and consent this run added, reversed entry by entry. */
   bookkeeping?: BookkeepingRecord[];
   undoneAt?: string;
+  /** Set when this run is a restore point rather than a change. */
+  restorePoint?: RestorePointRecord;
+}
+
+/** Everything one restore point captured, so `--changes` and `--restore` can
+ *  tell edited, created, and deleted files apart. */
+export interface RestorePointRecord {
+  /** projectKey of the project it belongs to. */
+  project: string;
+  /** Why it was taken: before a change, or of the state a restore replaced. */
+  reason: "checkpoint" | "apply" | "restore";
+  /** Every path captured, including ones that did not exist then. */
+  files: Array<{ path: string; base: string }>;
+  /** Directories walked, so a file created inside one later is found. */
+  dirs: Array<{ path: string; base: string }>;
+  /** Symbolic links, by path, as their target — recreated, never followed. */
+  links: Record<string, string>;
+  /** Paths that could not be captured (a linked parent directory, an
+   *  unreadable file). Never restored, and never mistaken for new files. */
+  uncovered?: string[];
+  restoredAt?: string;
 }
 
 export interface BookkeepingRecord {
@@ -263,6 +308,23 @@ export interface BookkeepingRecord {
   prior: ManifestEntry | null;
   /** Whether this run granted continuity consent for the project. */
   consent: boolean;
+}
+
+function validLocations(value: unknown): boolean {
+  return Array.isArray(value) && value.length <= 20_000 &&
+    value.every(entry => entry && typeof entry.path === "string" && typeof entry.base === "string");
+}
+
+function validRestorePoint(value: unknown): boolean {
+  if (value === undefined) return true;
+  const point = value as Partial<RestorePointRecord>;
+  return !!point && typeof point.project === "string" &&
+    (point.reason === "checkpoint" || point.reason === "apply" || point.reason === "restore") &&
+    validLocations(point.files) && validLocations(point.dirs) &&
+    !!point.links && typeof point.links === "object" && !Array.isArray(point.links) &&
+    Object.values(point.links).every(target => typeof target === "string") &&
+    (point.uncovered === undefined || (Array.isArray(point.uncovered) && point.uncovered.every(path => typeof path === "string"))) &&
+    (point.restoredAt === undefined || typeof point.restoredAt === "string");
 }
 
 function validBookkeeping(value: unknown): boolean {
@@ -293,7 +355,7 @@ export async function loadResult(runId: string, home?: string): Promise<RunResul
       !Number.isFinite(Date.parse(value.startedAt)) || !Array.isArray(value.applied) || !Array.isArray(value.skipped) ||
       !value.wrote || typeof value.wrote !== "object" || Array.isArray(value.wrote) ||
       !Object.values(value.wrote).every(hash => hash === null || typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)) ||
-      !validBookkeeping(value.bookkeeping)) return null;
+      !validBookkeeping(value.bookkeeping) || !validRestorePoint(value.restorePoint)) return null;
     return value as RunResult;
   } catch {
     return null;
@@ -330,23 +392,11 @@ export async function undoRun(
   // Preflight the entire run before restoring anything. Restoring a manifest
   // while leaving a changed artifact (or the reverse) would corrupt ownership.
   for (const path of Object.keys(result.wrote)) {
-    let record: Snapshot;
     try {
-      let raw: string;
-      try {
-        raw = await safeReadFile(runsDir(home), join(dir, "snapshots", snapshotName(path)), { maxBytes: SNAPSHOT_MAX_BYTES });
-      } catch (error) {
-        // Runs before 0.10 recorded no-op changes without a snapshot. Nothing
-        // was captured, so there is nothing to put back.
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw error;
-      }
-      record = JSON.parse(raw);
-      if (record.path !== path || typeof record.base !== "string" || typeof record.content !== "string" ||
-        typeof record.existed !== "boolean" || record.sha256 !== sha256(record.content) ||
-        (record.mode !== undefined && (!Number.isInteger(record.mode) || record.mode < 0 || record.mode > 0o777))) {
-        throw new Error("invalid snapshot");
-      }
+      const record = await loadSnapshot(runId, path, home);
+      // Runs before 0.10 recorded no-op changes without a snapshot. Nothing
+      // was captured, so there is nothing to put back.
+      if (!record) continue;
       const current = await captureFile(path, record.base);
       const expected = result.wrote[path];
       // Before 0.10 a deletion was recorded as the hash of empty content.
@@ -372,7 +422,7 @@ export async function undoRun(
   return { restored, conflicted };
 }
 
-async function listDir(dir: string): Promise<string[]> {
+export async function listDir(dir: string): Promise<string[]> {
   try {
     const handle = await opendir(dir);
     const out: string[] = [];
@@ -386,22 +436,26 @@ async function listDir(dir: string): Promise<string[]> {
   }
 }
 
-/** Retain applied runs separately: a dozen read-only checks must never evict
- * the undo record for the last approved repair. Both groups remain bounded. */
+/** Retain applied runs and restore points separately: a dozen read-only checks
+ * must never evict the undo record for the last approved repair, or the
+ * restore point taken before it. Every group remains bounded. */
 export async function pruneRuns(opts: { home?: string; keep?: number } = {}): Promise<string[]> {
   const home = opts.home ?? homedir();
   const keep = opts.keep ?? DEFAULT_KEEP;
   const all = (await listDir(runsDir(home)))
-    .filter(name => RUN_ID_PATTERN.test(name))
+    .filter(isRunId)
     .sort();
   const applied: string[] = [];
   const proposals: string[] = [];
+  const restorePoints: string[] = [];
   for (const id of all) {
     const result = await loadResult(id, home);
-    (result && Object.keys(result.wrote).length > 0 ? applied : proposals).push(id);
+    if (result?.restorePoint) restorePoints.push(id);
+    else if (result && Object.keys(result.wrote).length > 0) applied.push(id);
+    else proposals.push(id);
   }
-  const doomed = [...applied.slice(0, Math.max(0, applied.length - keep)),
-    ...proposals.slice(0, Math.max(0, proposals.length - keep))].sort();
+  const oldest = (ids: string[]): string[] => ids.slice(0, Math.max(0, ids.length - keep));
+  const doomed = [...oldest(applied), ...oldest(proposals), ...oldest(restorePoints)].sort();
   for (const id of doomed) {
     await safeRemoveTree(home, runDir(id, home)).catch(() => undefined);
   }

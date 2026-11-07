@@ -33,6 +33,7 @@ import { ensureTargets, type TargetAsker } from "../core/targets.js";
 import { renderPage } from "../core/page.js";
 import { insights } from "./insights.js";
 import { safeReadFile, safeWriteFile } from "../core/safeFs.js";
+import { changesSince, createRestorePoint, diffRun, openRestorePoint, restoreTo, type FileChange } from "../core/restore.js";
 
 /**
  * The one verb.
@@ -68,7 +69,10 @@ export interface OptimizeResult {
   findings: Finding[];
   /** Set when the run wrote anything; names the run for `--undo`. */
   runId?: string;
-  applied: RunResult["applied"];
+  /** The restore point the applied changes are measured against: every change
+   *  since it is listed by `--changes` and reversed by `--restore`. */
+  restorePoint?: string;
+  applied: Array<RunResult["applied"][number] & { diff?: string[] }>;
   skipped: RunResult["skipped"];
   /** The checkup page for this run; a path to open. Always written. */
   pagePath?: string;
@@ -255,8 +259,15 @@ export async function optimize(
       denied.add(finding.id);
     }
     findings = findings.filter(finding => !denied.has(finding.id));
-    const run = await beginRun({ home, ...(opts.now !== undefined ? { now: new Date(opts.now) } : {}) });
-    const applied: RunResult["applied"] = [];
+    const clock = opts.now !== undefined ? { now: new Date(opts.now) } : {};
+    // Before the first change of a session, capture everything it could touch.
+    let restorePoint: string | undefined;
+    if (wanted.length > 0) {
+      restorePoint = await openRestorePoint(projectDir, { home, ...(opts.now !== undefined ? { now: opts.now } : {}) }) ??
+        (await createRestorePoint(projectDir, { home, reason: "apply", ...clock })).id;
+    }
+    const run = await beginRun({ home, ...clock });
+    const applied: OptimizeResult["applied"] = [];
     const wrote: RunResult["wrote"] = {};
     const bookkeeping: BookkeepingRecord[] = [];
     for (const finding of applyOrder(wanted)) {
@@ -284,6 +295,13 @@ export async function optimize(
         ...(bookkeeping.length ? { bookkeeping } : {}),
       });
     }
+    if (applied.length) {
+      const diffs = await diffRun(run.id, applied.flatMap(entry => entry.paths), projectDir, { home });
+      for (const entry of applied) {
+        const shown = entry.paths.map(path => diffs[path]).filter((diff): diff is string => !!diff);
+        if (shown.length) entry.diff = shown;
+      }
+    }
     const appliedIds = new Set(applied.map(entry => entry.id));
     findings = findings.filter(finding => !appliedIds.has(finding.id));
     const pagePath = join(run.dir, "report.html");
@@ -301,7 +319,7 @@ export async function optimize(
       })),
     });
     await pruneRuns({ home });
-    return { targets, findings, ...(applied.length ? { runId: run.id } : {}), applied, skipped, pagePath,
+    return { targets, findings, ...(applied.length ? { runId: run.id } : {}), ...(restorePoint ? { restorePoint } : {}), applied, skipped, pagePath,
       ...(features ? { features } : {}), warnings, ...(coverage ? { coverage } : {}) };
   };
   return wanted.length || opts.deny?.length
@@ -358,6 +376,26 @@ export async function loadLastCheckup(projectDir: string, opts: { home?: string 
   } catch { return null; }
 }
 
+/** Take a restore point now, before an assistant edits instruction files itself. */
+export async function takeRestorePoint(projectDir: string, opts: { home?: string } = {}): Promise<{ id: string; files: number; uncovered: string[] }> {
+  return withLock(() => createRestorePoint(projectDir, { home: opts.home }), { home: opts.home });
+}
+
+/** Everything changed since a restore point (the open one when no id is given). */
+export async function listChanges(projectDir: string, id: string | undefined, opts: { home?: string } = {}): Promise<{ id: string; takenAt: string; changes: FileChange[] } | null> {
+  const point = id ?? await openRestorePoint(projectDir, { home: opts.home });
+  return point ? changesSince(point, projectDir, { home: opts.home }) : null;
+}
+
+/** Put back everything changed since a restore point; reversible. */
+export async function restoreChanges(projectDir: string, id: string | undefined, opts: { home?: string } = {}): Promise<{ id: string; restored: string[]; removed: string[]; failed: string[]; reverseWith: string } | null> {
+  return withLock(async () => {
+    const point = id ?? await openRestorePoint(projectDir, { home: opts.home });
+    if (!point) return null;
+    return { id: point, ...await restoreTo(point, projectDir, { home: opts.home }) };
+  }, { home: opts.home });
+}
+
 export async function undo(runId: string, opts: { home?: string } = {}): Promise<{
   restored: string[];
   conflicted: string[];
@@ -373,6 +411,7 @@ export function optimizeJson(result: OptimizeResult): string {
   return JSON.stringify({
     targets: result.targets,
     ...(result.runId ? { runId: result.runId } : {}),
+    ...(result.restorePoint ? { restorePoint: result.restorePoint } : {}),
     // The page is written on every run, so the machine-readable output has to
     // say where — an agent handed --json cannot otherwise point the user at it.
     ...(result.pagePath ? { pagePath: result.pagePath } : {}),

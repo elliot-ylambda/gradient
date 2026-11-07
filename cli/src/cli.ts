@@ -4,7 +4,7 @@ import { remove } from "./commands/remove.js";
 import { checkpoint } from "./commands/checkpoint.js";
 import { respond, type StopHookInput } from "./commands/respond.js";
 import { FEATURES, isFeatureName, setFeature } from "./commands/features.js";
-import { optimize, optimizeJson, undo, type OptimizeResult } from "./commands/optimize.js";
+import { listChanges, optimize, optimizeJson, restoreChanges, takeRestorePoint, undo, type OptimizeResult } from "./commands/optimize.js";
 import { banner, c, severityChip } from "./core/ui.js";
 import { boardDigest, boardRefresh } from "./commands/board.js";
 import { recap } from "./commands/recap.js";
@@ -41,6 +41,9 @@ Usage:
                                 Claude Code and Codex, then propose the changes
     [--target claude-code|codex|both]   which assistants to optimize for
     [--apply <id>...] [--deny <id>...] [--undo <runId>]
+    [--checkpoint]                      save a restore point before editing by hand
+    [--changes [<id>]]                  every change since the restore point, as diffs
+    [--restore [<id>]]                  put all of it back (itself reversible)
     [--auto]                            compatibility: propose only, no repairs
     [--json]                            findings for an agent, as JSON
                                         (every run also writes a local page)
@@ -66,6 +69,9 @@ export function parseCliArgs(argv: string[]): {
       deny: { type: "string", multiple: true },
       auto: { type: "boolean" },
       undo: { type: "string" },
+      checkpoint: { type: "boolean" },
+      changes: { type: "boolean" },
+      restore: { type: "boolean" },
       page: { type: "boolean" },
       "print-schedule": { type: "boolean" },
       json: { type: "boolean" },
@@ -129,15 +135,67 @@ export function renderFindings(findings: Finding[], log: LogFn): void {
   log(`${c.dim("or hand the whole list to your assistant:")} ${c.violet(`${displayCommand()} optimize --json`)}`);
 }
 
+/** One unified-diff line, coloured by what it is. */
+function diffLine(line: string): string {
+  const safe = terminalSafeLine(line);
+  if (line.startsWith("+++") || line.startsWith("---")) return c.bold(safe);
+  if (line.startsWith("+")) return c.ok(safe);
+  if (line.startsWith("-")) return c.coral(safe);
+  if (line.startsWith("@@")) return c.violet(safe);
+  return c.muted(safe);
+}
+
+/** A unified diff with its additions and removals coloured. */
+function renderDiff(diff: string, log: LogFn): void {
+  for (const line of diff.replace(/\n$/, "").split("\n")) log(diffLine(line));
+}
+
 async function runOptimize(
   projectDir: string,
   flags: Record<string, Flag>,
   home: string | undefined,
   log: LogFn,
+  positionals: string[],
 ): Promise<number> {
   if (flags["print-schedule"]) {
     log(scheduleSnippet(process.platform, projectDir));
     return 0;
+  }
+
+  if (flags.checkpoint) {
+    const point = await takeRestorePoint(projectDir, { home });
+    if (flags.json) { log(JSON.stringify({ restorePoint: point.id, files: point.files, uncovered: point.uncovered }, null, 2)); return 0; }
+    log(`${c.ok("restore point saved")} ${c.dim(point.id)} ${c.muted(`· ${point.files} instruction, rule, skill and settings files`)}`);
+    if (point.uncovered.length) log(c.coral(`not covered (could not be read safely): ${point.uncovered.map(terminalSafeLine).join(", ")}`));
+    log(`${c.dim("see every change since:")} ${c.violet(`${displayCommand()} optimize --changes`)}`);
+    log(`${c.dim("put it all back:")} ${c.violet(`${displayCommand()} optimize --restore`)}`);
+    return 0;
+  }
+
+  if (flags.changes) {
+    const result = await listChanges(projectDir, positionals[0], { home });
+    if (flags.json) { log(JSON.stringify(result ?? { changes: [] }, null, 2)); return 0; }
+    if (!result) { log(c.dim("no open restore point for this project; nothing has been changed through gradient since the last restore")); return 0; }
+    log(c.dim(`since restore point ${result.id} (${result.takenAt})`));
+    if (result.changes.length === 0) { log(c.ok("nothing has changed")); return 0; }
+    for (const change of result.changes) {
+      log(`\n${c.bold(change.status)} ${terminalSafeLine(change.label)}`);
+      if (change.diff) renderDiff(change.diff, log);
+    }
+    log(`\n${c.dim("put all of it back:")} ${c.violet(`${displayCommand()} optimize --restore ${result.id}`)}`);
+    return 0;
+  }
+
+  if (flags.restore) {
+    const outcome = await restoreChanges(projectDir, positionals[0], { home });
+    if (flags.json) { log(JSON.stringify(outcome ?? { restored: [], removed: [], failed: [] }, null, 2)); return outcome?.failed.length ? 1 : 0; }
+    if (!outcome) { log(c.dim("no open restore point for this project; nothing to restore")); return 0; }
+    for (const path of outcome.restored) log(`${c.ok("restored")} ${c.muted(terminalSafeLine(path))}`);
+    for (const path of outcome.removed) log(`${c.ok("removed")} ${c.muted(terminalSafeLine(path))} ${c.dim("(created after the restore point)")}`);
+    for (const path of outcome.failed) log(c.coral(`could not restore, left as it is: ${terminalSafeLine(path)}`));
+    if (!outcome.restored.length && !outcome.removed.length && !outcome.failed.length) log(c.dim("nothing had changed"));
+    log(`${c.dim("to reverse this restore:")} ${c.violet(`${displayCommand()} optimize --restore ${outcome.reverseWith}`)}`);
+    return outcome.failed.length ? 1 : 0;
   }
 
   if (typeof flags.undo === "string") {
@@ -182,12 +240,16 @@ async function runOptimize(
   }
   for (const entry of result.applied) {
     log(`\n${c.ok("applied")} ${terminalSafeLine(entry.title)}`);
-    for (const path of entry.paths) log(`  ${c.muted(terminalSafeLine(path))}`);
+    if (entry.diff?.length) for (const diff of entry.diff) renderDiff(diff, log);
+    else for (const path of entry.paths) log(`  ${c.muted(terminalSafeLine(path))}`);
   }
   for (const entry of result.skipped) {
     log(c.coral(`skipped ${entry.id}: ${terminalSafeLine(entry.reason)}`));
   }
-  if (result.runId) log(`\n${c.dim("undo:")} ${c.violet(`${displayCommand()} optimize --undo ${result.runId}`)}`);
+  if (result.runId) log(`\n${c.dim("undo this apply:")} ${c.violet(`${displayCommand()} optimize --undo ${result.runId}`)}`);
+  if (result.restorePoint) {
+    log(`${c.dim("everything since the restore point:")} ${c.violet(`${displayCommand()} optimize --changes`)} ${c.dim("· put it all back:")} ${c.violet(`${displayCommand()} optimize --restore`)}`);
+  }
   return result.skipped.length ? 1 : 0;
 }
 
@@ -291,7 +353,7 @@ export async function main(
     switch (command) {
       case "optimize": {
         if (!flags.json && !flags["print-schedule"]) log(banner(VERSION));
-        return await runOptimize(projectDir, flags, io.home, log);
+        return await runOptimize(projectDir, flags, io.home, log, positionals);
       }
       case "remove": {
         const ok = await remove(projectDir, positionals[0], { home: io.home });

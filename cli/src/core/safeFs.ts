@@ -5,6 +5,7 @@ import {
   open,
   rename,
   rm,
+  symlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -216,6 +217,23 @@ export async function safeUnlink(base: string, path: string): Promise<void> {
   // A final symlink is safe to unlink; no ancestor may redirect the operation.
   await assertNoSymlinkPath(base, path, { includeTarget: false });
   await unlink(path);
+}
+
+/** Put a symbolic link at `path` inside a trusted tree: no ancestor may be a
+ * link, and the link is created beside its destination and renamed into
+ * place, so nothing that appears at `path` meanwhile is followed. */
+export async function safeSymlink(base: string, target: string, path: string): Promise<void> {
+  const resolved = resolvedInside(base, path);
+  await assertNoSymlinkPath(resolved.base, resolved.target, { includeTarget: false });
+  const temp = join(dirname(resolved.target), `.gradient-tmp-link-${process.pid}-${randomUUID()}`);
+  await symlink(target, temp);
+  try {
+    await rename(temp, resolved.target);
+  } catch (error) {
+    await unlink(temp).catch(() => undefined);
+    throw error;
+  }
+  await assertNoSymlinkPath(resolved.base, resolved.target, { includeTarget: false });
 }
 
 /** Remove a generated subtree without following a symlinked ancestor or final

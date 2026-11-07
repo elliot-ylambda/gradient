@@ -9,6 +9,7 @@ import type { InstalledSkill, Surface } from "./surface.js";
 import { MEMORY_INDEX_MAX_LINES } from "./surface.js";
 import { containment, normalize, similarity } from "./cluster.js";
 import { redact } from "./security.js";
+import { within } from "./discovery.js";
 import { isMeasured } from "./classify.js";
 
 /**
@@ -445,7 +446,15 @@ function practiceFindings(input: FindingsInput): Finding[] {
   const out: Finding[] = [];
 
   const long = input.instructions.sources.filter(source => source.kind !== "rule" && source.lineCount > CLAUDE_MD_MAX_LINES);
-  for (const { source, items } of byRealFile(long, source => source)) {
+  // Identical copies (a worktree's CLAUDE.md and the checkout's around it) are
+  // one length problem; the duplicate finding below reports the double load.
+  const outsideProject = (path: string): number => Number(!within(input.projectDir, path));
+  const lengthGroups = byRealFile(long, source => source)
+    // Keep the copy inside the project: it is the one the user edits.
+    .sort((a, b) => outsideProject(a.source.path) - outsideProject(b.source.path))
+    .filter((group, index, all) =>
+      group.source.digest === undefined || all.findIndex(other => other.source.digest === group.source.digest) === index);
+  for (const { source, items } of lengthGroups) {
     const assistants = [...new Set(items.map(item => item.assistant))];
     out.push({
       id: findingId("practice", "length", [source.path]),
@@ -489,6 +498,30 @@ function practiceFindings(input: FindingsInput): Finding[] {
     });
   }
 
+  // A hook that names a version manager's per-version node stops running the
+  // day that version is upgraded away, and a failing hook reports nowhere.
+  const versioned = input.surface.versionedHooks ?? [];
+  if (versioned.length > 0) {
+    const features = [...new Set(versioned.map(hook => HOOK_FEATURE[hook.subcommand.replace(/^hook /, "")]).filter(Boolean))].sort();
+    const nodes = [...new Set(versioned.map(hook => hook.node))];
+    out.push({
+      id: findingId("practice", "versioned-node", nodes),
+      family: "practice",
+      severity: "medium",
+      title: "Gradient's hooks will stop running when node is upgraded",
+      detail:
+        `They run ${nodes.join(", ")}, inside a version directory that \`brew upgrade\` or a node version manager deletes. ` +
+        (features.length > 0
+          ? `Turn ${features.length === 1 ? "the feature" : "each feature"} on again (\`gradient on ${features.join("`, `gradient on ")}\`) to rewrite ${features.length === 1 ? "its hooks" : "their hooks"} with a node link that survives upgrades.`
+          : "Turn the feature on again to rewrite its hooks with a node link that survives upgrades."),
+      evidence: `${versioned.length} hook${versioned.length === 1 ? "" : "s"} · ${nodes.join(", ")}`,
+      targets: ["claude-code"],
+      deterministic: true,
+      commandBearing: false,
+      changes: [],
+    });
+  }
+
   // The same instruction in two loaded files is two chances to be followed
   // inconsistently, and the docs call out contradiction as a real failure mode.
   const byNormalized = new Map<string, InstructionLine[]>();
@@ -498,29 +531,63 @@ function practiceFindings(input: FindingsInput): Finding[] {
     group.push(line);
     byNormalized.set(key, group);
   }
+  // One finding per set of files, not per line. A worktree inside its main
+  // checkout loads both copies of CLAUDE.md, and one finding per shared line
+  // turned that single fact into 1,198 findings on a real repository.
+  const byFiles = new Map<string, InstructionLine[][]>();
   for (const [, group] of byNormalized) {
-    const distinct = group.filter((line, index) =>
-      group.findIndex(other => other.source.path === line.source.path) === index);
+    const distinct = group
+      .filter((line, index) => group.findIndex(other => other.source.path === line.source.path) === index)
+      .sort((a, b) => a.source.path.localeCompare(b.source.path));
     if (distinct.length < 2) continue;
-    out.push({
-      id: findingId("practice", "duplicate", distinct.map(line => `${line.source.path}:${line.line}`)),
-      family: "practice",
-      severity: "low",
-      title: "The same instruction is written in multiple inspected files",
-      detail:
-        "This instruction appears in multiple inspected files for the same assistant. " +
-        "Check their loading scope before consolidating them; path-scoped rules may not load together.",
-      evidence: distinct
-        .map(line => `${displayPath(line.source.path, input.projectDir)}:${line.line}`)
-        .join(" · "),
-      targets: [...new Set(distinct.map(line => line.source.assistant))],
-      deterministic: true,
-      commandBearing: false,
-      changes: [],
-    });
+    const key = distinct.map(line => line.source.path).join("\0");
+    byFiles.set(key, [...(byFiles.get(key) ?? []), distinct]);
   }
+  for (const sets of byFiles.values()) out.push(duplicateFinding(sets, input.projectDir));
 
   return out;
+}
+
+/** Which `gradient on` feature installed a hook subcommand. */
+const HOOK_FEATURE: Record<string, string> = {
+  "board-digest": "board", "board-refresh": "board",
+  checkpoint: "continuity", recap: "continuity",
+  respond: "autopilot",
+  "session-start": "optimize", "session-end": "optimize",
+};
+
+const DUPLICATE_EXAMPLES = 5;
+
+function duplicateFinding(sets: InstructionLine[][], projectDir: string): Finding {
+  const sources = sets[0].map(line => line.source);
+  const files = sources.map(source => displayPath(source.path, projectDir));
+  const identical = sources.every(source => source.digest !== undefined && source.digest === sources[0].digest);
+  const outside = sources.filter(source => !within(projectDir, source.path));
+  const where = files.length === 2 ? `${files[0]} and ${files[1]}` : `${files.length} files`;
+  const examples = sets.slice(0, DUPLICATE_EXAMPLES)
+    .map(set => set.map(line => `${displayPath(line.source.path, projectDir)}:${line.line}`).join(" = "));
+  return {
+    id: findingId("practice", "duplicate", sources.map(source => source.path)),
+    family: "practice",
+    severity: identical ? "medium" : "low",
+    title: identical
+      ? `${where} are identical, so the same instructions load twice`
+      : `${sets.length} instruction${sets.length === 1 ? " is" : "s are"} written in both ${where}`,
+    detail: identical && outside.length > 0
+      ? "Claude Code loads every CLAUDE.md in the directories above the working directory, so a checkout " +
+        "nested inside another copy of the repository reads both. Exclude the outer copy in " +
+        `.claude/settings.local.json — "claudeMdExcludes": [${outside.map(source => JSON.stringify(source.path)).join(", ")}] — ` +
+        "or keep worktrees outside the main checkout."
+      : "These instructions appear in more than one inspected file for the same assistant. " +
+        "Check their loading scope before consolidating them; path-scoped rules may not load together.",
+    evidence: identical
+      ? `${sources[0].lineCount} lines · ${sources[0].bytes} bytes, each loaded every session`
+      : examples.join(" · ") + (sets.length > DUPLICATE_EXAMPLES ? ` · and ${sets.length - DUPLICATE_EXAMPLES} more` : ""),
+    targets: [...new Set(sources.map(source => source.assistant))],
+    deterministic: true,
+    commandBearing: false,
+    changes: [],
+  };
 }
 
 /** Read-only. Nothing here ever proposes a change inside the memory directory. */

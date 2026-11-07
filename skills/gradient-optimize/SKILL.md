@@ -9,6 +9,12 @@ Quote that path for the shell. Run only this directory's `bin/gradient.mjs`; nev
 search default skill folders or select another installed copy. The placeholder
 is not a literal path or an environment variable.
 
+Gradient keeps its run records, review page, and undo snapshots in
+`~/.config/gradient`, outside the workspace. When the sandbox blocks writes
+outside the workspace, ask to run these commands with escalated permissions the
+first time, explaining that Gradient stores its local checkup records there,
+instead of letting the first run fail.
+
 Run a local checkup. The bundled runner needs Node.js 20+, makes no model or
 network call on this path, and does not require an API key.
 
@@ -40,16 +46,52 @@ network call on this path, and does not require an API key.
 
        node "<skill-directory>/bin/gradient.mjs" optimize --apply <id>,<id> --deny <id>
 
-   Dismissals persist while the evidence is unchanged. Automatic/scheduled
-   checks only propose; legacy `--auto` does not grant repair authorization.
+   `--apply` saves a restore point before the first change and prints each
+   change as a diff; show that diff. Dismissals persist while the evidence is
+   unchanged. Automatic/scheduled checks only propose; legacy `--auto` does not
+   grant repair authorization.
 
-4. Verify the result with another checkup, report changed files and any skips,
-   and provide the undo command for the applied run:
+4. When the user asks to tidy or rewrite their instruction files (CLAUDE.md,
+   AGENTS.md, rules), or a length, duplicate, or Codex-budget finding calls for
+   it, offer a guided rewrite. Save a restore point before touching anything:
 
-       node "<skill-directory>/bin/gradient.mjs" optimize --undo <runId>
+       node "<skill-directory>/bin/gradient.mjs" optimize --checkpoint
 
-   If undo reports a conflict, explain that later edits were preserved. Do not
-   claim restoration until it succeeds.
+   Then propose a plan before editing: per file, what to cut, what to move
+   where, and the target size. Edit only what the user approves. Every removed
+   line must be stale (Gradient's evidence), duplicated (say where), or moved
+   (say to which file); never drop a rule silently. Keep only what an agent
+   could not work out by reading the code. Current official guidance (verify
+   the pages before relying on them, as in step 2):
+   - Claude Code (code.claude.com/docs/en/memory): keep each CLAUDE.md under
+     ~200 lines, specific, under headers and bullets; contradictions are
+     resolved arbitrarily, so remove them. Move instructions for one part of
+     the codebase to `.claude/rules/*.md` with `paths:` frontmatter, and
+     multi-step procedures to skills; both load only when needed. Every
+     CLAUDE.md above the working directory loads at launch; `claudeMdExcludes`
+     skips ones that do not apply. `/context all` lists what loaded, and
+     `/doctor prompt-audit` has Claude check these files for outdated or
+     conflicting instructions — offer it alongside Gradient's evidence.
+   - Codex (learn.chatgpt.com/docs/agent-configuration/agents-md): AGENTS.md files are
+     concatenated from the repository root down to the working directory, an
+     `AGENTS.override.md` wins in its directory, and Codex stops adding text at
+     `project_doc_max_bytes` (32 KiB by default). Raise that in
+     `~/.codex/config.toml` or move detail into nested AGENTS.md files beside
+     the code. Leave formatting and lint rules to the tools that enforce them.
+
+5. Finish every session that changed anything by showing everything since the
+   restore point, then verify with another checkup:
+
+       node "<skill-directory>/bin/gradient.mjs" optimize --changes
+
+   Tell the user they can put all of it back — applies and hand edits alike —
+   and that the restore itself prints a command to reverse it:
+
+       node "<skill-directory>/bin/gradient.mjs" optimize --restore
+
+   `--undo <runId>` still reverses a single apply. If either reports a
+   conflict or a file it could not restore, explain that the current content
+   was kept. Do not claim restoration until it succeeds.
 
 Optional feature status is context, not a reason to enable more automation.
 Gradient currently installs hooks only for Claude Code; Codex has its own native
