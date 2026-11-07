@@ -18,11 +18,16 @@ what it does, then run the exact toggle the user chose — never choose for them
 - **continuity** — a `PreCompact` hook writes a bounded, redacted checkpoint of
   recent intent, and a `SessionStart` hook reads it back after a resume or a
   compaction.
-- **autopilot** — when Claude stops, a `Stop` hook asks a small model whether
-  it stopped early; if so it sends "Continue." and nothing else. It never
-  answers a question for the user. Bounded by a per-session judge budget and a
-  progress gate. Turning it on grants `nudge` only; `full` is disabled pending
-  further security hardening.
+- **autopilot** — when Claude stops, a `Stop` hook may send "Continue." and
+  nothing else; it never answers a question for the user. A response cut off by
+  an API error gets "Continue." without a model call. When Claude's last message
+  names a push, deploy, release, merge, deletion, migration, message, or spend,
+  autopilot stays out without asking a model. Otherwise a small model judges
+  whether Claude stopped before a step it said it would take (Claude Haiku by
+  default; GPT-6 Luna with `"backend": "codex-cli"` and
+  `"codexModel": "gpt-6-luna"` in `~/.config/gradient/config.json`). Bounded by
+  a per-session judge budget and a progress gate. Turning it on grants `nudge`
+  only; `full` is disabled pending further security hardening.
 - **board** — `SessionStart` and `UserPromptSubmit` hooks report what other
   sessions are doing in this repository.
 - **optimize** — a `SessionEnd` hook re-checks the setup after a session ends

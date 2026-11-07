@@ -19,12 +19,12 @@ const fakeBackend = (reply: string): LLMBackend => ({
 const CONTINUE = '{"action":"continue","response":"continue until actually done","why":"open todos"}';
 const STAND_DOWN = '{"action":"stand_down","why":"claude asked the user a question"}';
 
-// Transcript with N tool_use blocks (fingerprint = tools:N)
-const transcript = (tools: number): string[] => [
+// Transcript with N tool_use blocks (fingerprint = tools:N) after the assistant's text
+const transcript = (tools: number, text = "working"): string[] => [
   JSON.stringify({ type: "user", message: { content: "do the thing" } }),
   JSON.stringify({
     type: "assistant",
-    message: { content: [{ type: "text", text: "working" }, ...Array.from({ length: tools }, () => ({ type: "tool_use", name: "Edit" }))] },
+    message: { content: [{ type: "text", text }, ...Array.from({ length: tools }, () => ({ type: "tool_use", name: "Edit" }))] },
   }),
 ];
 
@@ -147,6 +147,29 @@ describe("respond judge outcomes", () => {
     expect(s.attempts).toBe(1);
     expect(s.lastFingerprint).toBe("tools:3");
     expect(s.log[0]).toMatchObject({ action: "continue", why: "open todos", ts: "2026-07-01T00:00:00Z" });
+  });
+
+  it("a cut-off response gets \"Continue.\" without asking the judge", async () => {
+    const home = await tmpHome();
+    const complete = vi.fn(async () => STAND_DOWN);
+    const lines = transcript(1, "API Error: The response stopped arriving. The response above may be incomplete.");
+    const r = await run({ home, backend: { name: "fake", available: async () => true, complete }, readLines: async () => lines });
+    expect(r).toEqual({ decision: "block", reason: "Continue." });
+    expect(complete).not.toHaveBeenCalled();
+    const s = await loadState("sess1", home);
+    // The judge-free nudge still spends budget and records progress, so it cannot loop.
+    expect(s).toMatchObject({ attempts: 1, count: 1, lastFingerprint: "tools:1" });
+    expect(s.log[0]).toMatchObject({ action: "continue", why: "the response was cut off" });
+  });
+
+  it("stays out when the last message names a step the user decides, without asking the judge", async () => {
+    const home = await tmpHome();
+    const complete = vi.fn(async () => CONTINUE);
+    const lines = transcript(1, "Fixed and tests pass. Next I'll push the branch and deploy to production.");
+    const r = await run({ home, backend: { name: "fake", available: async () => true, complete }, readLines: async () => lines });
+    expect(r).toEqual({ decision: "allow" });
+    expect(complete).not.toHaveBeenCalled();
+    expect((await loadState("sess1", home)).log[0]).toMatchObject({ action: "stand_down", why: "the last message names a step the user decides" });
   });
 
   it("stand_down → allow, logged, count unchanged", async () => {

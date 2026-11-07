@@ -10,25 +10,29 @@ export interface JudgeDecision {
   why: string;
 }
 
+/**
+ * The judge's instructions. Measured against 120 real stops from the user's own
+ * history, labelled by what the user actually typed next: the earlier prompt
+ * ("is the work done, or did Claude stop early?") nudged at 47% precision —
+ * half its nudges interrupted something the user wanted to answer — while a
+ * stand-down-unless-certain prompt never nudged at all. This one names the
+ * cases instead.
+ */
 export function buildJudgePrompt(
-  mode: "nudge" | "full",
   playbook: string,
   projectPlaybook: string,
   tail: string,
 ): LLMRequest {
   const system =
-    "You are the user's auto-responder for a Claude Code session that just stopped. " +
-    "Decide whether the work is actually done or Claude stopped early. " +
-    "If work is unfinished and Claude is not waiting on the user, reply with the nudge this user " +
-    "would send, in their own phrasing (see YOUR PLAYBOOK). " +
-    "If Claude asked the user a genuine question, or the work is done, stand down." +
-    (mode === "full"
-      ? " You may also answer routine questions and, when a task is complete, start this user's " +
-        "typical next step per the playbooks. Stand down on anything irreversible or destructive " +
-        "(pushes, deploys, deletions, spending) unless both playbooks' Rules explicitly allow it."
-      : "") +
-    ' Respond ONLY with JSON: {"action":"continue"|"stand_down","response":"<what to send>","why":"<one line>"}. ' +
-    'action "continue" requires a non-empty response; omit response when standing down.';
+    "A Claude Code session just stopped. Decide whether to send it \"Continue.\" on the user's behalf.\n" +
+    "- continue: the assistant's last message says it is about to do a specific next step itself and did not do it, " +
+    "or its response was cut off.\n" +
+    "- stand_down: everything else, and whenever unsure. In particular: the work is finished or the assistant " +
+    "reported results; it asked the user anything, offered options, or wants a go-ahead, information, a preference, " +
+    "or a review; it is waiting for the user to do something themselves (sign in, click, test, look); or the step " +
+    "involves pushing, deploying, releasing, merging, deleting, sending, publishing, or spending.\n" +
+    'Respond ONLY with JSON: {"action":"continue"|"stand_down","response":"Continue.","why":"<one line>"}. ' +
+    "Omit response when standing down.";
   // Pinned-prose consent only: respond passes "" unless the local user's pin
   // matches the committed file's exact prose bytes.
   const projectBlock = projectPlaybook.trim()

@@ -1,7 +1,7 @@
 import type { Config } from "../core/types.js";
 import { boundedAutopilotBudget, loadConfig, DEFAULT_AUTOPILOT_MODEL, projectKey, supportsClaudeHooks } from "../config.js";
 import { loadState, saveState, cleanupStale } from "../core/state.js";
-import { renderTail, fingerprint, readTranscriptLines } from "../core/tail.js";
+import { renderTail, fingerprint, lastAssistantText, readTranscriptLines } from "../core/tail.js";
 import { loadPlaybook, loadProjectPlaybook, clampMode, loadPlaybookPin, pinnedProse } from "../core/playbook.js";
 import { buildJudgePrompt, judge } from "../core/judge.js";
 import { redact } from "../core/security.js";
@@ -21,6 +21,17 @@ export interface StopHookInput {
 
 const PLAYBOOK_CAP = 4096;
 export const SAFE_NUDGE = "Continue.";
+
+/** A response that was cut off: an API error, or a stream that stopped. In 30
+ *  days of real history every one of these was resumed — by the user or by a
+ *  coordinator — so this needs no judge. */
+const INTERRUPTED = /^(?:API Error:|Request timed out)|response stopped arriving|overloaded_error/i;
+const INTERRUPTED_WINDOW = 200;
+
+/** Steps the user decides. When the last message names one, autopilot stays
+ *  out, whatever a judge would say: a "Continue." there is a go-ahead. */
+const USER_DECIDES = /\b(?:push|deploy\w*|releas\w*|publish\w*|merg\w*|rebase|delet\w*|remov\w*|rm -rf|drop|truncat\w*|migrat\w*|rotat\w*|revok\w*|send|email|post|tweet|pay|charg\w*|purchas\w*|spend|refund|prod|production|ship|tag)\b/i;
+const USER_DECIDES_WINDOW = 600;
 
 export interface RespondResult {
   decision: "allow" | "block";
@@ -82,16 +93,11 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
 
     // Gate 2b: project clamp (spec §4). A committed gradient.md may only
     // restrict authority. Malformed frontmatter clamps this repo to off.
-    let effectiveMode: "nudge" | "full" = mode;
     let effectiveBudget = boundedAutopilotBudget(config.autopilotBudget);
     const project = await loadProjectPlaybook(input.cwd);
     if (project) {
       if (project.clamps.malformed) return allow; // fail closed: off
-      if (project.clamps.maxMode) {
-        const clamped = clampMode(effectiveMode, project.clamps.maxMode);
-        if (clamped !== "nudge" && clamped !== "full") return allow; // clamped to off
-        effectiveMode = clamped;
-      }
+      if (project.clamps.maxMode && clampMode(mode, project.clamps.maxMode) !== "nudge") return allow; // clamped to off
       if (project.clamps.budget !== undefined) {
         effectiveBudget = Math.min(effectiveBudget, project.clamps.budget);
       }
@@ -116,6 +122,23 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
       return allow;
     }
 
+    // Gate 5: the last message, checked locally before any model call.
+    const ts = (deps.now ?? (() => new Date().toISOString()))();
+    const last = lastAssistantText(lines);
+    if (INTERRUPTED.test(last.slice(0, INTERRUPTED_WINDOW))) {
+      state.attempts += 1;
+      state.count += 1;
+      state.lastFingerprint = fp;
+      state.log.push({ ts, action: "continue", why: "the response was cut off", excerpt: SAFE_NUDGE });
+      await saveState(input.session_id, state, deps.home);
+      return { decision: "block", reason: SAFE_NUDGE };
+    }
+    if (USER_DECIDES.test(last.slice(-USER_DECIDES_WINDOW))) {
+      state.log.push({ ts, action: "stand_down", why: "the last message names a step the user decides", excerpt: "" });
+      await saveState(input.session_id, state, deps.home);
+      return allow;
+    }
+
     const backend = deps.backend !== undefined ? deps.backend : await autopilotBackend(config);
     if (!backend) return allow;
 
@@ -132,11 +155,10 @@ export async function respond(input: StopHookInput, deps: RespondDeps = {}): Pro
     await saveState(input.session_id, state, deps.home);
     const decision = await judge(
       backend,
-      buildJudgePrompt(effectiveMode, playbook, projectProse, tail),
+      buildJudgePrompt(playbook, projectProse, tail),
       { timeoutMs: deps.timeoutMs },
     );
 
-    const ts = (deps.now ?? (() => new Date().toISOString()))();
     if (decision.action === "continue" && decision.response) {
       state.count += 1;
       state.log.push({ ts, action: "continue", why: decision.why, excerpt: SAFE_NUDGE });

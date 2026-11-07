@@ -31,6 +31,19 @@ function summarizeTools(tools: RawBlock[]): string {
   return [...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(", ");
 }
 
+/** The text of the session's last assistant message that has any, or "" when none does. */
+export function lastAssistantText(lines: string[]): string {
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const raw = parseLine(lines[index]);
+    if (!raw || raw.isSidechain || raw.type !== "assistant") continue;
+    const content = raw.message?.content;
+    if (!Array.isArray(content)) continue;
+    const text = content.filter(b => b.type === "text").map(b => b.text ?? "").join(" ").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
 export function renderTail(
   lines: string[],
   opts: { maxTurns?: number; maxChars?: number } = {},
