@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyOrder, optimize, optimizeJson } from "./optimize.js";
+import { openRestorePoint } from "../core/restore.js";
 import { loadResult } from "../core/run.js";
 import type { Finding } from "../core/findings.js";
 import type { Suggestion } from "../core/types.js";
@@ -86,6 +87,23 @@ describe("optimize", () => {
 
     const result = await loadResult(applied.runId!, home);
     expect(result?.applied[0].paths).toEqual([join(dir, "CLAUDE.md")]);
+  });
+
+  it("takes one restore point before the first apply of a session, shows the diff, and reuses the point", async () => {
+    const home = await tree({});
+    const dir = await tree({
+      "AGENTS.md": "- shared guidance for both assistants here\n",
+      "CLAUDE.md": "- a rule that is perfectly current\n",
+    });
+    const proposed = await optimize(dir, { target: "both", home }, { suggestions: [] });
+    const bridge = proposed.findings.find(f => f.family === "drift")!;
+    const applied = await optimize(dir, { target: "both", home, apply: [bridge.id] }, { suggestions: [] });
+    expect(applied.restorePoint).toBeDefined();
+    expect(applied.applied[0].diff?.[0]).toContain("+@AGENTS.md");
+    // A read-only run neither takes nor closes a restore point.
+    const again = await optimize(dir, { target: "both", home }, { suggestions: [] });
+    expect(again.restorePoint).toBeUndefined();
+    expect(await openRestorePoint(dir, { home })).toBe(applied.restorePoint);
   });
 
   it("does nothing and names no run when no id matches", async () => {

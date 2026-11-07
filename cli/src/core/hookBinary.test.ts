@@ -1,6 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { dirname } from "node:path";
-import { displayCommand, gradientCommand, gradientHookCommand, isGradientHookFor, shellQuote } from "./hookBinary.js";
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { displayCommand, gradientCommand, gradientHookCommand, isGradientHookFor, isVersionedNode, shellQuote, stableExecPath } from "./hookBinary.js";
+
+describe("stableExecPath", () => {
+  async function fakeNode(): Promise<{ root: string; real: string }> {
+    const root = await mkdtemp(join(tmpdir(), "grad-node-"));
+    const real = join(root, "Cellar", "node", "9.9.9", "bin", "node");
+    await mkdir(dirname(real), { recursive: true });
+    await writeFile(real, "#!/bin/sh\n");
+    await chmod(real, 0o755);
+    return { root, real };
+  }
+
+  it("names the link a package manager keeps, when it points at exactly this node", async () => {
+    const { root, real } = await fakeNode();
+    await mkdir(join(root, "bin"));
+    await symlink(real, join(root, "bin", "node"));
+    expect(stableExecPath(real, { PATH: join(root, "bin") })).toBe(join(root, "bin", "node"));
+  });
+
+  it("keeps the running node when no stable link points at it", async () => {
+    const { root, real } = await fakeNode();
+    expect(stableExecPath(real, { PATH: join(root, "nothing-here") })).toBe(real);
+  });
+
+  it("leaves a node outside any version directory alone", () => {
+    expect(stableExecPath("/usr/local/bin/node", { PATH: "" })).toBe("/usr/local/bin/node");
+    expect(isVersionedNode("/opt/homebrew/Cellar/node/23.10.0/bin/node")).toBe(true);
+    expect(isVersionedNode("/home/a/.nvm/versions/node/v20.1.0/bin/node")).toBe(true);
+    expect(isVersionedNode("/opt/homebrew/bin/node")).toBe(false);
+  });
+});
 
 describe("gradientCommand", () => {
   it("runs this install's own entry point with this node", () => {
@@ -42,7 +74,8 @@ describe("gradientCommand", () => {
   });
 
   it("resolves from its own location when nothing is injected", () => {
-    expect(gradientCommand()).toContain(process.execPath);
+    // This node, through an upgrade-proof link when one exists.
+    expect(gradientCommand()).toContain(stableExecPath(process.execPath));
   });
 });
 

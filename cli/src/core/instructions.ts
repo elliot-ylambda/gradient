@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { dirname, join, relative, resolve } from "node:path";
 import { lstat, opendir, realpath } from "node:fs/promises";
 import type { Assistant } from "./types.js";
@@ -39,6 +40,9 @@ export interface InstructionSource {
   /** The file behind `path`: a CLAUDE.md symlinked to AGENTS.md is one file
    *  that both assistants load. */
   realPath?: string;
+  /** Content hash: two different files with the same bytes (a worktree's
+   *  CLAUDE.md and the main checkout's above it) load the same text twice. */
+  digest?: string;
 }
 
 export interface InstructionLine {
@@ -272,6 +276,7 @@ export async function loadInstructions(
       path, scope, assistant, kind, realPath: canonical,
       lineCount: raw.split("\n").length,
       bytes: Buffer.byteLength(raw, "utf8"),
+      digest: createHash("sha256").update(raw).digest("hex"),
       ...(kind === "rule" ? { pathScoped: list(frontmatter, "paths").length > 0 } : {}),
       ...(await isManagedMemory(path) ? { readOnly: true } : {}),
     };

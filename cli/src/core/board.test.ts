@@ -86,9 +86,24 @@ describe("extractEditedFiles", () => {
       .toEqual(["b.ts", "c.ts", "d.ts", "e.ts", "f.ts"]);
   });
 
-  it("keeps paths outside the board root absolute and redacts secrets", () => {
-    const lines = [toolLine("Edit", "/elsewhere/x.ts")];
-    expect(extractEditedFiles(lines, "/repo")).toEqual(["/elsewhere/x.ts"]);
+  it("drops files outside every checkout — scratchpads, assistant memory", () => {
+    const lines = [
+      toolLine("Write", "/private/tmp/claude-501/scratchpad/notes.md"),
+      toolLine("Edit", "/home/me/.claude/projects/repo/memory/MEMORY.md"),
+      toolLine("Edit", "/repo/src/kept.ts"),
+    ];
+    expect(extractEditedFiles(lines, "/repo")).toEqual(["src/kept.ts"]);
+  });
+
+  it("shows a worktree session's files relative to its own checkout, and names another checkout's", () => {
+    const own = "/wt/badlands";
+    const lines = [
+      toolLine("Edit", "/wt/badlands/gateway/app.py"),
+      toolLine("Edit", "/wt/queue/gateway/service.py"),
+      toolLine("Edit", "/repo/.worktrees/demo/web/page.tsx"),
+    ];
+    expect(extractEditedFiles(lines, own, ["/repo", "/repo/.worktrees/demo", "/wt/badlands", "/wt/queue"]))
+      .toEqual(["gateway/app.py", "gateway/service.py (in queue)", "web/page.tsx (in demo)"]);
   });
 });
 
@@ -304,6 +319,16 @@ describe("renderDigest", () => {
       },
     });
     expect(renderDigest(withSelf)).toContain("(you) claude · spec/gradient-board · main checkout");
+  });
+
+  it("names a worktree kept outside the main checkout by its own name", () => {
+    const state = stateFixture({
+      sessions: [{
+        agent: "claude", sessionId: "s", branch: "fix/x",
+        worktree: "../../.clinch/worktrees/repo/badlands-prickly", liveness: "live", ageMs: 0, editing: [],
+      }],
+    });
+    expect(renderDigest(state)).toContain("• claude · fix/x · badlands-prickly · live");
   });
 
   it("caps output at 25 lines", () => {

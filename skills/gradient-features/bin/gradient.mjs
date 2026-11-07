@@ -411,13 +411,13 @@ var init_version = __esm({
   "src/version.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
-    VERSION = true ? "0.10.2" : require2("../package.json").version;
+    VERSION = true ? "0.11.0" : require2("../package.json").version;
     BUNDLED = true;
   }
 });
 
 // src/core/hookBinary.ts
-import { accessSync, constants as constants2 } from "node:fs";
+import { accessSync, constants as constants2, realpathSync as realpathSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { delimiter, dirname as dirname2, join as join3, sep as sep2 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -441,6 +441,28 @@ function runnerWord(scriptPath) {
   if (!versioned) return shellQuote(scriptPath);
   return `"$(ls -d ${shellQuote(versioned[1])}/*${versioned[2]} 2>/dev/null | sort -V | tail -1)"`;
 }
+function isVersionedNode(path5) {
+  return VERSIONED_NODE.test(path5);
+}
+function stableExecPath(execPath, env = process.env) {
+  if (!isVersionedNode(execPath)) return execPath;
+  let target;
+  try {
+    target = realpathSync2(execPath);
+  } catch {
+    return execPath;
+  }
+  const fromPath = (env.PATH ?? env.Path ?? "").split(delimiter).filter(Boolean).map((dir) => join3(dir, "node"));
+  for (const candidate of [...STABLE_NODE_CANDIDATES, ...fromPath]) {
+    if (isVersionedNode(candidate)) continue;
+    try {
+      accessSync(candidate, constants2.X_OK);
+      if (realpathSync2(candidate) === target) return candidate;
+    } catch {
+    }
+  }
+  return execPath;
+}
 function gradientRuntimePaths(opts = {}) {
   const scriptPath = opts.scriptPath === void 0 ? ownBinPath() : opts.scriptPath;
   if (!scriptPath) {
@@ -448,7 +470,7 @@ function gradientRuntimePaths(opts = {}) {
       "cannot locate gradient's own entry point, so any hook written now would never run \u2014 reinstall the gradient plugin or skill"
     );
   }
-  return { execPath: opts.execPath ?? process.execPath, scriptPath };
+  return { execPath: opts.execPath ?? stableExecPath(process.execPath), scriptPath };
 }
 function gradientCommand(opts = {}) {
   const { execPath, scriptPath } = gradientRuntimePaths(opts);
@@ -490,13 +512,15 @@ function displayCommand(opts = {}) {
   if (Object.keys(opts).length === 0) displayCache = command;
   return command;
 }
-var LEGACY_PATH_BINARY, VERSIONED_PLUGIN, displayCache;
+var LEGACY_PATH_BINARY, VERSIONED_PLUGIN, VERSIONED_NODE, STABLE_NODE_CANDIDATES, displayCache;
 var init_hookBinary = __esm({
   "src/core/hookBinary.ts"() {
     "use strict";
     init_version();
     LEGACY_PATH_BINARY = "gradient";
     VERSIONED_PLUGIN = /^(.*[\\/]plugins[\\/]cache[\\/][^\\/]+[\\/][^\\/]+)[\\/][^\\/]+([\\/]bin[\\/]gradient\.mjs)$/;
+    VERSIONED_NODE = /[\\/](?:Cellar[\\/]node(?:@\d+)?|\.nvm[\\/]versions[\\/]node|fnm[\\/]node-versions|\.volta[\\/]tools[\\/]image[\\/]node|\.asdf[\\/]installs[\\/]nodejs|mise[\\/]installs[\\/]node)[\\/][^\\/]+[\\/]/;
+    STABLE_NODE_CANDIDATES = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"];
   }
 });
 
@@ -1226,8 +1250,8 @@ function parseCodexLines(lines) {
       const totalUsage = info.total_token_usage;
       if (!totalUsage || typeof totalUsage !== "object") continue;
       const total = numeric(totalUsage.total_tokens);
-      const cached = numeric(totalUsage.cached_input_tokens) ?? 0;
-      const adjusted = total === void 0 ? void 0 : Math.max(0, total - cached);
+      const cached2 = numeric(totalUsage.cached_input_tokens) ?? 0;
+      const adjusted = total === void 0 ? void 0 : Math.max(0, total - cached2);
       if (adjusted === void 0 || adjusted < previousCumulative) continue;
       const delta = adjusted - previousCumulative;
       previousCumulative = adjusted;
@@ -2096,10 +2120,10 @@ function sourceSubtype(suggestion, bySignature) {
   const candidates = sourceCandidates(suggestion, bySignature);
   const kinds = [...new Set((candidates ?? []).map((candidate) => candidate.kind))].sort();
   if (suggestion.payload.type === "command") {
-    const special2 = kinds.filter((kind) => kind === "paste" || kind === "sequence" || kind === "toolfail" || kind === "ritual");
+    const special2 = kinds.filter((kind2) => kind2 === "paste" || kind2 === "sequence" || kind2 === "toolfail" || kind2 === "ritual");
     return `command:${special2.length ? special2.join("+") : "plain"}`;
   }
-  const special = kinds.filter((kind) => kind === "answer" || kind === "correction" || kind === "toolfail");
+  const special = kinds.filter((kind2) => kind2 === "answer" || kind2 === "correction" || kind2 === "toolfail");
   return `rule:${special.length ? special.join("+") : "plain"}`;
 }
 function mergeNearDuplicates(suggestions, bySignature) {
@@ -3550,6 +3574,9 @@ import { createHash as createHash5, randomBytes } from "node:crypto";
 import { homedir as homedir6 } from "node:os";
 import { join as join11 } from "node:path";
 import { lstat as lstat4, opendir as opendir3 } from "node:fs/promises";
+function isRunId(name) {
+  return RUN_ID_PATTERN.test(name);
+}
 function runsDir(home) {
   return join11(home ?? homedir6(), ".config", "gradient", "runs");
 }
@@ -3659,14 +3686,29 @@ async function restoreFile(record) {
     });
   }
 }
+async function loadSnapshot(runId, path5, home) {
+  const userHome = home ?? homedir6();
+  let raw;
+  try {
+    raw = await safeReadFile(runsDir(userHome), join11(runDir(runId, userHome), "snapshots", snapshotName(path5)), { maxBytes: SNAPSHOT_MAX_BYTES });
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  const record = JSON.parse(raw);
+  if (record.path !== path5 || typeof record.base !== "string" || typeof record.content !== "string" || typeof record.existed !== "boolean" || record.sha256 !== sha256(record.content) || record.mode !== void 0 && (!Number.isInteger(record.mode) || record.mode < 0 || record.mode > 511)) {
+    throw new Error(`invalid snapshot for ${path5}`);
+  }
+  return record;
+}
 async function withFileTransaction(run, files, action) {
-  const unique = [...new Map(files.map((file) => [file.path, file])).values()];
+  const unique2 = [...new Map(files.map((file) => [file.path, file])).values()];
   const before = [];
-  for (const file of unique) {
+  for (const file of unique2) {
     before.push(await captureFile(file.path, file.base));
     if (!file.bookkeeping) await snapshot(run, file.path, file.base);
   }
-  const bookkeeping = new Set(unique.filter((file) => file.bookkeeping).map((file) => file.path));
+  const bookkeeping = new Set(unique2.filter((file) => file.bookkeeping).map((file) => file.path));
   try {
     const value = await action();
     const wrote = {};
@@ -3694,6 +3736,14 @@ async function withFileTransaction(run, files, action) {
     throw error;
   }
 }
+function validLocations(value) {
+  return Array.isArray(value) && value.length <= 2e4 && value.every((entry) => entry && typeof entry.path === "string" && typeof entry.base === "string");
+}
+function validRestorePoint(value) {
+  if (value === void 0) return true;
+  const point = value;
+  return !!point && typeof point.project === "string" && (point.reason === "checkpoint" || point.reason === "apply" || point.reason === "restore") && validLocations(point.files) && validLocations(point.dirs) && !!point.links && typeof point.links === "object" && !Array.isArray(point.links) && Object.values(point.links).every((target) => typeof target === "string") && (point.uncovered === void 0 || Array.isArray(point.uncovered) && point.uncovered.every((path5) => typeof path5 === "string")) && (point.restoredAt === void 0 || typeof point.restoredAt === "string");
+}
 function validBookkeeping(value) {
   if (value === void 0) return true;
   return Array.isArray(value) && value.length <= 100 && value.every((record) => record && typeof record === "object" && typeof record.projectDir === "string" && typeof record.name === "string" && (record.target === "claude-code" || record.target === "codex") && typeof record.suggestionId === "string" && typeof record.consent === "boolean" && (record.prior === null || typeof record.prior === "object" && !Array.isArray(record.prior)));
@@ -3714,7 +3764,7 @@ async function loadResult(runId, home) {
       join11(runDir(runId, userHome), "result.json"),
       { maxBytes: RESULT_MAX_BYTES }
     ));
-    if (!value || value.runId !== runId || typeof value.startedAt !== "string" || !Number.isFinite(Date.parse(value.startedAt)) || !Array.isArray(value.applied) || !Array.isArray(value.skipped) || !value.wrote || typeof value.wrote !== "object" || Array.isArray(value.wrote) || !Object.values(value.wrote).every((hash) => hash === null || typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)) || !validBookkeeping(value.bookkeeping)) return null;
+    if (!value || value.runId !== runId || typeof value.startedAt !== "string" || !Number.isFinite(Date.parse(value.startedAt)) || !Array.isArray(value.applied) || !Array.isArray(value.skipped) || !value.wrote || typeof value.wrote !== "object" || Array.isArray(value.wrote) || !Object.values(value.wrote).every((hash) => hash === null || typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)) || !validBookkeeping(value.bookkeeping) || !validRestorePoint(value.restorePoint)) return null;
     return value;
   } catch {
     return null;
@@ -3730,19 +3780,9 @@ async function undoRun(runId, opts = {}) {
   const conflicted = [];
   const records = [];
   for (const path5 of Object.keys(result.wrote)) {
-    let record;
     try {
-      let raw;
-      try {
-        raw = await safeReadFile(runsDir(home), join11(dir, "snapshots", snapshotName(path5)), { maxBytes: SNAPSHOT_MAX_BYTES });
-      } catch (error) {
-        if (error.code === "ENOENT") continue;
-        throw error;
-      }
-      record = JSON.parse(raw);
-      if (record.path !== path5 || typeof record.base !== "string" || typeof record.content !== "string" || typeof record.existed !== "boolean" || record.sha256 !== sha256(record.content) || record.mode !== void 0 && (!Number.isInteger(record.mode) || record.mode < 0 || record.mode > 511)) {
-        throw new Error("invalid snapshot");
-      }
+      const record = await loadSnapshot(runId, path5, home);
+      if (!record) continue;
       const current = await captureFile(path5, record.base);
       const expected = result.wrote[path5];
       const absent = expected === null || expected === EMPTY_SHA256;
@@ -3781,17 +3821,18 @@ async function listDir(dir) {
 async function pruneRuns(opts = {}) {
   const home = opts.home ?? homedir6();
   const keep = opts.keep ?? DEFAULT_KEEP;
-  const all = (await listDir(runsDir(home))).filter((name) => RUN_ID_PATTERN.test(name)).sort();
+  const all = (await listDir(runsDir(home))).filter(isRunId).sort();
   const applied = [];
   const proposals = [];
+  const restorePoints = [];
   for (const id of all) {
     const result = await loadResult(id, home);
-    (result && Object.keys(result.wrote).length > 0 ? applied : proposals).push(id);
+    if (result?.restorePoint) restorePoints.push(id);
+    else if (result && Object.keys(result.wrote).length > 0) applied.push(id);
+    else proposals.push(id);
   }
-  const doomed = [
-    ...applied.slice(0, Math.max(0, applied.length - keep)),
-    ...proposals.slice(0, Math.max(0, proposals.length - keep))
-  ].sort();
+  const oldest = (ids) => ids.slice(0, Math.max(0, ids.length - keep));
+  const doomed = [...oldest(applied), ...oldest(proposals), ...oldest(restorePoints)].sort();
   for (const id of doomed) {
     await safeRemoveTree(home, runDir(id, home)).catch(() => void 0);
   }
@@ -4720,11 +4761,11 @@ function tokensFor(turn) {
   }
   return Math.ceil((turn.text?.length ?? 0) / 4);
 }
-function costLine(tokens, prompts, label, action) {
-  return `\u2248${tokens.toLocaleString("en-US")} tokens \xB7 ${prompts} ${label} \xB7 ${action}`;
+function costLine(tokens, prompts, label2, action) {
+  return `\u2248${tokens.toLocaleString("en-US")} tokens \xB7 ${prompts} ${label2} \xB7 ${action}`;
 }
-function attentionLine(tokens, prompts, label, action) {
-  return `${prompts} ${label} across \u2248${tokens.toLocaleString("en-US")} tokens of turns you had to drive (automating saves attention, not tokens) \xB7 ${action}`;
+function attentionLine(tokens, prompts, label2, action) {
+  return `${prompts} ${label2} across \u2248${tokens.toLocaleString("en-US")} tokens of turns you had to drive (automating saves attention, not tokens) \xB7 ${action}`;
 }
 function buildCostRows(turns, ignore = [], features = {}) {
   const pasteCounts = /* @__PURE__ */ new Map();
@@ -4971,9 +5012,9 @@ function grow(groups, key, sessionId, ts, example) {
   }
   groups.set(key, group);
 }
-function toCandidate(kind, signature, group) {
+function toCandidate(kind2, signature, group) {
   return {
-    kind,
+    kind: kind2,
     signature,
     examples: group.examples.length > 0 ? group.examples : [signature],
     count: group.count,
@@ -4984,8 +5025,8 @@ function toCandidate(kind, signature, group) {
     confidence: "inferred"
   };
 }
-function rankedCandidates(groups, kind, predicate) {
-  return [...groups.entries()].filter(([, group]) => predicate(group)).map(([signature, group]) => toCandidate(kind, signature, group)).sort((left, right) => right.count - left.count || left.signature.localeCompare(right.signature));
+function rankedCandidates(groups, kind2, predicate) {
+  return [...groups.entries()].filter(([, group]) => predicate(group)).map(([signature, group]) => toCandidate(kind2, signature, group)).sort((left, right) => right.count - left.count || left.signature.localeCompare(right.signature));
 }
 function failureLoops(events) {
   const groups = /* @__PURE__ */ new Map();
@@ -5397,7 +5438,7 @@ async function resolveBoardRoot(dir) {
 function boardStateDir(boardRoot, home) {
   return join15(projectCacheDir(boardRoot, home), "board");
 }
-function extractEditedFiles(lines, boardRoot) {
+function extractEditedFiles(lines, own, worktrees = [own]) {
   const files = [];
   for (const line of lines) {
     let record;
@@ -5418,13 +5459,27 @@ function extractEditedFiles(lines, boardRoot) {
       files.push(raw);
     }
   }
-  const recent = files.slice(-TOOL_EVENT_WINDOW);
-  const deduped = [...new Set(recent)].slice(-EDITING_CAP);
-  return deduped.map((path5) => {
-    const rel = isAbsolute7(path5) ? relative5(boardRoot, path5) : path5;
-    const shown = rel === "" || rel.startsWith("..") ? path5 : rel;
-    return redact(shown).slice(0, 200);
-  });
+  const checkouts = [.../* @__PURE__ */ new Set([own, ...worktrees])].sort((a, b) => b.length - a.length);
+  const shown = [];
+  for (const path5 of files.slice(-TOOL_EVENT_WINDOW)) {
+    if (!isAbsolute7(path5)) {
+      shown.push(path5);
+      continue;
+    }
+    for (const checkout of checkouts) {
+      const rel = relative5(checkout, path5);
+      if (rel === "" || rel.startsWith("..") || isAbsolute7(rel)) continue;
+      shown.push(checkout === own ? rel : `${rel} (in ${basename2(checkout)})`);
+      break;
+    }
+  }
+  return [...new Set(shown)].slice(-EDITING_CAP).map((path5) => redact(path5).slice(0, 200));
+}
+async function listWorktrees(boardRoot) {
+  const listed = await git(["worktree", "list", "--porcelain"], boardRoot);
+  const paths = (listed ?? "").split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length));
+  const real = await Promise.all(paths.map((path5) => realpath3(path5).catch(() => path5)));
+  return [.../* @__PURE__ */ new Set([boardRoot, ...real])];
 }
 async function discoverClaudeSessions(boardRoot, opts = {}) {
   const home = opts.home ?? homedir10();
@@ -5438,6 +5493,7 @@ async function discoverClaudeSessions(boardRoot, opts = {}) {
   }
   const sessions = [];
   let visited = 0;
+  let worktrees;
   for (const dir of dirs) {
     let files = [];
     try {
@@ -5456,13 +5512,13 @@ async function discoverClaudeSessions(boardRoot, opts = {}) {
         continue;
       }
       if (ageMs > IDLE_MS) continue;
-      const session = await readClaudeSession(file, boardRoot, ageMs, opts.onWarn);
+      const session = await readClaudeSession(file, boardRoot, ageMs, () => worktrees ??= listWorktrees(boardRoot), opts.onWarn);
       if (session) sessions.push(session);
     }
   }
   return sessions;
 }
-async function readClaudeSession(file, boardRoot, ageMs, onWarn) {
+async function readClaudeSession(file, boardRoot, ageMs, worktrees, onWarn) {
   let lines;
   try {
     lines = await readTranscriptLines(file);
@@ -5501,7 +5557,7 @@ async function readClaudeSession(file, boardRoot, ageMs, onWarn) {
     worktree: relative5(boardRoot, location.toplevel),
     liveness: ageMs <= LIVE_MS ? "live" : "idle",
     ageMs,
-    editing: extractEditedFiles(lines, boardRoot)
+    editing: extractEditedFiles(lines, location.toplevel, await worktrees())
   };
 }
 async function discoverCodexSessions(boardRoot, opts = {}) {
@@ -5599,18 +5655,22 @@ function formatAge(ms) {
   if (minutes < 60) return `${minutes}m`;
   return `${Math.round(minutes / 60)}h`;
 }
+function checkoutLabel(worktree) {
+  if (worktree === "") return "main checkout";
+  return worktree.startsWith("..") ? basename2(worktree) : worktree;
+}
 function renderDigest(state) {
   const lines = [];
   const count = state.sessions.length;
   lines.push(`gradient board \u2014 ${count} other session${count === 1 ? "" : "s"} in this repo`);
   for (const session of state.sessions) {
-    const checkout = session.worktree === "" ? "main checkout" : session.worktree;
+    const checkout = checkoutLabel(session.worktree);
     const status = `${session.liveness} (${formatAge(session.ageMs)})`;
     lines.push(`\u2022 ${session.agent} \xB7 ${session.branch ?? "?"} \xB7 ${checkout} \xB7 ${status}`);
     if (session.editing.length > 0) lines.push(`  editing: ${session.editing.join(", ")}`);
   }
   if (state.self) {
-    const checkout = state.self.worktree === "" ? "main checkout" : state.self.worktree;
+    const checkout = checkoutLabel(state.self.worktree);
     lines.push(`(you) ${state.self.agent} \xB7 ${state.self.branch ?? "?"} \xB7 ${checkout}`);
   }
   if (state.landed.length > 0) {
@@ -5933,6 +5993,7 @@ var init_frontmatter = __esm({
 });
 
 // src/core/instructions.ts
+import { createHash as createHash9 } from "node:crypto";
 import { dirname as dirname5, join as join17, relative as relative7, resolve as resolve10 } from "node:path";
 import { lstat as lstat7, opendir as opendir5, realpath as realpath5 } from "node:fs/promises";
 async function ruleFiles(dir, warnings, seen = /* @__PURE__ */ new Set(), depth = 0) {
@@ -6079,7 +6140,7 @@ async function loadInstructions(projectDir, targets, opts = {}) {
     if (entry.path === join17(roots.claude, "CLAUDE.md")) continue;
     if (await readBounded(project2, entry.path, unreadable) !== null) blockedBy.push(entry.path);
   }
-  const ingest = async (path5, scope, assistant, kind, depth = 0, confine) => {
+  const ingest = async (path5, scope, assistant, kind2, depth = 0, confine) => {
     if (depth > 5 || sources.length >= 500) {
       warnings.push(`Instruction inspection limit reached at ${path5}`);
       return;
@@ -6105,18 +6166,19 @@ async function loadInstructions(projectDir, targets, opts = {}) {
       path: path5,
       scope,
       assistant,
-      kind,
+      kind: kind2,
       realPath: canonical2,
       lineCount: raw.split("\n").length,
       bytes: Buffer.byteLength(raw, "utf8"),
-      ...kind === "rule" ? { pathScoped: list(frontmatter, "paths").length > 0 } : {},
+      digest: createHash9("sha256").update(raw).digest("hex"),
+      ...kind2 === "rule" ? { pathScoped: list(frontmatter, "paths").length > 0 } : {},
       ...await isManagedMemory(path5) ? { readOnly: true } : {}
     };
     sources.push(source);
     lines.push(...extractLines(raw, source));
     if (assistant === "claude-code") {
       for (const imported of importedPaths(raw, path5, roots.home)) {
-        await ingest(imported, scope, assistant, imported.endsWith("AGENTS.md") ? "agents-md" : kind, depth + 1, confine);
+        await ingest(imported, scope, assistant, imported.endsWith("AGENTS.md") ? "agents-md" : kind2, depth + 1, confine);
       }
     }
   };
@@ -6242,9 +6304,22 @@ async function skillDirs(projectDir, opts, targets, warnings) {
   const overrides = {};
   const claudeSettings = {};
   const hookEvents = /* @__PURE__ */ new Set();
+  const versionedHooks = /* @__PURE__ */ new Map();
   const addHooks = (hooks) => {
     if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return;
-    for (const [event, entries2] of Object.entries(hooks)) if (Array.isArray(entries2) && entries2.length > 0) hookEvents.add(event);
+    for (const [event, entries2] of Object.entries(hooks)) {
+      if (!Array.isArray(entries2) || entries2.length === 0) continue;
+      hookEvents.add(event);
+      for (const entry of entries2) {
+        for (const hook of Array.isArray(entry?.hooks) ? entry.hooks : []) {
+          const command = typeof hook?.command === "string" ? hook.command.trim() : "";
+          const node = command.split(/\s+/)[0]?.replace(/^'|'$/g, "") ?? "";
+          if (!/gradient/i.test(command) || !isVersionedNode(node)) continue;
+          const subcommand = /\s((?:hook )?[a-z-]+)$/.exec(command)?.[1] ?? "";
+          versionedHooks.set(`${node}\0${subcommand}`, { node, subcommand });
+        }
+      }
+    }
   };
   if (targets.includes("claude-code")) {
     for (const [dir, scope] of [[roots.claude, "user"], ...ancestorDirs(projectDir).map((dir2) => [join18(dir2, ".claude"), "project"])]) {
@@ -6276,14 +6351,14 @@ async function skillDirs(projectDir, opts, targets, warnings) {
       const manifest = await readSettings(join18(root, ".claude-plugin", "plugin.json"), warnings);
       const namespace = typeof manifest.name === "string" ? manifest.name : id.split("@")[0];
       if (manifest.hooks && typeof manifest.hooks === "object" && !Array.isArray(manifest.hooks)) addHooks(manifest.hooks.hooks);
-      for (const relative9 of ["hooks/hooks.json", ...manifestPaths(manifest.hooks)].slice(0, 8)) {
-        const file = resolve11(root, relative9);
+      for (const relative10 of ["hooks/hooks.json", ...manifestPaths(manifest.hooks)].slice(0, 8)) {
+        const file = resolve11(root, relative10);
         if (within(root, file)) addHooks((await readSettings(file, warnings)).hooks);
       }
-      for (const relative9 of ["skills", ...manifestPaths(manifest.skills)].slice(0, 32)) {
-        const dir = resolve11(root, relative9);
+      for (const relative10 of ["skills", ...manifestPaths(manifest.skills)].slice(0, 32)) {
+        const dir = resolve11(root, relative10);
         if (!within(root, dir)) {
-          warnings.push(`Plugin ${id} skill path leaves its installation: ${relative9}`);
+          warnings.push(`Plugin ${id} skill path leaves its installation: ${relative10}`);
           continue;
         }
         out.push({ dir, base: root, assistant: "claude-code", scope: record.scope === "user" ? "user" : "project", namespace });
@@ -6319,7 +6394,7 @@ async function skillDirs(projectDir, opts, targets, warnings) {
     }
     warnings.push("Codex bundled/plugin skills, managed/profile overrides, and dynamically supplied skill locations are outside this inventory.");
   }
-  return { dirs: out, disabled, overrides, claudeSettings, hookEvents };
+  return { dirs: out, disabled, overrides, claudeSettings, hookEvents, versionedHooks };
 }
 async function entries(dir, warnings) {
   try {
@@ -6497,7 +6572,8 @@ async function loadSurface(projectDir, targets, opts = {}) {
     memory: targets.includes("claude-code") && inventory.claudeSettings.autoMemoryEnabled !== false && (memorySetting === void 0 || memoryDirectory) ? await loadMemory(projectDir, roots.home, roots.claude, memoryDirectory) : null,
     contextChars: skills.reduce((total, skill) => total + skill.descriptionChars, 0),
     warnings: [...new Set(warnings)],
-    hookEvents: [...inventory.hookEvents]
+    hookEvents: [...inventory.hookEvents],
+    ...inventory.versionedHooks.size > 0 ? { versionedHooks: [...inventory.versionedHooks.values()] } : {}
   };
 }
 var MAX_SKILL_BYTES, MAX_SKILLS, MAX_MEMORY_BYTES, DESCRIPTION_CAP, MEMORY_INDEX_MAX_LINES, MEMORY_INDEX_MAX_BYTES, DUPLICATE_DESCRIPTION_THRESHOLD, CLAUDE_CODE_KEYS, PORTABLE_KEYS;
@@ -6508,6 +6584,7 @@ var init_surface = __esm({
     init_cluster();
     init_frontmatter();
     init_board();
+    init_hookBinary();
     MAX_SKILL_BYTES = 256e3;
     MAX_SKILLS = 500;
     MAX_MEMORY_BYTES = 512e3;
@@ -6611,6 +6688,14 @@ async function repoIndex(projectDir) {
   const nested = await git([...UNTRUSTED_REPO, "ls-files", "-z", "--cached", "--recurse-submodules"], projectDir, MAX_INDEX_BYTES);
   return [...new Set(`${listed}\0${nested ?? ""}`.split("\0").filter(Boolean))];
 }
+async function uncheckedSubmodules(projectDir) {
+  const staged = await git([...UNTRUSTED_REPO, "ls-files", "-z", "--stage"], projectDir, MAX_INDEX_BYTES);
+  if (!staged) return [];
+  const gitlinks = staged.split("\0").filter((entry) => entry.startsWith("160000 ")).map((entry) => entry.slice(entry.indexOf("	") + 1));
+  const unchecked = [];
+  for (const path5 of gitlinks) if (!await exists(join19(projectDir, path5, ".git"))) unchecked.push(path5);
+  return unchecked;
+}
 async function readRepoFacts(projectDir, index = null) {
   const scripts = /* @__PURE__ */ new Set();
   const makeTargets = /* @__PURE__ */ new Set();
@@ -6657,20 +6742,41 @@ function namedSomewhere(ref, index) {
     return path5.endsWith(slashed) || path5.includes(`${slashed}/`);
   });
 }
+async function rootFor(sourcePath, project2) {
+  const dir = dirname7(resolve12(sourcePath));
+  if (within(project2, sourcePath) || !within(dir, project2)) return project2;
+  return await git(["rev-parse", "--show-toplevel"], dir) ?? dir;
+}
+function cached(cache, key, load) {
+  let pending = cache.get(key);
+  if (!pending) cache.set(key, pending = load());
+  return pending;
+}
+async function factsFor(root, opts, isProject) {
+  const index = isProject && opts.index !== void 0 ? opts.index : await repoIndex(root);
+  const facts = isProject && opts.facts ? opts.facts : await readRepoFacts(root, index);
+  const unchecked = await uncheckedSubmodules(root);
+  const topLevel = new Set((index ?? []).map((file) => file.split("/")[0]));
+  return { index, facts, unchecked, topLevel };
+}
 async function findStaleRefs(lines, projectDir, opts = {}) {
   const resolvedProject = resolve12(projectDir);
-  const index = opts.index !== void 0 ? opts.index : await repoIndex(resolvedProject);
-  const facts = opts.facts ?? await readRepoFacts(projectDir, index);
+  const sourceRoots = /* @__PURE__ */ new Map();
+  const roots = /* @__PURE__ */ new Map();
+  const rootFacts = (root) => cached(roots, root, () => factsFor(root, opts, root === resolvedProject));
   const out = [];
-  const missing = [];
+  const missing = /* @__PURE__ */ new Map();
   for (const line of lines) {
     if (line.source.scope !== "project") continue;
     const example = EXAMPLE_LINE.test(line.text);
+    const root = await cached(sourceRoots, line.source.path, () => rootFor(line.source.path, resolvedProject));
+    const known = await rootFacts(root);
+    if (root !== resolvedProject && known.index === null) continue;
     for (const ref of extractRefs(line.text)) {
       const script2 = scriptRef(ref);
       if (script2) {
-        const known = script2.manager === "npm" ? facts.scripts : facts.makeTargets;
-        if (known.size === 0 || known.has(script2.target)) continue;
+        const targets = script2.manager === "npm" ? known.facts.scripts : known.facts.makeTargets;
+        if (targets.size === 0 || targets.has(script2.target)) continue;
         out.push({
           line,
           ref,
@@ -6681,23 +6787,32 @@ async function findStaleRefs(lines, projectDir, opts = {}) {
       }
       if (example || !isPathShaped(ref)) continue;
       const path5 = onDisk(ref);
-      if (!path5 || IGNORED_ROOTS.has(path5.split("/")[0])) continue;
-      const bases = [.../* @__PURE__ */ new Set([resolvedProject, dirname7(resolve12(line.source.path))])].filter((base) => within(resolvedProject, resolve12(base, path5)));
+      if (!path5) continue;
+      const top = path5.split("/")[0];
+      if (IGNORED_ROOTS.has(top)) continue;
+      if (known.unchecked.some((sub) => path5 === sub || path5.startsWith(`${sub}/`))) continue;
+      if (known.unchecked.length > 0 && !known.topLevel.has(top)) continue;
+      const bases = [.../* @__PURE__ */ new Set([root, dirname7(resolve12(line.source.path))])].filter((base) => within(root, resolve12(base, path5)));
       if (bases.length === 0) continue;
       if ((await Promise.all(bases.map((base) => exists(resolve12(base, path5))))).some(Boolean)) continue;
       if (!await isConcretePath(path5, bases)) continue;
-      missing.push({ ref: { line, ref, kind: "path", detail: `no such file or directory in this repository` }, path: path5 });
+      const group = missing.get(root) ?? [];
+      group.push({ ref: { line, ref, kind: "path", detail: `no such file or directory in this repository` }, path: path5 });
+      missing.set(root, group);
     }
   }
-  let gone = missing;
-  if (index) {
-    gone = gone.filter((item) => !namedSomewhere(item.path, index));
-    const paths = [...new Set(gone.flatMap((item) => hasFileExtension(item.path) ? [item.path] : [item.path, `${item.path}/`]))];
-    const ignored = paths.length === 0 ? null : await git([...UNTRUSTED_REPO, "-c", "core.quotePath=false", "check-ignore", "--no-index", "--", ...paths], resolvedProject);
-    const skip = new Set((ignored ?? "").split("\n").filter(Boolean));
-    gone = gone.filter((item) => !skip.has(item.path) && !skip.has(`${item.path}/`));
+  for (const [root, candidates] of missing) {
+    const { index } = await rootFacts(root);
+    let gone = candidates;
+    if (index) {
+      gone = gone.filter((item) => !namedSomewhere(item.path, index));
+      const paths = [...new Set(gone.flatMap((item) => hasFileExtension(item.path) ? [item.path] : [item.path, `${item.path}/`]))];
+      const ignored = paths.length === 0 ? null : await git([...UNTRUSTED_REPO, "-c", "core.quotePath=false", "check-ignore", "--no-index", "--", ...paths], root);
+      const skip = new Set((ignored ?? "").split("\n").filter(Boolean));
+      gone = gone.filter((item) => !skip.has(item.path) && !skip.has(`${item.path}/`));
+    }
+    out.push(...gone.map((item) => item.ref));
   }
-  out.push(...gone.map((item) => item.ref));
   return out;
 }
 var MAX_MANIFEST_BYTES, MAX_MANIFESTS, MAX_INDEX_BYTES, MAX_REFS_PER_LINE, IGNORED_ROOTS, PLACEHOLDER, EXAMPLE_LINE, UNTRUSTED_REPO;
@@ -6722,16 +6837,19 @@ var init_staleness = __esm({
       ".next",
       ".turbo",
       ".venv",
-      "__pycache__"
+      "__pycache__",
+      // Git's own internals: in a worktree `.git` is a file, so `.git/objects`
+      // is missing from every correct instruction that mentions it.
+      ".git"
     ]);
-    PLACEHOLDER = /(^|\/)path\/to\/|(^|[/_.-])(your|example|specific|sample|placeholder)([/_.-]|$)|yyyy|\bmm-dd\b/i;
+    PLACEHOLDER = /(^|\/)path\/to\/|(^|[/_.-])(your|example|specific|sample|placeholder|foo|bar|baz|qux)([/_.-]|$)|yyyy|\bmm-dd\b/i;
     EXAMPLE_LINE = /\be\.g\.|\bfor (?:example|instance)\b|\bexample:/i;
     UNTRUSTED_REPO = ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false"];
   }
 });
 
 // src/core/findings.ts
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 import { basename as basename5 } from "node:path";
 function findingActionability(finding) {
   const proposal = finding.suggestion;
@@ -6764,7 +6882,7 @@ function findingPreview(finding) {
   }
 }
 function findingId(family, subject, paths) {
-  return createHash9("sha256").update([family, subject, ...[...paths].sort()].join("\0")).digest("hex").slice(0, 12);
+  return createHash10("sha256").update([family, subject, ...[...paths].sort()].join("\0")).digest("hex").slice(0, 12);
 }
 function oneLine2(text, cap = 200) {
   return redact(text).replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, cap);
@@ -6841,7 +6959,7 @@ function skillProblemFinding(skill, input) {
   if (skill.problems.every((problem) => problem.kind === "non-standard-key" || problem.kind === "non-portable-key")) return null;
   const blocking = skill.problems.some((problem) => problem.kind === "unreadable-frontmatter");
   const affectsSelection = skill.problems.some((problem) => problem.kind === "no-description" || problem.kind === "description-over-cap" || problem.kind === "duplicate-description");
-  const keysOfKind = (kind) => skill.problems.flatMap((problem) => problem.kind === kind ? [problem.key] : []);
+  const keysOfKind = (kind2) => skill.problems.flatMap((problem) => problem.kind === kind2 ? [problem.key] : []);
   const list2 = (keys) => keys.map((key) => `\`${key}\``).join(" and ");
   const nonStandard = keysOfKind("non-standard-key");
   const nonPortable = keysOfKind("non-portable-key");
@@ -6971,7 +7089,9 @@ function workflowFindings(input, restated) {
 function practiceFindings(input) {
   const out = [];
   const long = input.instructions.sources.filter((source) => source.kind !== "rule" && source.lineCount > CLAUDE_MD_MAX_LINES);
-  for (const { source, items } of byRealFile(long, (source2) => source2)) {
+  const outsideProject = (path5) => Number(!within(input.projectDir, path5));
+  const lengthGroups = byRealFile(long, (source) => source).sort((a, b) => outsideProject(a.source.path) - outsideProject(b.source.path)).filter((group, index, all) => group.source.digest === void 0 || all.findIndex((other) => other.source.digest === group.source.digest) === index);
+  for (const { source, items } of lengthGroups) {
     const assistants = [...new Set(items.map((item) => item.assistant))];
     out.push({
       id: findingId("practice", "length", [source.path]),
@@ -7003,6 +7123,23 @@ function practiceFindings(input) {
       changes: []
     });
   }
+  const versioned = input.surface.versionedHooks ?? [];
+  if (versioned.length > 0) {
+    const features = [...new Set(versioned.map((hook) => HOOK_FEATURE[hook.subcommand.replace(/^hook /, "")]).filter(Boolean))].sort();
+    const nodes = [...new Set(versioned.map((hook) => hook.node))];
+    out.push({
+      id: findingId("practice", "versioned-node", nodes),
+      family: "practice",
+      severity: "medium",
+      title: "Gradient's hooks will stop running when node is upgraded",
+      detail: `They run ${nodes.join(", ")}, inside a version directory that \`brew upgrade\` or a node version manager deletes. ` + (features.length > 0 ? `Turn ${features.length === 1 ? "the feature" : "each feature"} on again (\`gradient on ${features.join("`, `gradient on ")}\`) to rewrite ${features.length === 1 ? "its hooks" : "their hooks"} with a node link that survives upgrades.` : "Turn the feature on again to rewrite its hooks with a node link that survives upgrades."),
+      evidence: `${versioned.length} hook${versioned.length === 1 ? "" : "s"} \xB7 ${nodes.join(", ")}`,
+      targets: ["claude-code"],
+      deterministic: true,
+      commandBearing: false,
+      changes: []
+    });
+  }
   const byNormalized = /* @__PURE__ */ new Map();
   for (const line of input.instructions.lines) {
     const key = `${line.source.assistant}\0${line.normalized}`;
@@ -7010,23 +7147,35 @@ function practiceFindings(input) {
     group.push(line);
     byNormalized.set(key, group);
   }
+  const byFiles = /* @__PURE__ */ new Map();
   for (const [, group] of byNormalized) {
-    const distinct = group.filter((line, index) => group.findIndex((other) => other.source.path === line.source.path) === index);
+    const distinct = group.filter((line, index) => group.findIndex((other) => other.source.path === line.source.path) === index).sort((a, b) => a.source.path.localeCompare(b.source.path));
     if (distinct.length < 2) continue;
-    out.push({
-      id: findingId("practice", "duplicate", distinct.map((line) => `${line.source.path}:${line.line}`)),
-      family: "practice",
-      severity: "low",
-      title: "The same instruction is written in multiple inspected files",
-      detail: "This instruction appears in multiple inspected files for the same assistant. Check their loading scope before consolidating them; path-scoped rules may not load together.",
-      evidence: distinct.map((line) => `${displayPath(line.source.path, input.projectDir)}:${line.line}`).join(" \xB7 "),
-      targets: [...new Set(distinct.map((line) => line.source.assistant))],
-      deterministic: true,
-      commandBearing: false,
-      changes: []
-    });
+    const key = distinct.map((line) => line.source.path).join("\0");
+    byFiles.set(key, [...byFiles.get(key) ?? [], distinct]);
   }
+  for (const sets of byFiles.values()) out.push(duplicateFinding(sets, input.projectDir));
   return out;
+}
+function duplicateFinding(sets, projectDir) {
+  const sources = sets[0].map((line) => line.source);
+  const files = sources.map((source) => displayPath(source.path, projectDir));
+  const identical = sources.every((source) => source.digest !== void 0 && source.digest === sources[0].digest);
+  const outside = sources.filter((source) => !within(projectDir, source.path));
+  const where = files.length === 2 ? `${files[0]} and ${files[1]}` : `${files.length} files`;
+  const examples = sets.slice(0, DUPLICATE_EXAMPLES).map((set) => set.map((line) => `${displayPath(line.source.path, projectDir)}:${line.line}`).join(" = "));
+  return {
+    id: findingId("practice", "duplicate", sources.map((source) => source.path)),
+    family: "practice",
+    severity: identical ? "medium" : "low",
+    title: identical ? `${where} are identical, so the same instructions load twice` : `${sets.length} instruction${sets.length === 1 ? " is" : "s are"} written in both ${where}`,
+    detail: identical && outside.length > 0 ? `Claude Code loads every CLAUDE.md in the directories above the working directory, so a checkout nested inside another copy of the repository reads both. Exclude the outer copy in .claude/settings.local.json \u2014 "claudeMdExcludes": [${outside.map((source) => JSON.stringify(source.path)).join(", ")}] \u2014 or keep worktrees outside the main checkout.` : "These instructions appear in more than one inspected file for the same assistant. Check their loading scope before consolidating them; path-scoped rules may not load together.",
+    evidence: identical ? `${sources[0].lineCount} lines \xB7 ${sources[0].bytes} bytes, each loaded every session` : examples.join(" \xB7 ") + (sets.length > DUPLICATE_EXAMPLES ? ` \xB7 and ${sets.length - DUPLICATE_EXAMPLES} more` : ""),
+    targets: [...new Set(sources.map((source) => source.assistant))],
+    deterministic: true,
+    commandBearing: false,
+    changes: []
+  };
 }
 function memoryFindings(input) {
   const memory = input.surface.memory;
@@ -7087,7 +7236,7 @@ function buildFindings(input) {
   }
   return deduped.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || FAMILY_ORDER.indexOf(a.family) - FAMILY_ORDER.indexOf(b.family) || a.title.localeCompare(b.title));
 }
-var FAMILY_ORDER, SEVERITY_ORDER, CLAUDE_MD_MAX_LINES, RESTATEMENT_CONTAINMENT, RESTATEMENT_MIN_CHARS, RESTATEMENT_MIN_WORDS, COMMAND_BEARING;
+var FAMILY_ORDER, SEVERITY_ORDER, CLAUDE_MD_MAX_LINES, RESTATEMENT_CONTAINMENT, RESTATEMENT_MIN_CHARS, RESTATEMENT_MIN_WORDS, COMMAND_BEARING, HOOK_FEATURE, DUPLICATE_EXAMPLES;
 var init_findings = __esm({
   "src/core/findings.ts"() {
     "use strict";
@@ -7095,6 +7244,7 @@ var init_findings = __esm({
     init_surface();
     init_cluster();
     init_security();
+    init_discovery();
     init_classify();
     FAMILY_ORDER = [
       "drift",
@@ -7111,6 +7261,16 @@ var init_findings = __esm({
     RESTATEMENT_MIN_CHARS = 12;
     RESTATEMENT_MIN_WORDS = 3;
     COMMAND_BEARING = /`[^`]+`|\b(?:run|execute|deploy|publish|push|install|delete|remove)\b/i;
+    HOOK_FEATURE = {
+      "board-digest": "board",
+      "board-refresh": "board",
+      checkpoint: "continuity",
+      recap: "continuity",
+      respond: "autopilot",
+      "session-start": "optimize",
+      "session-end": "optimize"
+    };
+    DUPLICATE_EXAMPLES = 5;
   }
 });
 
@@ -7223,7 +7383,7 @@ var init_apply_change = __esm({
 
 // src/core/dismiss.ts
 import { join as join20 } from "node:path";
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 import { homedir as homedir12 } from "node:os";
 function dismissedPath(projectDir) {
   return join20(gradientDir(projectDir), "dismissed.json");
@@ -7305,7 +7465,7 @@ function findingDismissalPath(projectDir, home) {
   return join20(projectCacheDir(projectDir, home), "finding-dismissals.json");
 }
 function findingEvidenceHash(finding) {
-  return createHash10("sha256").update(JSON.stringify({
+  return createHash11("sha256").update(JSON.stringify({
     evidence: finding.evidence.replace(/\d+/g, "#"),
     changes: finding.changes,
     payload: finding.suggestion?.payload
@@ -7841,7 +8001,7 @@ async function insights(opts, deps = {}) {
   const parseCodexFn = deps.parseCodexFn ?? parseCodexFile;
   const days = config.userScopeDays ?? DEFAULT_USER_SCOPE_DAYS;
   const scope = opts.scope ? { scope: opts.scope.scope, projectPath: opts.projectDir, sinceDays: opts.scope.sinceDays, home: opts.home } : opts.user ? { scope: "all", sinceDays: days, home: opts.home } : { scope: "project", projectPath: opts.projectDir, home: opts.home };
-  const label = opts.scope?.label ?? (opts.user ? `user scope \xB7 last ${days}d` : "project scope \xB7 all history");
+  const label2 = opts.scope?.label ?? (opts.user ? `user scope \xB7 last ${days}d` : "project scope \xB7 all history");
   const claudeFiles = targets.includes("claude-code") ? await collectFn(scope) : [];
   const codexFiles = targets.includes("codex") ? await collectCodexFn(scope) : [];
   const files = [];
@@ -7961,7 +8121,7 @@ async function insights(opts, deps = {}) {
     line: `${toolActivity.failureLoops} recurring in-session command failure loop(s) \u2014 run gradient optimize`
   });
   return {
-    label,
+    label: label2,
     metrics,
     costs,
     avoided,
@@ -8147,8 +8307,8 @@ var init_targets = __esm({
 });
 
 // src/core/page.ts
-function metricRow(label, value) {
-  return `<li><b>${value}</b><span>${escapeHtml(label)}</span></li>`;
+function metricRow(label2, value) {
+  return `<li><b>${value}</b><span>${escapeHtml(label2)}</span></li>`;
 }
 function renderChanges(finding) {
   if (finding.changes.length === 0) {
@@ -8357,9 +8517,281 @@ footer{
   }
 });
 
-// src/commands/optimize.ts
+// src/core/restore.ts
+import { execFile as execFile3 } from "node:child_process";
+import { lstat as lstat10, opendir as opendir7, readlink, symlink, unlink as unlink2 } from "node:fs/promises";
+import { basename as basename6, extname, join as join22, relative as relative8, sep as sep4 } from "node:path";
 import { homedir as homedir16 } from "node:os";
-import { join as join22 } from "node:path";
+async function restoreTargets(projectDir, opts = {}) {
+  const root = await projectRoot(projectDir);
+  const homes = assistantHomes(opts);
+  const files = [
+    ...[...INSTRUCTION_NAMES, ".claude/CLAUDE.md", ".claude/settings.json", ".claude/settings.local.json"].map((name) => ({ path: join22(root, name), base: root })),
+    // User level: only what a checkup or a rewrite edits. Other tools write
+    // ~/.claude/settings.json and user skill folders on their own schedule,
+    // and a restore must not roll those back.
+    { path: join22(homes.claude, "CLAUDE.md"), base: homes.claude },
+    ...["AGENTS.md", "AGENTS.override.md", "config.toml"].map((name) => ({ path: join22(homes.codex, name), base: homes.codex }))
+  ];
+  for (const file of await repoIndex(root) ?? []) {
+    if (INSTRUCTION_NAMES.has(basename6(file)) && file.includes("/")) files.push({ path: join22(root, file), base: root });
+  }
+  const dirs = [
+    ...[".claude/rules", ".claude/skills", ".claude/commands", ".claude/agents", ".agents/skills", ".codex"].map((name) => ({ path: join22(root, name), base: root })),
+    { path: join22(homes.claude, "rules"), base: homes.claude }
+  ];
+  return { root, files: unique(files), dirs: unique(dirs) };
+}
+function unique(locations) {
+  return [...new Map(locations.map((location) => [location.path, location])).values()];
+}
+async function kind(path5) {
+  const stats = await lstat10(path5).catch(() => null);
+  if (!stats) return null;
+  if (stats.isSymbolicLink()) return "link";
+  if (stats.isFile()) return "file";
+  if (stats.isDirectory()) return "dir";
+  return "other";
+}
+async function sizeOf(path5) {
+  return lstat10(path5).then((stats) => stats.size, () => 0);
+}
+async function walk3(dir, depth = 0, out = []) {
+  if (depth > MAX_DEPTH || out.length > MAX_FILES) return out;
+  let handle;
+  try {
+    handle = await opendir7(dir);
+  } catch {
+    return out;
+  }
+  for await (const entry of handle) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+    const full = join22(dir, entry.name);
+    if (entry.isDirectory()) await walk3(full, depth + 1, out);
+    else if (entry.isFile() && TEXT_EXTENSIONS.has(extname(entry.name))) out.push(full);
+  }
+  return out;
+}
+async function currentFiles(targets) {
+  const files = [];
+  const links = {};
+  for (const location of targets.files) {
+    const type = await kind(location.path);
+    if (type === "link") links[location.path] = await readlink(location.path);
+    else if (type === "file" || type === null) files.push(location);
+  }
+  for (const dir of targets.dirs) {
+    if (await kind(dir.path) !== "dir") continue;
+    for (const path5 of await walk3(dir.path)) files.push({ path: path5, base: dir.base });
+  }
+  const sized = [];
+  for (const file of unique(files)) {
+    if (await sizeOf(file.path) <= MAX_FILE_BYTES3) sized.push(file);
+  }
+  return { files: sized, links };
+}
+async function createRestorePoint(projectDir, opts = {}) {
+  const home = opts.home ?? homedir16();
+  const targets = await restoreTargets(projectDir, opts);
+  const { files, links } = await currentFiles(targets);
+  if (files.length > MAX_FILES) {
+    throw new Error(`refusing to take a restore point of ${files.length} files (limit ${MAX_FILES}); nothing was changed`);
+  }
+  const run = await beginRun({ home, ...opts.now ? { now: opts.now } : {} });
+  let bytes = 0;
+  const captured = [];
+  const uncovered = [];
+  for (const file of files) {
+    bytes += await sizeOf(file.path);
+    if (bytes > MAX_BYTES) throw new Error(`refusing to take a restore point over ${MAX_BYTES} bytes; nothing was changed`);
+    try {
+      await snapshot(run, file.path, file.base);
+      captured.push(file);
+    } catch {
+      uncovered.push(file.path);
+    }
+  }
+  await saveResult(run, {
+    runId: run.id,
+    startedAt: run.startedAt,
+    applied: [],
+    skipped: [],
+    wrote: {},
+    restorePoint: {
+      project: projectKey(targets.root),
+      reason: opts.reason ?? "checkpoint",
+      files: captured,
+      dirs: targets.dirs,
+      links,
+      ...uncovered.length ? { uncovered } : {}
+    }
+  });
+  return { id: run.id, files: captured.length, uncovered };
+}
+async function openRestorePoint(projectDir, opts = {}) {
+  const home = opts.home ?? homedir16();
+  const project2 = projectKey(await projectRoot(projectDir));
+  const ids = (await listDir(runsDir(home))).filter(isRunId).sort().reverse().slice(0, MAX_RUNS_SCANNED);
+  const now = opts.now ?? Date.now();
+  for (const id of ids) {
+    const result = await loadResult(id, home);
+    const point = result?.restorePoint;
+    if (!point || point.project !== project2) continue;
+    if (point.restoredAt || point.reason === "restore") return null;
+    return now - Date.parse(result.startedAt) <= OPEN_FOR_MS ? id : null;
+  }
+  return null;
+}
+function label(path5, root, home) {
+  if (within(root, path5)) return relative8(root, path5) || basename6(path5);
+  if (path5.startsWith(home + sep4)) return `~${path5.slice(home.length)}`;
+  return path5;
+}
+async function loadPoint(id, home) {
+  const result = await loadResult(id, home);
+  if (!result?.restorePoint) throw new Error(`no such restore point: ${id}`);
+  return { result, point: result.restorePoint };
+}
+async function unifiedDiff(before, afterPath, labels, tmp, home) {
+  const left = before === null ? "/dev/null" : join22(tmp, "before");
+  if (before !== null) await safeWriteFile(home, left, before, { mode: 384 });
+  const right = afterPath ?? "/dev/null";
+  const output = await new Promise((resolve17) => {
+    execFile3(
+      "git",
+      ["-c", "core.fsmonitor=false", "diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--", left, right],
+      { cwd: tmp, maxBuffer: 8e6, timeout: 1e4 },
+      (error, stdout) => resolve17(error && error.code !== 1 ? "" : String(stdout))
+    );
+  });
+  if (before !== null) await unlink2(left).catch(() => void 0);
+  const hunks = output.slice(Math.max(0, output.indexOf("\n@@") + 1));
+  return output.includes("@@") ? `--- ${labels.before}
++++ ${labels.after}
+${hunks}` : "";
+}
+async function changesSince(id, projectDir, opts = {}) {
+  const home = opts.home ?? homedir16();
+  const { result, point } = await loadPoint(id, home);
+  const targets = await restoreTargets(projectDir, opts);
+  const displayHome = assistantHomes(opts).home;
+  const captured = new Map(point.files.map((file) => [file.path, file]));
+  const current = new Map((await currentFiles({ ...targets, dirs: point.dirs })).files.map((file) => [file.path, file]));
+  const uncovered = new Set(point.uncovered ?? []);
+  const tmp = join22(runsDir(home), id, "diff");
+  const changes = [];
+  const paths = [.../* @__PURE__ */ new Set([...captured.keys(), ...current.keys()])].filter((path5) => !uncovered.has(path5)).sort();
+  for (const path5 of paths) {
+    const location = captured.get(path5) ?? current.get(path5);
+    const before = captured.has(path5) ? await loadSnapshot(id, path5, home) : null;
+    const after = await captureFile(path5, location.base).catch(() => null);
+    const existedBefore = !!before?.existed;
+    const existsNow = !!after?.existed;
+    if (!existedBefore && !existsNow) continue;
+    if (existedBefore && existsNow && before.sha256 === after.sha256) continue;
+    let status = "modified";
+    if (!existedBefore) status = "created";
+    else if (!existsNow) status = "deleted";
+    const name = label(path5, targets.root, displayHome);
+    changes.push({
+      path: path5,
+      base: location.base,
+      label: name,
+      status,
+      diff: await unifiedDiff(
+        existedBefore ? before.content : null,
+        existsNow ? path5 : null,
+        { before: `${name} (restore point)`, after: `${name} (now)` },
+        tmp,
+        home
+      )
+    });
+  }
+  for (const [path5, target] of Object.entries(point.links)) {
+    const linkedTo = await kind(path5) === "link" ? await readlink(path5) : null;
+    if (linkedTo === target) continue;
+    changes.push({ path: path5, base: targets.root, label: label(path5, targets.root, displayHome), status: "modified", diff: `link ${target} \u2192 ${linkedTo ?? "(not a link now)"}
+` });
+  }
+  return { id, takenAt: result.startedAt, changes };
+}
+async function restoreTo(id, projectDir, opts = {}) {
+  const home = opts.home ?? homedir16();
+  const { result, point } = await loadPoint(id, home);
+  const { changes } = await changesSince(id, projectDir, opts);
+  const reverse = await createRestorePoint(projectDir, { ...opts, reason: "restore" });
+  const restored = [];
+  const removed = [];
+  const failed = [];
+  for (const change of changes) {
+    try {
+      const linkTarget = point.links[change.path];
+      if (linkTarget !== void 0) {
+        if (await kind(change.path) !== null) await unlink2(change.path);
+        await symlink(linkTarget, change.path);
+        restored.push(change.label);
+        continue;
+      }
+      const record = await loadSnapshot(id, change.path, home);
+      if (change.status === "created" || !record) {
+        await restoreFile({ path: change.path, base: change.base, sha256: "", content: "", existed: false });
+        removed.push(change.label);
+      } else {
+        await restoreFile(record);
+        restored.push(change.label);
+      }
+    } catch {
+      failed.push(change.label);
+    }
+  }
+  const run = { id, dir: runDir(id, home), startedAt: result.startedAt, home };
+  await saveResult(run, { ...result, restorePoint: { ...point, restoredAt: (/* @__PURE__ */ new Date()).toISOString() } });
+  return { restored, removed, failed, reverseWith: reverse.id };
+}
+async function diffRun(runId, paths, projectDir, opts = {}) {
+  const home = opts.home ?? homedir16();
+  const root = await projectRoot(projectDir);
+  const tmp = join22(runsDir(home), runId, "diff");
+  const out = {};
+  for (const path5 of paths) {
+    const before = await loadSnapshot(runId, path5, home).catch(() => null);
+    if (!before) continue;
+    const exists2 = await kind(path5) === "file";
+    const name = label(path5, root, assistantHomes(opts).home);
+    const diff = await unifiedDiff(
+      before.existed ? before.content : null,
+      exists2 ? path5 : null,
+      { before: `${name} (before)`, after: `${name} (now)` },
+      tmp,
+      home
+    );
+    if (diff) out[path5] = diff;
+  }
+  return out;
+}
+var INSTRUCTION_NAMES, TEXT_EXTENSIONS, MAX_FILES, MAX_BYTES, MAX_FILE_BYTES3, MAX_DEPTH, OPEN_FOR_MS, MAX_RUNS_SCANNED;
+var init_restore = __esm({
+  "src/core/restore.ts"() {
+    "use strict";
+    init_config();
+    init_discovery();
+    init_staleness();
+    init_run();
+    init_safeFs();
+    INSTRUCTION_NAMES = /* @__PURE__ */ new Set(["CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "AGENTS.override.md"]);
+    TEXT_EXTENSIONS = /* @__PURE__ */ new Set([".md", ".json", ".toml", ".yaml", ".yml", ".txt"]);
+    MAX_FILES = 2e3;
+    MAX_BYTES = 2e7;
+    MAX_FILE_BYTES3 = 1e6;
+    MAX_DEPTH = 6;
+    OPEN_FOR_MS = 7 * 24 * 60 * 6e4;
+    MAX_RUNS_SCANNED = 500;
+  }
+});
+
+// src/commands/optimize.ts
+import { homedir as homedir17 } from "node:os";
+import { join as join23 } from "node:path";
 async function mine(projectDir, opts, config, log, deps) {
   if (deps.suggestions) return deps.suggestions;
   if ((opts.apply ?? []).length > 0) return loadSuggestions(projectDir, { home: opts.home });
@@ -8409,7 +8841,7 @@ function applyOrder(findings) {
   return findings.map((finding, index) => ({ finding, index })).sort((a, b) => Number(inserts(a.finding)) - Number(inserts(b.finding)) || lastLine(b.finding) - lastLine(a.finding) || a.index - b.index).map((entry) => entry.finding);
 }
 async function optimize(projectDir, opts = {}, deps = {}) {
-  const home = opts.home ?? homedir16();
+  const home = opts.home ?? homedir17();
   const log = deps.log ?? (() => {
   });
   const { targets } = await ensureTargets(
@@ -8462,7 +8894,12 @@ async function optimize(projectDir, opts = {}, deps = {}) {
       denied.add(finding.id);
     }
     findings = findings.filter((finding) => !denied.has(finding.id));
-    const run = await beginRun({ home, ...opts.now !== void 0 ? { now: new Date(opts.now) } : {} });
+    const clock = opts.now !== void 0 ? { now: new Date(opts.now) } : {};
+    let restorePoint;
+    if (wanted.length > 0) {
+      restorePoint = await openRestorePoint(projectDir, { home, ...opts.now !== void 0 ? { now: opts.now } : {} }) ?? (await createRestorePoint(projectDir, { home, reason: "apply", ...clock })).id;
+    }
+    const run = await beginRun({ home, ...clock });
     const applied = [];
     const wrote = {};
     const bookkeeping = [];
@@ -8497,9 +8934,16 @@ async function optimize(projectDir, opts = {}, deps = {}) {
         ...bookkeeping.length ? { bookkeeping } : {}
       });
     }
+    if (applied.length) {
+      const diffs = await diffRun(run.id, applied.flatMap((entry) => entry.paths), projectDir, { home });
+      for (const entry of applied) {
+        const shown = entry.paths.map((path5) => diffs[path5]).filter((diff) => !!diff);
+        if (shown.length) entry.diff = shown;
+      }
+    }
     const appliedIds = new Set(applied.map((entry) => entry.id));
     findings = findings.filter((finding) => !appliedIds.has(finding.id));
-    const pagePath = join22(run.dir, "report.html");
+    const pagePath = join23(run.dir, "report.html");
     await safeWriteFile(home, pagePath, renderPage({
       runId: run.id,
       projectDir,
@@ -8528,6 +8972,7 @@ async function optimize(projectDir, opts = {}, deps = {}) {
       targets,
       findings,
       ...applied.length ? { runId: run.id } : {},
+      ...restorePoint ? { restorePoint } : {},
       applied,
       skipped,
       pagePath,
@@ -8563,17 +9008,31 @@ async function unsatisfiedSuggestions(suggestions, projectDir, home, features) {
 async function saveLastCheckup(projectDir, home, summary) {
   const data = JSON.stringify(summary);
   if (Buffer.byteLength(data) > CHECKUP_MAX_BYTES) throw new Error("checkup summary exceeds safety limit");
-  await safeWriteFile(home, join22(projectCacheDir(projectDir, home), "last-checkup.json"), data, { mode: 384 });
+  await safeWriteFile(home, join23(projectCacheDir(projectDir, home), "last-checkup.json"), data, { mode: 384 });
 }
 async function loadLastCheckup(projectDir, opts = {}) {
-  const home = opts.home ?? homedir16();
+  const home = opts.home ?? homedir17();
   try {
-    const value = JSON.parse(await safeReadFile(home, join22(projectCacheDir(projectDir, home), "last-checkup.json"), { maxBytes: CHECKUP_MAX_BYTES }));
+    const value = JSON.parse(await safeReadFile(home, join23(projectCacheDir(projectDir, home), "last-checkup.json"), { maxBytes: CHECKUP_MAX_BYTES }));
     if (!value || typeof value.checkedAt !== "string" || !Number.isFinite(Date.parse(value.checkedAt)) || typeof value.pagePath !== "string" || !Array.isArray(value.targets) || !value.targets.every((target) => target === "claude-code" || target === "codex") || !Array.isArray(value.findings) || value.findings.length > 2e3 || !value.findings.every((finding) => finding && /^[a-f0-9]{12}$/.test(finding.id) && typeof finding.title === "string" && finding.title.length <= 2e3 && !/[\r\n\u001b]/.test(finding.title) && typeof finding.family === "string" && ["high", "medium", "low"].includes(finding.severity) && typeof finding.actionable === "boolean" && (finding.evidenceHash === void 0 || /^[a-f0-9]{64}$/.test(finding.evidenceHash)))) return null;
     return value;
   } catch {
     return null;
   }
+}
+async function takeRestorePoint(projectDir, opts = {}) {
+  return withLock(() => createRestorePoint(projectDir, { home: opts.home }), { home: opts.home });
+}
+async function listChanges(projectDir, id, opts = {}) {
+  const point = id ?? await openRestorePoint(projectDir, { home: opts.home });
+  return point ? changesSince(point, projectDir, { home: opts.home }) : null;
+}
+async function restoreChanges(projectDir, id, opts = {}) {
+  return withLock(async () => {
+    const point = id ?? await openRestorePoint(projectDir, { home: opts.home });
+    if (!point) return null;
+    return { id: point, ...await restoreTo(point, projectDir, { home: opts.home }) };
+  }, { home: opts.home });
 }
 async function undo(runId, opts = {}) {
   return withLock(() => undoRun(runId, {
@@ -8585,6 +9044,7 @@ function optimizeJson(result) {
   return JSON.stringify({
     targets: result.targets,
     ...result.runId ? { runId: result.runId } : {},
+    ...result.restorePoint ? { restorePoint: result.restorePoint } : {},
     // The page is written on every run, so the machine-readable output has to
     // say where — an agent handed --json cannot otherwise point the user at it.
     ...result.pagePath ? { pagePath: result.pagePath } : {},
@@ -8641,6 +9101,7 @@ var init_optimize = __esm({
     init_page();
     init_insights2();
     init_safeFs();
+    init_restore();
     CHECKUP_MAX_BYTES = 1e6;
   }
 });
@@ -8678,7 +9139,7 @@ var init_sessionStart = __esm({
 
 // src/commands/remove.ts
 import { rmdir } from "node:fs/promises";
-import { dirname as dirname8, join as join23 } from "node:path";
+import { dirname as dirname8, join as join24 } from "node:path";
 function isLegacyGradientHook(hook) {
   return LEGACY_GRADIENT_HOOKS.some(
     (known) => known.event === hook.event && known.command === hook.command && known.matcher === hook.matcher
@@ -8705,7 +9166,7 @@ async function remove(projectDir, name, opts = {}) {
     if (!entry.path) continue;
     const path5 = expectedArtifactPath(projectDir, entry);
     const root = manifestTarget(entry) === "codex" ? ".agents" : ".claude";
-    assertInside(join23(projectDir, root), path5);
+    assertInside(join24(projectDir, root), path5);
     await assertNoSymlinkPath(projectDir, path5, { includeTarget: false });
     try {
       const content = await safeReadFile(projectDir, path5, { maxBytes: 1e6 });
@@ -8865,7 +9326,7 @@ var init_judge = __esm({
 import { spawn as spawn2 } from "node:child_process";
 import { mkdtemp, realpath as realpath7, rm as rm2 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute as isAbsolute10, join as join24 } from "node:path";
+import { isAbsolute as isAbsolute10, join as join25 } from "node:path";
 var OUTPUT_MAX_CHARS, WHICH_OUTPUT_MAX_CHARS, WHICH_TIMEOUT_MS, defaultRun, defaultWhich, ClaudeCliBackend;
 var init_claudeCli = __esm({
   "src/llm/claudeCli.ts"() {
@@ -8971,7 +9432,7 @@ var init_claudeCli = __esm({
           "--no-session-persistence"
         ];
         if (this.model) args.push("--model", this.model);
-        const privateCwd = this.spawnCwd ?? await mkdtemp(join24(tmpdir(), "gradient-claude-"));
+        const privateCwd = this.spawnCwd ?? await mkdtemp(join25(tmpdir(), "gradient-claude-"));
         const opts = {
           cwd: privateCwd,
           env: this.extraEnv ? { ...process.env, ...this.extraEnv } : void 0,
@@ -8995,21 +9456,21 @@ var init_claudeCli = __esm({
 });
 
 // node_modules/@anthropic-ai/sdk/internal/tslib.mjs
-function __classPrivateFieldSet(receiver, state, value, kind, f) {
-  if (kind === "m")
+function __classPrivateFieldSet(receiver, state, value, kind2, f) {
+  if (kind2 === "m")
     throw new TypeError("Private method is not writable");
-  if (kind === "a" && !f)
+  if (kind2 === "a" && !f)
     throw new TypeError("Private accessor was defined without a setter");
   if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
     throw new TypeError("Cannot write private member to an object whose class did not declare it");
-  return kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value), value;
+  return kind2 === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value), value;
 }
-function __classPrivateFieldGet(receiver, state, kind, f) {
-  if (kind === "a" && !f)
+function __classPrivateFieldGet(receiver, state, kind2, f) {
+  if (kind2 === "a" && !f)
     throw new TypeError("Private accessor was defined without a getter");
   if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
     throw new TypeError("Cannot read private member from an object whose class did not declare it");
-  return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+  return kind2 === "m" ? f : kind2 === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
 }
 var init_tslib = __esm({
   "node_modules/@anthropic-ai/sdk/internal/tslib.mjs"() {
@@ -10071,21 +10532,21 @@ var init_token_cache = __esm({
       async getToken() {
         const force = this.nextForce;
         this.nextForce = false;
-        const cached = this.cached;
-        if (force || cached == null) {
+        const cached2 = this.cached;
+        if (force || cached2 == null) {
           const token2 = await this.refresh(force);
           return token2.token;
         }
-        if (cached.expiresAt == null) {
-          return cached.token;
+        if (cached2.expiresAt == null) {
+          return cached2.token;
         }
-        const remaining = cached.expiresAt - nowAsSeconds();
+        const remaining = cached2.expiresAt - nowAsSeconds();
         if (remaining > ADVISORY_REFRESH_THRESHOLD_IN_SECONDS) {
-          return cached.token;
+          return cached2.token;
         }
         if (remaining > MANDATORY_REFRESH_THRESHOLD_IN_SECONDS) {
           this.backgroundRefresh();
-          return cached.token;
+          return cached2.token;
         }
         const token = await this.refresh();
         return token.token;
@@ -11564,9 +12025,9 @@ function getName(value, stripPath) {
 }
 function supportsFormData(fetchObject) {
   const fetch2 = typeof fetchObject === "function" ? fetchObject : fetchObject.fetch;
-  const cached = supportsFormDataMap.get(fetch2);
-  if (cached)
-    return cached;
+  const cached2 = supportsFormDataMap.get(fetch2);
+  if (cached2)
+    return cached2;
   const promise = (async () => {
     try {
       const FetchResponse = "Response" in fetch2 ? fetch2.Response : (await fetch2("data:,")).constructor;
@@ -14560,7 +15021,7 @@ var init_fs_util = __esm({
 import * as fs2 from "node:fs/promises";
 import * as fssync from "node:fs";
 import * as path3 from "node:path";
-import { execFile as execFile3 } from "node:child_process";
+import { execFile as execFile4 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -14717,7 +15178,7 @@ var init_skills = __esm({
     init_error();
     init_log();
     init_fs_util();
-    execFileAsync = promisify3(execFile3);
+    execFileAsync = promisify3(execFile4);
   }
 });
 
@@ -15099,7 +15560,7 @@ async function runWalkGrep(pattern, root, signal) {
   if (stat2?.isFile()) {
     await grepFile(root, re, push);
   } else {
-    await walk3(root, "", (rel) => grepFile(path4.join(root, rel), re, push), signal);
+    await walk4(root, "", (rel) => grepFile(path4.join(root, rel), re, push), signal);
   }
   if (signal?.aborted)
     throw new ToolError("grep: aborted");
@@ -15129,7 +15590,7 @@ function isWithin(root, p) {
   const rel = path4.relative(root, p);
   return rel === "" || !rel.startsWith(".." + path4.sep) && rel !== ".." && !path4.isAbsolute(rel);
 }
-async function walk3(root, rel, fn, signal) {
+async function walk4(root, rel, fn, signal) {
   let remaining = WALK_MAX_ENTRIES;
   async function inner(rel2, depth) {
     if (depth > WALK_MAX_DEPTH)
@@ -21469,7 +21930,7 @@ var init_anthropic = __esm({
 import { spawn as spawn4 } from "node:child_process";
 import { mkdtemp as mkdtemp2, realpath as realpath10, rm as rm4 } from "node:fs/promises";
 import { tmpdir as tmpdir2 } from "node:os";
-import { isAbsolute as isAbsolute13, join as join28 } from "node:path";
+import { isAbsolute as isAbsolute13, join as join29 } from "node:path";
 var OUTPUT_MAX_CHARS2, WHICH_OUTPUT_MAX_CHARS2, WHICH_TIMEOUT_MS2, defaultRun2, defaultWhich2, DISABLED_FEATURES, CodexCliBackend;
 var init_codexCli = __esm({
   "src/llm/codexCli.ts"() {
@@ -21617,7 +22078,7 @@ var init_codexCli = __esm({
           req.prompt,
           "</UNTRUSTED_INPUT>"
         ].join("\n");
-        const privateCwd = this.spawnCwd ?? await mkdtemp2(join28(tmpdir2(), "gradient-codex-"));
+        const privateCwd = this.spawnCwd ?? await mkdtemp2(join29(tmpdir2(), "gradient-codex-"));
         try {
           const { code, stdout, stderr } = await this.runFn(this.executable, args, input, {
             cwd: privateCwd,
@@ -21834,13 +22295,13 @@ var init_ui = __esm({
 });
 
 // src/commands/recap.ts
-import { homedir as homedir17 } from "node:os";
+import { homedir as homedir18 } from "node:os";
 async function recap(projectDir, opts = {}) {
   try {
     const config = await loadConfig(opts.home);
     const consented = supportsClaudeHooks(config) && (opts.consent ?? config.continuityProjects?.includes(projectKey(projectDir)) === true);
     if (!consented) return null;
-    const userHome = opts.home ?? homedir17();
+    const userHome = opts.home ?? homedir18();
     const raw = redact(await safeReadFile(
       userHome,
       progressPath(projectDir, userHome),
@@ -21968,14 +22429,14 @@ var init_report_render = __esm({
 
 // src/core/spawn.ts
 import { spawn as realSpawn } from "node:child_process";
-import { closeSync, realpathSync as realpathSync2 } from "node:fs";
-import { join as join29 } from "node:path";
+import { closeSync, realpathSync as realpathSync3 } from "node:fs";
+import { join as join30 } from "node:path";
 function spawnDetached(args, projectDir, deps = {}) {
   const spawn5 = deps.spawn ?? realSpawn;
-  const logPath = join29(gradientDir(projectDir), "last-scan.log");
+  const logPath = join30(gradientDir(projectDir), "last-scan.log");
   const fd = deps.openLog ? deps.openLog(logPath) : safeOpenWriteSync(projectDir, logPath);
   try {
-    const entrypoint = realpathSync2(process.argv[1]);
+    const entrypoint = realpathSync3(process.argv[1]);
     const child = spawn5(process.execPath, [entrypoint, ...args], {
       detached: true,
       stdio: ["ignore", fd, fd]
@@ -21994,10 +22455,10 @@ var init_spawn = __esm({
 });
 
 // src/commands/sessionEnd.ts
-import { join as join30 } from "node:path";
-import { homedir as homedir18 } from "node:os";
+import { join as join31 } from "node:path";
+import { homedir as homedir19 } from "node:os";
 function watermarkPath(projectDir, home) {
-  return join30(projectCacheDir(projectDir, home), "last-optimize.json");
+  return join31(projectCacheDir(projectDir, home), "last-optimize.json");
 }
 async function lastRunAt(projectDir, home) {
   try {
@@ -22016,7 +22477,7 @@ function isDue(last, now, debounceMs = DEBOUNCE_MS) {
   return now - last >= debounceMs;
 }
 async function sessionEnd(projectDir, deps = {}) {
-  const home = deps.home ?? homedir18();
+  const home = deps.home ?? homedir19();
   const now = deps.now ?? Date.now();
   try {
     const config = await loadConfig(home);
@@ -22111,6 +22572,9 @@ function parseCliArgs(argv) {
       deny: { type: "string", multiple: true },
       auto: { type: "boolean" },
       undo: { type: "string" },
+      checkpoint: { type: "boolean" },
+      changes: { type: "boolean" },
+      restore: { type: "boolean" },
       page: { type: "boolean" },
       "print-schedule": { type: "boolean" },
       json: { type: "boolean" },
@@ -22166,10 +22630,74 @@ ${c.dim("these observations need review; there are no automatic fixes to apply")
   }
   log(`${c.dim("or hand the whole list to your assistant:")} ${c.violet(`${displayCommand()} optimize --json`)}`);
 }
-async function runOptimize(projectDir, flags, home, log) {
+function diffLine(line) {
+  const safe = terminalSafeLine(line);
+  if (line.startsWith("+++") || line.startsWith("---")) return c.bold(safe);
+  if (line.startsWith("+")) return c.ok(safe);
+  if (line.startsWith("-")) return c.coral(safe);
+  if (line.startsWith("@@")) return c.violet(safe);
+  return c.muted(safe);
+}
+function renderDiff(diff, log) {
+  for (const line of diff.replace(/\n$/, "").split("\n")) log(diffLine(line));
+}
+async function runOptimize(projectDir, flags, home, log, positionals) {
   if (flags["print-schedule"]) {
     log(scheduleSnippet(process.platform, projectDir));
     return 0;
+  }
+  if (flags.checkpoint) {
+    const point = await takeRestorePoint(projectDir, { home });
+    if (flags.json) {
+      log(JSON.stringify({ restorePoint: point.id, files: point.files, uncovered: point.uncovered }, null, 2));
+      return 0;
+    }
+    log(`${c.ok("restore point saved")} ${c.dim(point.id)} ${c.muted(`\xB7 ${point.files} instruction, rule, skill and settings files`)}`);
+    if (point.uncovered.length) log(c.coral(`not covered (could not be read safely): ${point.uncovered.map(terminalSafeLine).join(", ")}`));
+    log(`${c.dim("see every change since:")} ${c.violet(`${displayCommand()} optimize --changes`)}`);
+    log(`${c.dim("put it all back:")} ${c.violet(`${displayCommand()} optimize --restore`)}`);
+    return 0;
+  }
+  if (flags.changes) {
+    const result2 = await listChanges(projectDir, positionals[0], { home });
+    if (flags.json) {
+      log(JSON.stringify(result2 ?? { changes: [] }, null, 2));
+      return 0;
+    }
+    if (!result2) {
+      log(c.dim("no open restore point for this project; nothing has been changed through gradient since the last restore"));
+      return 0;
+    }
+    log(c.dim(`since restore point ${result2.id} (${result2.takenAt})`));
+    if (result2.changes.length === 0) {
+      log(c.ok("nothing has changed"));
+      return 0;
+    }
+    for (const change of result2.changes) {
+      log(`
+${c.bold(change.status)} ${terminalSafeLine(change.label)}`);
+      if (change.diff) renderDiff(change.diff, log);
+    }
+    log(`
+${c.dim("put all of it back:")} ${c.violet(`${displayCommand()} optimize --restore ${result2.id}`)}`);
+    return 0;
+  }
+  if (flags.restore) {
+    const outcome = await restoreChanges(projectDir, positionals[0], { home });
+    if (flags.json) {
+      log(JSON.stringify(outcome ?? { restored: [], removed: [], failed: [] }, null, 2));
+      return outcome?.failed.length ? 1 : 0;
+    }
+    if (!outcome) {
+      log(c.dim("no open restore point for this project; nothing to restore"));
+      return 0;
+    }
+    for (const path5 of outcome.restored) log(`${c.ok("restored")} ${c.muted(terminalSafeLine(path5))}`);
+    for (const path5 of outcome.removed) log(`${c.ok("removed")} ${c.muted(terminalSafeLine(path5))} ${c.dim("(created after the restore point)")}`);
+    for (const path5 of outcome.failed) log(c.coral(`could not restore, left as it is: ${terminalSafeLine(path5)}`));
+    if (!outcome.restored.length && !outcome.removed.length && !outcome.failed.length) log(c.dim("nothing had changed"));
+    log(`${c.dim("to reverse this restore:")} ${c.violet(`${displayCommand()} optimize --restore ${outcome.reverseWith}`)}`);
+    return outcome.failed.length ? 1 : 0;
   }
   if (typeof flags.undo === "string") {
     const outcome = await undo(flags.undo, { home });
@@ -22213,13 +22741,17 @@ ${c.dim("checkup page:")} ${c.violet(`file://${terminalSafeLine(result.pagePath)
   for (const entry of result.applied) {
     log(`
 ${c.ok("applied")} ${terminalSafeLine(entry.title)}`);
-    for (const path5 of entry.paths) log(`  ${c.muted(terminalSafeLine(path5))}`);
+    if (entry.diff?.length) for (const diff of entry.diff) renderDiff(diff, log);
+    else for (const path5 of entry.paths) log(`  ${c.muted(terminalSafeLine(path5))}`);
   }
   for (const entry of result.skipped) {
     log(c.coral(`skipped ${entry.id}: ${terminalSafeLine(entry.reason)}`));
   }
   if (result.runId) log(`
-${c.dim("undo:")} ${c.violet(`${displayCommand()} optimize --undo ${result.runId}`)}`);
+${c.dim("undo this apply:")} ${c.violet(`${displayCommand()} optimize --undo ${result.runId}`)}`);
+  if (result.restorePoint) {
+    log(`${c.dim("everything since the restore point:")} ${c.violet(`${displayCommand()} optimize --changes`)} ${c.dim("\xB7 put it all back:")} ${c.violet(`${displayCommand()} optimize --restore`)}`);
+  }
   return result.skipped.length ? 1 : 0;
 }
 function renderFeatures(features, log) {
@@ -22284,7 +22816,7 @@ ${help()}`);
     switch (command) {
       case "optimize": {
         if (!flags.json && !flags["print-schedule"]) log(banner(VERSION));
-        return await runOptimize(projectDir, flags, io.home, log);
+        return await runOptimize(projectDir, flags, io.home, log, positionals);
       }
       case "remove": {
         const ok = await remove(projectDir, positionals[0], { home: io.home });
@@ -22427,6 +22959,9 @@ Usage:
                                 Claude Code and Codex, then propose the changes
     [--target claude-code|codex|both]   which assistants to optimize for
     [--apply <id>...] [--deny <id>...] [--undo <runId>]
+    [--checkpoint]                      save a restore point before editing by hand
+    [--changes [<id>]]                  every change since the restore point, as diffs
+    [--restore [<id>]]                  put all of it back (itself reversible)
     [--auto]                            compatibility: propose only, no repairs
     [--json]                            findings for an agent, as JSON
                                         (every run also writes a local page)
@@ -22440,7 +22975,7 @@ Usage:
 });
 
 // src/bin.ts
-import { realpathSync as realpathSync3 } from "node:fs";
+import { realpathSync as realpathSync4 } from "node:fs";
 import { resolve as resolve16 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var STDIN_MAX_CHARS = 1e6;
@@ -22498,7 +23033,7 @@ async function runBinary(argv, io = {}) {
 function isEntrypoint(moduleUrl, argv1) {
   if (!argv1) return false;
   try {
-    return realpathSync3(fileURLToPath2(moduleUrl)) === realpathSync3(argv1);
+    return realpathSync4(fileURLToPath2(moduleUrl)) === realpathSync4(argv1);
   } catch {
     return false;
   }

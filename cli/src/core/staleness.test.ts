@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { lstat, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractRefs, findStaleRefs, readRepoFacts } from "./staleness.js";
+import { extractRefs, findStaleRefs, readRepoFacts, uncheckedSubmodules } from "./staleness.js";
 import { extractLines, type InstructionSource } from "./instructions.js";
 
 const source: InstructionSource = {
@@ -28,6 +28,12 @@ describe("extractRefs", () => {
   it("reads backticked literals and bare path-shaped tokens", () => {
     expect(extractRefs("Run `npm run build` before touching src/api/handler.ts here"))
       .toEqual(["npm run build", "src/api/handler.ts"]);
+  });
+
+  it("treats metasyntactic names as examples, not files", () => {
+    expect(extractRefs('Comments like "see `docs/foo.md`" or "mirrors `src/core/bar.ts`" rot.')).toEqual([]);
+    // A real name that merely contains the letters is still read.
+    expect(extractRefs("Edit `src/toolbar/barrel.ts` first.")).toEqual(["src/toolbar/barrel.ts"]);
   });
 
   it("ignores globs, placeholders, urls, and prose", () => {
@@ -157,7 +163,7 @@ describe("a path inside a backticked command", () => {
     const dir = await mkdtemp(join(tmpdir(), "grad-stale-"));
     for (const text of [
       "Check `git log --oneline origin/main` before merging.",
-      "Normalise with `sed s/foo/bar/ input.txt`.",
+      "Normalise with `sed s/old/new/ input.txt`.",
       "Compare against `origin/release-2.0` only.",
     ]) {
       const refs = extractRefs(text);
@@ -268,6 +274,42 @@ describe("real instruction files", () => {
     const dir = await checkout({ "src/a.ts": "x" });
     execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "add", "-q", fork, "fork"], { cwd: dir });
     expect(await flagged(dir, "The fork applies it in `run/attempt.ts`.")).toEqual([]);
+  });
+
+  it("never calls git's own internals gone, which a worktree does not have as a directory", async () => {
+    const main = await checkout({ "src/a.ts": "x" });
+    execFileSync("git", ["add", "-A"], { cwd: main });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "main"], { cwd: main });
+    execFileSync("git", ["worktree", "add", "-q", "-b", "wt", join(main, "..", "wt")], { cwd: main });
+    expect(await flagged(join(main, "..", "wt"), "Clones copy the superproject's `.git/objects`, so nothing is shared.")).toEqual([]);
+  });
+
+  it("treats paths inside a submodule this checkout never checked out as unknown, not gone", async () => {
+    const fork = await checkout({ "src/agents/run/attempt.ts": "x" }, "fork");
+    execFileSync("git", ["add", "-A"], { cwd: fork });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fork"], { cwd: fork });
+    const dir = await checkout({ "docs/kept.md": "x" });
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "add", "-q", fork, "fork"], { cwd: dir });
+    // What `git worktree add` leaves behind: the gitlink, and an empty directory.
+    execFileSync("git", ["submodule", "--quiet", "deinit", "-f", "fork"], { cwd: dir });
+    expect(await uncheckedSubmodules(dir)).toEqual(["fork"]);
+    expect(await flagged(dir, "Edit `fork/src/agents/run/attempt.ts` first.")).toEqual([]);
+    expect(await flagged(dir, "The fork applies it in `run/attempt.ts`.")).toEqual([]);
+    // A path anchored to a directory this checkout does have is still checked.
+    expect(await flagged(dir, "Setup lives in `docs/setup.md`.")).toEqual(["docs/setup.md"]);
+  });
+
+  it("checks a CLAUDE.md above a nested worktree against its own checkout", async () => {
+    const main = await checkout({ "tools/real.ts": "x", "CLAUDE.md": "- Run `tools/real.ts` before release\n" });
+    execFileSync("git", ["add", "-A"], { cwd: main });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "main"], { cwd: main });
+    execFileSync("git", ["worktree", "add", "-q", "-b", "demo", ".worktrees/demo"], { cwd: main });
+    const worktree = join(main, ".worktrees/demo");
+    execFileSync("git", ["rm", "-q", "tools/real.ts"], { cwd: worktree });
+    const text = "- Run `tools/real.ts` before release";
+    const stale = await findStaleRefs([...linesOf(text, at(main)), ...linesOf(text, at(worktree))], worktree);
+    // The outer file names a file its own checkout has; only the worktree lost it.
+    expect(stale.map(ref => ref.line.source.path)).toEqual([join(worktree, "CLAUDE.md")]);
   });
 
   it("still catches a directory that moved", async () => {

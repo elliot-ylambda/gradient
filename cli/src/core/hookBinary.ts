@@ -1,4 +1,4 @@
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,6 +75,44 @@ function runnerWord(scriptPath: string): string {
   return `"$(ls -d ${shellQuote(versioned[1])}/*${versioned[2]} 2>/dev/null | sort -V | tail -1)"`;
 }
 
+/** A node binary inside a version manager's per-version directory: Homebrew's
+ *  Cellar, nvm, fnm, volta, asdf, mise. Homebrew deletes the old version
+ *  directory on upgrade, and every hook naming it then fails, silently. */
+const VERSIONED_NODE = /[\\/](?:Cellar[\\/]node(?:@\d+)?|\.nvm[\\/]versions[\\/]node|fnm[\\/]node-versions|\.volta[\\/]tools[\\/]image[\\/]node|\.asdf[\\/]installs[\\/]nodejs|mise[\\/]installs[\\/]node)[\\/][^\\/]+[\\/]/;
+
+export function isVersionedNode(path: string): boolean {
+  return VERSIONED_NODE.test(path);
+}
+
+/** Where package managers keep a node link that survives upgrades. */
+const STABLE_NODE_CANDIDATES = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"];
+
+/**
+ * The node a hook should name: this one, through a link that outlives an
+ * upgrade when one points at exactly this binary. Otherwise the running path,
+ * unchanged — never a different node than the one that is running.
+ */
+export function stableExecPath(execPath: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (!isVersionedNode(execPath)) return execPath;
+  let target: string;
+  try {
+    target = realpathSync(execPath);
+  } catch {
+    return execPath;
+  }
+  const fromPath = (env.PATH ?? env.Path ?? "").split(delimiter).filter(Boolean).map(dir => join(dir, "node"));
+  for (const candidate of [...STABLE_NODE_CANDIDATES, ...fromPath]) {
+    if (isVersionedNode(candidate)) continue;
+    try {
+      accessSync(candidate, constants.X_OK);
+      if (realpathSync(candidate) === target) return candidate;
+    } catch {
+      // Not this one.
+    }
+  }
+  return execPath;
+}
+
 /**
  * The command prefix an installed hook should run.
  *
@@ -95,7 +133,7 @@ export function gradientRuntimePaths(opts: { execPath?: string; scriptPath?: str
       "cannot locate gradient's own entry point, so any hook written now would never run — reinstall the gradient plugin or skill",
     );
   }
-  return { execPath: opts.execPath ?? process.execPath, scriptPath };
+  return { execPath: opts.execPath ?? stableExecPath(process.execPath), scriptPath };
 }
 
 export function gradientCommand(opts: { execPath?: string; scriptPath?: string | null } = {}): string {

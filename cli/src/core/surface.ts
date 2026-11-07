@@ -6,6 +6,7 @@ import { ancestorDirs, assistantHomes, confineFor, projectRoot, readDiscovered, 
 import { normalize, similarity } from "./cluster.js";
 import { parseFrontmatter, scalar } from "./frontmatter.js";
 import { locateRepo } from "./board.js";
+import { isVersionedNode } from "./hookBinary.js";
 
 /**
  * What is actually installed, as opposed to what the manifest thinks is
@@ -105,6 +106,14 @@ export interface Surface {
   /** Claude Code hook events something already handles, from settings or an
    *  enabled plugin. */
   hookEvents?: string[];
+  /** Gradient's own installed hooks that run a node from a version manager's
+   *  per-version directory, which an upgrade deletes. */
+  versionedHooks?: VersionedHook[];
+}
+
+export interface VersionedHook {
+  node: string;
+  subcommand: string;
 }
 
 interface SkillDir {
@@ -124,7 +133,7 @@ function manifestPaths(value: unknown): string[] {
   return [];
 }
 
-async function skillDirs(projectDir: string, opts: DiscoveryOptions, targets: Assistant[], warnings: string[]): Promise<{ dirs: SkillDir[]; disabled: Set<string>; overrides: Record<string, unknown>; claudeSettings: Record<string, any>; hookEvents: Set<string> }> {
+async function skillDirs(projectDir: string, opts: DiscoveryOptions, targets: Assistant[], warnings: string[]): Promise<{ dirs: SkillDir[]; disabled: Set<string>; overrides: Record<string, unknown>; claudeSettings: Record<string, any>; hookEvents: Set<string>; versionedHooks: Map<string, VersionedHook> }> {
   const roots = assistantHomes(opts);
   const repoDirs = await repositoryDirs(projectDir);
   const project = await projectRoot(projectDir);
@@ -133,9 +142,22 @@ async function skillDirs(projectDir: string, opts: DiscoveryOptions, targets: As
   const overrides: Record<string, unknown> = {};
   const claudeSettings: Record<string, any> = {};
   const hookEvents = new Set<string>();
+  const versionedHooks = new Map<string, VersionedHook>();
   const addHooks = (hooks: unknown): void => {
     if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return;
-    for (const [event, entries] of Object.entries(hooks)) if (Array.isArray(entries) && entries.length > 0) hookEvents.add(event);
+    for (const [event, entries] of Object.entries(hooks)) {
+      if (!Array.isArray(entries) || entries.length === 0) continue;
+      hookEvents.add(event);
+      for (const entry of entries) {
+        for (const hook of Array.isArray(entry?.hooks) ? entry.hooks : []) {
+          const command = typeof hook?.command === "string" ? hook.command.trim() : "";
+          const node = command.split(/\s+/)[0]?.replace(/^'|'$/g, "") ?? "";
+          if (!/gradient/i.test(command) || !isVersionedNode(node)) continue;
+          const subcommand = /\s((?:hook )?[a-z-]+)$/.exec(command)?.[1] ?? "";
+          versionedHooks.set(`${node}\0${subcommand}`, { node, subcommand });
+        }
+      }
+    }
   };
   if (targets.includes("claude-code")) {
     for (const [dir, scope] of [[roots.claude, "user"], ...ancestorDirs(projectDir).map(dir => [join(dir, ".claude"), "project"])] as Array<[string, "user" | "project"]>) {
@@ -201,7 +223,7 @@ async function skillDirs(projectDir: string, opts: DiscoveryOptions, targets: As
     }
     warnings.push("Codex bundled/plugin skills, managed/profile overrides, and dynamically supplied skill locations are outside this inventory.");
   }
-  return { dirs: out, disabled, overrides, claudeSettings, hookEvents };
+  return { dirs: out, disabled, overrides, claudeSettings, hookEvents, versionedHooks };
 }
 
 async function entries(dir: string, warnings: string[]): Promise<string[]> {
@@ -405,6 +427,7 @@ export async function loadSurface(
     contextChars: skills.reduce((total, skill) => total + skill.descriptionChars, 0),
     warnings: [...new Set(warnings)],
     hookEvents: [...inventory.hookEvents],
+    ...(inventory.versionedHooks.size > 0 ? { versionedHooks: [...inventory.versionedHooks.values()] } : {}),
   };
 }
 

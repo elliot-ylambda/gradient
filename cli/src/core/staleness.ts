@@ -28,6 +28,9 @@ const MAX_REFS_PER_LINE = 6;
 const IGNORED_ROOTS: ReadonlySet<string> = new Set([
   "node_modules", "dist", "build", "out", "coverage", "target", "vendor",
   ".next", ".turbo", ".venv", "__pycache__",
+  // Git's own internals: in a worktree `.git` is a file, so `.git/objects`
+  // is missing from every correct instruction that mentions it.
+  ".git",
 ]);
 
 export type StaleKind = "path" | "script";
@@ -46,8 +49,9 @@ export interface RepoFacts {
 }
 
 /** The words an author reaches for when a path is an example, not a file:
- *  `path/to/x.ts`, `your-test.test.ts`, `test_specific_test.py`, `YYYY-MM-DD.md`. */
-const PLACEHOLDER = /(^|\/)path\/to\/|(^|[/_.-])(your|example|specific|sample|placeholder)([/_.-]|$)|yyyy|\bmm-dd\b/i;
+ *  `path/to/x.ts`, `your-test.test.ts`, `test_specific_test.py`, `YYYY-MM-DD.md`,
+ *  and the metasyntactic `docs/foo.md` / `src/core/bar.ts`. */
+const PLACEHOLDER = /(^|\/)path\/to\/|(^|[/_.-])(your|example|specific|sample|placeholder|foo|bar|baz|qux)([/_.-]|$)|yyyy|\bmm-dd\b/i;
 
 /** "(example: `src/a.ts:80`)", "e.g. `utils/x.test.ts`": the path on such a
  *  line is there to show a shape. */
@@ -163,6 +167,18 @@ export async function repoIndex(projectDir: string): Promise<string[] | null> {
   return [...new Set(`${listed}\0${nested ?? ""}`.split("\0").filter(Boolean))];
 }
 
+/** Submodules this checkout has not checked out: `git worktree add` leaves
+ *  every submodule as an empty directory, so nothing inside one can be called
+ *  gone. Mode 160000 is a gitlink; a checked-out submodule has its own `.git`. */
+export async function uncheckedSubmodules(projectDir: string): Promise<string[]> {
+  const staged = await git([...UNTRUSTED_REPO, "ls-files", "-z", "--stage"], projectDir, MAX_INDEX_BYTES);
+  if (!staged) return [];
+  const gitlinks = staged.split("\0").filter(entry => entry.startsWith("160000 ")).map(entry => entry.slice(entry.indexOf("\t") + 1));
+  const unchecked: string[] = [];
+  for (const path of gitlinks) if (!await exists(join(projectDir, path, ".git"))) unchecked.push(path);
+  return unchecked;
+}
+
 /** Scripts and targets from the root manifests and, in a workspace, every
  *  package's: "run `bun run generate` from `packages/client`" names a script
  *  the root package.json never had. */
@@ -236,28 +252,69 @@ function namedSomewhere(ref: string, index: readonly string[]): boolean {
   });
 }
 
+/** Where an instruction file's references resolve: the repository it lives
+ *  in. A CLAUDE.md above the project — the main checkout around a nested
+ *  worktree — describes its own checkout, not the worktree's. */
+async function rootFor(sourcePath: string, project: string): Promise<string> {
+  const dir = dirname(resolve(sourcePath));
+  if (within(project, sourcePath) || !within(dir, project)) return project;
+  return (await git(["rev-parse", "--show-toplevel"], dir)) ?? dir;
+}
+
+interface RootFacts {
+  index: string[] | null;
+  facts: RepoFacts;
+  unchecked: string[];
+  /** Top-level directories that exist, so a path can be told apart from one
+   *  that might live inside a submodule nobody checked out. */
+  topLevel: Set<string>;
+}
+
+function cached<T>(cache: Map<string, Promise<T>>, key: string, load: () => Promise<T>): Promise<T> {
+  let pending = cache.get(key);
+  if (!pending) cache.set(key, pending = load());
+  return pending;
+}
+
+async function factsFor(root: string, opts: { facts?: RepoFacts; index?: string[] | null }, isProject: boolean): Promise<RootFacts> {
+  const index = isProject && opts.index !== undefined ? opts.index : await repoIndex(root);
+  const facts = isProject && opts.facts ? opts.facts : await readRepoFacts(root, index);
+  const unchecked = await uncheckedSubmodules(root);
+  const topLevel = new Set((index ?? []).map(file => file.split("/")[0]));
+  return { index, facts, unchecked, topLevel };
+}
+
 export async function findStaleRefs(
   lines: readonly InstructionLine[],
   projectDir: string,
   opts: { facts?: RepoFacts; index?: string[] | null } = {},
 ): Promise<StaleRef[]> {
   const resolvedProject = resolve(projectDir);
-  const index = opts.index !== undefined ? opts.index : await repoIndex(resolvedProject);
-  const facts = opts.facts ?? await readRepoFacts(projectDir, index);
+  // Every line of a file shares its root, and every file under a root shares
+  // its facts: each is worked out once, not once per line.
+  const sourceRoots = new Map<string, Promise<string>>();
+  const roots = new Map<string, Promise<RootFacts>>();
+  const rootFacts = (root: string): Promise<RootFacts> =>
+    cached(roots, root, () => factsFor(root, opts, root === resolvedProject));
   const out: StaleRef[] = [];
-  const missing: Array<{ ref: StaleRef; path: string }> = [];
+  const missing = new Map<string, Array<{ ref: StaleRef; path: string }>>();
 
   for (const line of lines) {
     // Only instructions about this repository can be checked against it.
     if (line.source.scope !== "project") continue;
     const example = EXAMPLE_LINE.test(line.text);
+    const root = await cached(sourceRoots, line.source.path, () => rootFor(line.source.path, resolvedProject));
+    const known = await rootFacts(root);
+    // An instruction file above the project that is not in a repository has
+    // nothing to be checked against; saying nothing beats guessing.
+    if (root !== resolvedProject && known.index === null) continue;
 
     for (const ref of extractRefs(line.text)) {
       const script = scriptRef(ref);
       if (script) {
-        const known = script.manager === "npm" ? facts.scripts : facts.makeTargets;
+        const targets = script.manager === "npm" ? known.facts.scripts : known.facts.makeTargets;
         // An empty manifest means "not checkable", not "every target is missing".
-        if (known.size === 0 || known.has(script.target)) continue;
+        if (targets.size === 0 || targets.has(script.target)) continue;
         out.push({
           line,
           ref,
@@ -271,33 +328,45 @@ export async function findStaleRefs(
 
       if (example || !isPathShaped(ref)) continue;
       const path = onDisk(ref);
-      if (!path || IGNORED_ROOTS.has(path.split("/")[0])) continue;
+      if (!path) continue;
+      const top = path.split("/")[0];
+      if (IGNORED_ROOTS.has(top)) continue;
+      // Inside a submodule this checkout never checked out: unknown, not gone.
+      if (known.unchecked.some(sub => path === sub || path.startsWith(`${sub}/`))) continue;
+      // With such a submodule present, a path anchored to nothing visible at
+      // the top level (`run/attempt.ts`) may well live inside it.
+      if (known.unchecked.length > 0 && !known.topLevel.has(top)) continue;
       // A path resolves from the repository root or, as a link does, from the
       // instruction file's own directory. Containment by whole segment: a
       // `../openclaw.ai` beside `openclaw` leaves the project and is not ours.
-      const bases = [...new Set([resolvedProject, dirname(resolve(line.source.path))])]
-        .filter(base => within(resolvedProject, resolve(base, path)));
+      const bases = [...new Set([root, dirname(resolve(line.source.path))])]
+        .filter(base => within(root, resolve(base, path)));
       if (bases.length === 0) continue;
       if ((await Promise.all(bases.map(base => exists(resolve(base, path))))).some(Boolean)) continue;
       if (!await isConcretePath(path, bases)) continue;
-      missing.push({ ref: { line, ref, kind: "path", detail: `no such file or directory in this repository` }, path });
+      const group = missing.get(root) ?? [];
+      group.push({ ref: { line, ref, kind: "path", detail: `no such file or directory in this repository` }, path });
+      missing.set(root, group);
     }
   }
 
   // Missing from both places is still not gone: the file may live deeper in the
   // tree, or be build output git ignores (`.env.local`, a generated report).
-  let gone = missing;
-  if (index) {
-    gone = gone.filter(item => !namedSomewhere(item.path, index));
-    // A directory-only pattern (`.local/`) matches a missing path only when it
-    // is asked about as a directory.
-    const paths = [...new Set(gone.flatMap(item => hasFileExtension(item.path) ? [item.path] : [item.path, `${item.path}/`]))];
-    // `-z` needs --stdin, which this helper cannot feed; unquoted paths instead.
-    const ignored = paths.length === 0 ? null
-      : await git([...UNTRUSTED_REPO, "-c", "core.quotePath=false", "check-ignore", "--no-index", "--", ...paths], resolvedProject);
-    const skip = new Set((ignored ?? "").split("\n").filter(Boolean));
-    gone = gone.filter(item => !skip.has(item.path) && !skip.has(`${item.path}/`));
+  for (const [root, candidates] of missing) {
+    const { index } = await rootFacts(root);
+    let gone = candidates;
+    if (index) {
+      gone = gone.filter(item => !namedSomewhere(item.path, index));
+      // A directory-only pattern (`.local/`) matches a missing path only when it
+      // is asked about as a directory.
+      const paths = [...new Set(gone.flatMap(item => hasFileExtension(item.path) ? [item.path] : [item.path, `${item.path}/`]))];
+      // `-z` needs --stdin, which this helper cannot feed; unquoted paths instead.
+      const ignored = paths.length === 0 ? null
+        : await git([...UNTRUSTED_REPO, "-c", "core.quotePath=false", "check-ignore", "--no-index", "--", ...paths], root);
+      const skip = new Set((ignored ?? "").split("\n").filter(Boolean));
+      gone = gone.filter(item => !skip.has(item.path) && !skip.has(`${item.path}/`));
+    }
+    out.push(...gone.map(item => item.ref));
   }
-  out.push(...gone.map(item => item.ref));
   return out;
 }

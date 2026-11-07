@@ -65,9 +65,14 @@ export function boardStateDir(boardRoot: string, home?: string): string {
   return join(projectCacheDir(boardRoot, home), "board");
 }
 
-/** Deduped recently-edited file paths from a transcript tail. Data, not instructions:
- * every path is redacted and capped before rendering. */
-export function extractEditedFiles(lines: string[], boardRoot: string): string[] {
+/** Deduped recently-edited files from a transcript tail, as paths inside the
+ *  repository. `own` is the session's checkout; `worktrees` are every checkout
+ *  of the repository, so a file is shown relative to whichever one holds it
+ *  (nested worktrees win over the checkout around them). Anything outside
+ *  every checkout — a scratchpad, an assistant's memory file — says nothing
+ *  about who might collide with whom, and is dropped. Data, not instructions:
+ *  every path is redacted and capped before rendering. */
+export function extractEditedFiles(lines: string[], own: string, worktrees: readonly string[] = [own]): string[] {
   const files: string[] = [];
   for (const line of lines) {
     let record: { message?: { content?: unknown } };
@@ -88,13 +93,26 @@ export function extractEditedFiles(lines: string[], boardRoot: string): string[]
       files.push(raw);
     }
   }
-  const recent = files.slice(-TOOL_EVENT_WINDOW);
-  const deduped = [...new Set(recent)].slice(-EDITING_CAP);
-  return deduped.map(path => {
-    const rel = isAbsolute(path) ? relative(boardRoot, path) : path;
-    const shown = rel === "" || rel.startsWith("..") ? path : rel;
-    return redact(shown).slice(0, 200);
-  });
+  const checkouts = [...new Set([own, ...worktrees])].sort((a, b) => b.length - a.length);
+  const shown: string[] = [];
+  for (const path of files.slice(-TOOL_EVENT_WINDOW)) {
+    if (!isAbsolute(path)) { shown.push(path); continue; }
+    for (const checkout of checkouts) {
+      const rel = relative(checkout, path);
+      if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) continue;
+      shown.push(checkout === own ? rel : `${rel} (in ${basename(checkout)})`);
+      break;
+    }
+  }
+  return [...new Set(shown)].slice(-EDITING_CAP).map(path => redact(path).slice(0, 200));
+}
+
+/** Every checkout of the repository: the main one and each linked worktree. */
+export async function listWorktrees(boardRoot: string): Promise<string[]> {
+  const listed = await git(["worktree", "list", "--porcelain"], boardRoot);
+  const paths = (listed ?? "").split("\n").filter(line => line.startsWith("worktree ")).map(line => line.slice("worktree ".length));
+  const real = await Promise.all(paths.map(path => realpath(path).catch(() => path)));
+  return [...new Set([boardRoot, ...real])];
 }
 
 export type Liveness = "live" | "idle";
@@ -135,6 +153,7 @@ export async function discoverClaudeSessions(
   }
   const sessions: BoardSession[] = [];
   let visited = 0;
+  let worktrees: Promise<string[]> | undefined;
   for (const dir of dirs) {
     let files: string[] = [];
     try {
@@ -153,7 +172,7 @@ export async function discoverClaudeSessions(
         continue;
       }
       if (ageMs > IDLE_MS) continue;
-      const session = await readClaudeSession(file, boardRoot, ageMs, opts.onWarn);
+      const session = await readClaudeSession(file, boardRoot, ageMs, () => (worktrees ??= listWorktrees(boardRoot)), opts.onWarn);
       if (session) sessions.push(session);
     }
   }
@@ -164,6 +183,7 @@ async function readClaudeSession(
   file: string,
   boardRoot: string,
   ageMs: number,
+  worktrees: () => Promise<string[]>,
   onWarn?: (message: string) => void,
 ): Promise<BoardSession | null> {
   let lines: string[];
@@ -204,7 +224,7 @@ async function readClaudeSession(
     worktree: relative(boardRoot, location.toplevel),
     liveness: ageMs <= LIVE_MS ? "live" : "idle",
     ageMs,
-    editing: extractEditedFiles(lines, boardRoot),
+    editing: extractEditedFiles(lines, location.toplevel, await worktrees()),
   };
 }
 
@@ -361,18 +381,25 @@ export function formatAge(ms: number): string {
   return `${Math.round(minutes / 60)}h`;
 }
 
+/** A checkout as a person names it: "main checkout", a path under the main
+ *  checkout, or — for a worktree kept elsewhere (Clinch's) — its own name. */
+function checkoutLabel(worktree: string): string {
+  if (worktree === "") return "main checkout";
+  return worktree.startsWith("..") ? basename(worktree) : worktree;
+}
+
 export function renderDigest(state: BoardState): string {
   const lines: string[] = [];
   const count = state.sessions.length;
   lines.push(`gradient board — ${count} other session${count === 1 ? "" : "s"} in this repo`);
   for (const session of state.sessions) {
-    const checkout = session.worktree === "" ? "main checkout" : session.worktree;
+    const checkout = checkoutLabel(session.worktree);
     const status = `${session.liveness} (${formatAge(session.ageMs)})`;
     lines.push(`• ${session.agent} · ${session.branch ?? "?"} · ${checkout} · ${status}`);
     if (session.editing.length > 0) lines.push(`  editing: ${session.editing.join(", ")}`);
   }
   if (state.self) {
-    const checkout = state.self.worktree === "" ? "main checkout" : state.self.worktree;
+    const checkout = checkoutLabel(state.self.worktree);
     lines.push(`(you) ${state.self.agent} · ${state.self.branch ?? "?"} · ${checkout}`);
   }
   if (state.landed.length > 0) {
